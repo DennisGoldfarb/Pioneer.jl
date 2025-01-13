@@ -289,7 +289,7 @@ These parameters often need to be adjusted based on your specific experimental s
 ## BuildSpecLib
 ```
 julia> using Pioneer
-julia> SearchDIA("/Users/n.t.wamsley/Projects/Pioneer.jl/data/ecoli_test/ecoli_test_params.json")
+julia> BuildSpecLib("/Users/n.t.wamsley/Projects/Pioneer.jl/data/ecoli_test/ecoli_test_params.json")
 ```
 
 ### FASTA Digest Parameters
@@ -378,7 +378,7 @@ Settings for spectral library generation and processing:
 | `out_name` | string | Output filename |
 | `predict_fragments` | boolean | Whether to predict fragment intensities |
 
-### Example SearchDIA Parameters .json
+### Example BuildSpecLib Parameters .json
 ```
 {
     "fasta_digest_params":
