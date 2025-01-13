@@ -10,8 +10,8 @@
 ##  Development Aims
   Pioneer is a cross-platform and open-source tool fully implemented 
 in Julia that identifies and quantifies proteins and peptides from data independent acquisition (DIA) experiments. Given a 
-spectral library of fragment ion intensities and retention time estimates on an arbitrary scale, Pioneer employs a spectrum-centric 
-algorithm and heuristics to statistically infer the identification status and abundance of each library precursor in the data. We develop Pioneer with the following goals:
+spectral library of fragment ion intensities (or spline coefficients from Altimeter) and retention time estimates on an arbitrary scale, Pioneer employs a spectrum-centric 
+algorithm and heuristics to statistically infer the identification status and abundance of each library precursor in the data. We have developed Pioneer with the following goals:
 
 - **Open-Source:** Methods should be understood and open to scrutiny by users
 - **Cross-Platform:** All steps of analysis, including vendor file conversion, should run on all major operating systems
@@ -19,8 +19,8 @@ algorithm and heuristics to statistically infer the identification status and ab
 - **Scalability:** Should scale to very large experiments with hundreds to thousands of raw files
 - **Fast:** Use of simple heuristics and carefully implemented, efficient algorithms should ensure that data can be analyzed many times faster than it is aquired for typical experiments
 
-## Instalation
-1) Pioneer requires Julia 1.10. Download [julia](https://pages.github.com/) and add it to the PATH. 
+## Installation
+1) Pioneer requires Julia 1.10. Download [julia](https://julialang.org/downloads/) and add it to the PATH. 
 2) Open an instance of the julia REPL
 3) Type ";" to activate the shell from within the REPL. Then, navigate to the desired directory and clone the Pioneer.jl repository.
 ```
