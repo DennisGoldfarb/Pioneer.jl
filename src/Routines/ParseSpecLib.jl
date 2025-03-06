@@ -96,16 +96,6 @@ var_mods = Vector{NamedTuple{(:p, :r), Tuple{Regex, String}}}()
 push!(var_mods, (p=r"M", r="Unimod:35"))
 =#
 
-# Function to match variable modifications (from your code)
-function matchVarMods(sequence::String, var_mods::Vector{NamedTuple{(:p, :r), Tuple{Regex, String}}})
-    var_mod_matches = Vector{NamedTuple{(:regex_match, :name), Tuple{RegexMatch, String}}}()
-    for mod in var_mods
-        for mod_match in eachmatch(mod[:p], sequence)
-            push!(var_mod_matches, (regex_match=mod_match, name=mod[:r]))
-        end
-    end
-    return var_mod_matches
-end
 
 """
     create_precursor_idx!(df::DataFrame)

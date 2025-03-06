@@ -1,7 +1,7 @@
-struct InvalidParametersError <: Exception
-    message::String
-    params::Dict{String, Any}
-end
+#struct InvalidParametersError <: Exception
+#    message::String
+#    params::Dict{String, Any}
+#end
 
 function check_params_bsp(json_string::String)
     params = JSON.parse(json_string)

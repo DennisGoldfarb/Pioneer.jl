@@ -296,17 +296,17 @@ function getScanToPrecIdx(scan_idxs::Vector{UInt32}, n_scans::Int64)
     scan_to_prec_idx
 end
 
-function collectFragErrs(fmatches::Vector{M}, new_fmatches::Vector{M}, nmatches::Int, n::Int) where {M<:MatchIon{Float32}}
-    for match in range(1, nmatches)
-        if n < length(fmatches)
-            n += 1
-            fmatches[n] = new_fmatches[match]
-        else
-            fmatches = append!(fmatches, [M() for x in range(1, length(fmatches))])
-        end
-    end
-    return n
-end
+#function collectFragErrs(fmatches::Vector{M}, new_fmatches::Vector{M}, nmatches::Int, n::Int) where {M<:MatchIon{Float32}}
+#    for match in range(1, nmatches)
+#        if n < length(fmatches)
+#            n += 1
+#            fmatches[n] = new_fmatches[match]
+#        else
+#            fmatches = append!(fmatches, [M() for x in range(1, length(fmatches))])
+#        end
+#    end
+#    return n
+#end
 
 """
     mass_error_search(spectra::MassSpecData, scan_idxs::Vector{UInt32},
