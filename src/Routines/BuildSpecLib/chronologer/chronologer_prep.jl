@@ -152,16 +152,6 @@ function add_mods_and_filter(fasta_peptides::Vector{FastaEntry};
                            dynamic_nce::Bool = true
                            )
 
-                        
-    function matchVarMods(sequence::String, var_mods::Vector{NamedTuple{(:p, :r), Tuple{Regex, String}}})
-        var_mod_matches = Vector{NamedTuple{(:regex_match, :name), Tuple{RegexMatch, String}}}()
-        for mod in var_mods
-            for mod_match in eachmatch(mod[:p], sequence)
-                push!(var_mod_matches, (regex_match=mod_match, name=mod[:r]))
-            end
-        end
-        return var_mod_matches
-    end
 
     function countVarModCombinations(var_mod_matches::Vector{NamedTuple{(:regex_match, :name), Tuple{RegexMatch, String}}},
                                     max_var_mods::Int)

@@ -1,4 +1,13 @@
-# src/BuildSpecLib.jl
+# Entry point for PackageCompiler
+function main_BuildSpecLib()::Cint
+    try
+        BuildSpecLib(ARGS[1])
+    catch
+        Base.invokelatest(Base.display_error, Base.catch_stack())
+        return 1
+    end
+    return 0
+end
 
 """
     BuildSpecLib(params_path::String)
@@ -350,9 +359,9 @@ function print_performance_report(timings, println_func; kwargs...)
     )
     println_func(repeat("-", 90))
     println_func(lpad(@sprintf("%.2f", kwargs[:N_PRECURSORS]), 12), " ",
-                 lpad(@sprintf("%.2f", kwargs[:N_FRAGMENTS]), 12), " ",
-                 lpad(@sprintf("%.2f", kwargs[:N_TARGETS]), 12), " ",
-                 lpad(@sprintf("%.2f", kwargs[:N_DECOYS]), 12), " ",
+                lpad(@sprintf("%.2f", kwargs[:N_FRAGMENTS]), 12), " ",
+                lpad(@sprintf("%.2f", kwargs[:N_TARGETS]), 12), " ",
+                lpad(@sprintf("%.2f", kwargs[:N_DECOYS]), 12), " ",
     )
     # Print detailed analysis
     println_func("\nDetailed Step Analysis:")
