@@ -10,6 +10,6 @@ GetSearchParams("/Users/dennisgoldfarb/Downloads/Pioneer Testing/libraries/yeast
                 "/Users/dennisgoldfarb/Downloads/Pioneer Testing/prosit_yeast_results/")
                 #params_path = "/Users/dennisgoldfarb/Downloads/search_test.json")
 
-BuildSpecLib("build/buildspeclib_params.json")
-SearchDIA("build/searchdia_params.json")
-convertMzML("data/mzML/")
+#BuildSpecLib("build/buildspeclib_params.json")
+#SearchDIA("build/searchdia_params.json")
+#convertMzML("data/mzML/")
