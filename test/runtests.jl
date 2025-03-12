@@ -24,10 +24,6 @@ using LaTeXStrings, Printf
 using SparseArrays
 using Dates 
 
-main_dir = joinpath(@__DIR__, "../src")
-include(joinpath(dirname(@__DIR__), "src", "Routines","SearchDIA","importScripts.jl"))
-importScripts()
-
 """
 Type alias for m/z to eV interpolation functions.
 Uses GriddedInterpolation with linear interpolation and line extrapolation.
@@ -46,14 +42,17 @@ const InterpolationTypeAlias = Interpolations.Extrapolation{
     Line{Nothing}                           # Extrapolation
 }
 
-include(joinpath(dirname(@__DIR__), "src", "Routines","BuildSpecLib","importScripts.jl"))
+main_dir = joinpath(@__DIR__, "../src")
+include(joinpath(dirname(@__DIR__), "src", "importScripts.jl"))
 importScripts()
+
 #include(joinpath(main_dir, "Routines","LibrarySearch","methods","loadSpectralLibrary.jl"))
 #const methods_path = joinpath(@__DIR__, "Routines","LibrarySearch")       
 const methods_path = joinpath(@__DIR__, "Routines","LibrarySearch")       
 include(joinpath(dirname(@__DIR__), "src", "Routines","SearchDIA.jl"))
 include(joinpath(dirname(@__DIR__), "src", "Routines","BuildSpecLib.jl"))
 include(joinpath(dirname(@__DIR__), "src", "Routines","ParseSpecLib.jl"))
+include(joinpath(dirname(@__DIR__), "src", "Routines","GenerateParams.jl"))
 const CHARGE_ADJUSTMENT_FACTORS = Float64[1, 0.9, 0.85, 0.8, 0.75]
 
 const H2O::Float64 = Float64(18.010565)
@@ -67,6 +66,11 @@ const MODEL_CONFIGS = Dict(
         annotation_type = UniSpecFragAnnotation("y1^1"),
         model_type = InstrumentSpecificModel("unispec"),
         instruments = Set(["QE","QEHFX","LUMOS","ELITE","VELOS","NONE"])
+    ),
+    "altimeter" => (
+        annotation_type = UniSpecFragAnnotation("y1^1"),
+        model_type = SplineCoefficientModel("altimeter"),
+        instruments = Set([])
     ),
     "prosit_2020_hcd" => (
         annotation_type = GenericFragAnnotation("y1+1"), 
@@ -85,7 +89,8 @@ const KOINA_URLS = Dict(
     "unispec" => "https://koina.wilhelmlab.org:443/v2/models/UniSpec/infer",
     "prosit_2020_hcd" => "https://koina.wilhelmlab.org:443/v2/models/Prosit_2020_intensity_HCD/infer",
     "AlphaPeptDeep" => "https://koina.wilhelmlab.org:443/v2/models/AlphaPeptDeep_ms2_generic/infer",
-    "chronologer" => "https://koina.wilhelmlab.org:443/v2/models/Chronologer_RT/infer"
+    "chronologer" => "https://koina.wilhelmlab.org:443/v2/models/Chronologer_RT/infer",
+    "altimeter" => "http://127.0.0.1:8000/v2/models/Altimeter_2024_splines/infer"
 )
 
 export SearchDIA, BuildSpecLib
@@ -106,6 +111,20 @@ end
     end
     @testset "process_test" begin 
         @test SearchDIA("./../data/ecoli_test/ecoli_test_params.json")===nothing
+    end
+    @testset "process_test_getBuildLibParams" begin 
+        @test GetBuildLibParams("./", 
+                    "./../data/test_lib",
+                    "./../data/fasta",
+                    params_path = "./../data/param_test/build.json") === "./../data/param_test/build.json"
+
+    end
+    @testset "process_test_getSearchParams" begin 
+        @test GetSearchParams("./data/ecoli_test/Prosit_ECOLI_500_600mz_101924.poin", 
+                    "./data/ecoli_test/raw",
+                    "./../data/ecoli_test/ecoli_test_results",
+                    params_path = "./../data/param_test/search.json") === "./../data/param_test/search.json"
+
     end
     
     include("./UnitTests/buildDesignMatrix.jl")
