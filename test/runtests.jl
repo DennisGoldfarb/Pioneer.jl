@@ -5,7 +5,9 @@ using Base.Order
 using Base.Iterators: partition
 using CSV, CategoricalArrays, Combinatorics, CodecZlib
 using DataFrames, DataStructures, Dictionaries #, Distributions 
+using EzXML
 using FASTX
+using HTTP
 using Interpolations
 using JSON, JLD2
 using LinearAlgebra, LoopVectorization, LinearSolve, LightXML
@@ -52,6 +54,7 @@ const methods_path = joinpath(@__DIR__, "Routines","LibrarySearch")
 include(joinpath(dirname(@__DIR__), "src", "Routines","SearchDIA.jl"))
 include(joinpath(dirname(@__DIR__), "src", "Routines","BuildSpecLib.jl"))
 include(joinpath(dirname(@__DIR__), "src", "Routines","ParseSpecLib.jl"))
+include(joinpath(dirname(@__DIR__), "src", "Routines","mzmlConverter","convertMzML.jl"))
 include(joinpath(dirname(@__DIR__), "src", "Routines","GenerateParams.jl"))
 const CHARGE_ADJUSTMENT_FACTORS = Float64[1, 0.9, 0.85, 0.8, 0.75]
 
@@ -106,6 +109,9 @@ if isdir(results_dir)
 end
 @testset "Pioneer.jl" begin
     println("dir ", @__DIR__)
+    @testset "process_test_mzmlconvert" begin 
+        @test convertMzML(joinpath(@__DIR__, "../data/convert_test/BSA_filtered.mzML")) === nothing
+    end
     @testset "process_test_speclib" begin 
         @test size(ParseSpecLib(joinpath(@__DIR__, "./../data/library_test/defaultParseEmpiricalLibParams2.json")).libdf, 1)==120
     end
@@ -113,20 +119,25 @@ end
         @test SearchDIA("./../data/ecoli_test/ecoli_test_params.json")===nothing
     end
     @testset "process_test_getBuildLibParams" begin 
-        @test GetBuildLibParams("./", 
-                    "./../data/test_lib",
-                    "./../data/fasta",
-                    params_path = "./../data/param_test/build.json") === "./../data/param_test/build.json"
+        @test GetBuildLibParams(@__DIR__, 
+                    joinpath(@__DIR__, "../data/param_test/test_lib"),
+                    joinpath(@__DIR__, "../data/fasta"),
+                    params_path = joinpath(@__DIR__, "../data/param_test/build.json")) === joinpath(@__DIR__, "../data/param_test/build.json")
 
     end
     @testset "process_test_getSearchParams" begin 
-        @test GetSearchParams("./data/ecoli_test/Prosit_ECOLI_500_600mz_101924.poin", 
-                    "./data/ecoli_test/raw",
-                    "./../data/ecoli_test/ecoli_test_results",
-                    params_path = "./../data/param_test/search.json") === "./../data/param_test/search.json"
-
+        @test GetSearchParams(joinpath(@__DIR__, "../data/ecoli_test/altimeter_ecoli.poin"), 
+                    joinpath(@__DIR__, "../data/ecoli_test/raw"),
+                    joinpath(@__DIR__, "../data/ecoli_test/ecoli_test_results"),
+                    params_path = joinpath(@__DIR__, "../data/param_test/search.json")) === joinpath(@__DIR__, "../data/param_test/search.json")
+    end
+    @testset "process_test_altimeterLibrary" begin 
+        @test BuildSpecLib(joinpath(@__DIR__, "../data/param_test/build.json")) === nothing
+        @test SearchDIA(joinpath(@__DIR__, "../data/param_test/search.json")) === nothing
     end
     
+    
+
     include("./UnitTests/buildDesignMatrix.jl")
     include("./UnitTests/isotopeSplines.jl")
     include("./UnitTests/matchPeaks.jl")

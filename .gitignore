@@ -2,8 +2,13 @@
 *.jl.cov
 *.jl.mem
 Manifest.toml
+
 docs/Manifest.toml
 docs/build/
+
 data/ecoli_test/ecoli_test_results/
+data/convert_test/BSA_filtered.arrow
+data/param_test/
+
 **/.DS_Store
 PioneerApp/

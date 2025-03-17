@@ -63,8 +63,8 @@ function GetSearchParams(lib_path::String, ms_data_path::String, results_path::S
     else
         params_path = expanduser(params_path)
         name, ext = splitext(params_path)
+        mkpath(dirname(params_path))
         if isempty(ext)
-            mkpath(params_path)
             output_path = joinpath(params_path, "search_parameters.json")
         else
             output_path = params_path
@@ -121,8 +121,8 @@ function GetBuildLibParams(out_dir::String, lib_name::String, fasta_dir::String;
     else
         params_path = expanduser(params_path)
         name, ext = splitext(params_path)
+        mkpath(dirname(params_path))
         if isempty(ext)
-            mkpath(params_path)
             output_path = joinpath(params_path, "buildspeclib_params.json")
         else
             output_path = params_path
