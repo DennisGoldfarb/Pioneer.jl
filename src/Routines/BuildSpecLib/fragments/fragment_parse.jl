@@ -289,7 +289,7 @@ Dict{String, Int8} with 64 entries:
   "IQ" => 0x0
 """
 function get_immonium_sulfur_dict(
-    immonium_table_path::String
+    immonium_table_path::RelocatableFolders.Path
     )
     immonium_to_sulfur_count = Dict{String, Int8}()
     open(immonium_table_path) do file
@@ -327,7 +327,7 @@ function parse_koina_fragments(
     ion_annotation_set::Set{String},
     frag_name_to_idx::Dict{String, UInt16},
     precursor_batch_size::Int64,
-    immonium_data_path::String,
+    immonium_data_path::RelocatableFolders.Path,
     out_dir::String,
     mods_to_sulfur_diff::Dict{String, Int8},
     iso_mod_to_mass::Dict{String, Float32},

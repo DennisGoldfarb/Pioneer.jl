@@ -62,7 +62,7 @@ function buildPolynomials(coefficients::Vector{T}, order::I) where {T<:Real, I<:
     return SVector{length(coefficients)}(coefficients)#polynomials
 end
 
-function parseIsoXML(iso_xml_path::String)
+function parseIsoXML(iso_xml_path::RelocatableFolders.Path)
     #From LightXML.jl
     xdoc = parse_file(iso_xml_path)
 

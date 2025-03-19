@@ -240,7 +240,7 @@ function BuildSpecLib(params_path::String)
                     ion_annotation_set,
                     frag_name_to_idx,
                     10000,
-                    joinpath(@__DIR__, "../../data/immonium.txt"),
+                    IMMONIUM_PATH,
                     lib_dir,
                     Dict{String, Int8}(),
                     iso_mod_to_mass,

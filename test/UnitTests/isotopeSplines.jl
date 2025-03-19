@@ -1,7 +1,6 @@
 
-iso_splines = parseIsoXML(joinpath(dirname(dirname(@__DIR__)),"data", "IsotopeSplines", "IsotopeSplines_10kDa_21isotopes-1.xml"));
-SPEC_LIB_DIR = "/Users/n.t.wamsley/RIS_temp/ASMS_2024/ASTRAL_THREE_PROTEOME/unispec_chronologer_1mc_1var_by_052724/spec_lib/pioneer_lib/"
- 
+iso_splines = parseIsoXML(ISOTOPE_SPLINE_PATH);
+
 #Use exact isotope composition from expasy.org 
 #https://education.expasy.org/student_projects/isotopident/cgi-bin/iso.pl
 @testset "isotope_spline_accuracy" begin

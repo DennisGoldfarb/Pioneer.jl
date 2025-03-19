@@ -17,7 +17,7 @@ using Optim
 using Plots, PrettyPrinting, Polynomials, PDFmerger, ProgressBars, Pkg
 using Tables, Test
 using StatsPlots, SentinelArrays
-using Random
+using Random, RelocatableFolders
 using StaticArrays, StatsBase, SpecialFunctions, Statistics, SparseArrays
 using XGBoost
 using KernelDensity
@@ -28,6 +28,13 @@ using InlineStrings
 using HTTP
 #Set Seed 
 Random.seed!(1776);
+
+# Paths to needed assets
+const ASSETS = @path joinpath(@__DIR__, "../assets/")
+const DEFAULT_BUILD_LIB_PARAMS_PATH = @path joinpath(ASSETS, "params/defaultBuildLibParams.json")
+const DEFAULT_SEARCH_PARAMS_PATH = @path joinpath(ASSETS, "params/defaultSearchParams.json")
+const IMMONIUM_PATH = @path joinpath(ASSETS, "immonium.txt")
+const ISOTOPE_SPLINE_PATH = @path joinpath(ASSETS, "models/IsotopeSplines_10kDa_21isotopes-1.xml")
 
 """
 Type alias for m/z to eV interpolation functions.

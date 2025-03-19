@@ -148,7 +148,7 @@ function SearchDIA(params_path::String)
             # Load isotope splines and initialize search context
             SEARCH_CONTEXT = initSearchContext(
                 SPEC_LIB,
-                parseIsoXML(joinpath(@__DIR__,"../../data/IsotopeSplines/IsotopeSplines_10kDa_21isotopes-1.xml")),
+                parseIsoXML(ISOTOPE_SPLINE_PATH),
                 ArrowTableReference(MS_TABLE_PATHS),
                 Threads.nthreads(),
                 250000 # Default temp array batch size 

@@ -11,4 +11,4 @@ data/convert_test/BSA_filtered.arrow
 data/param_test/
 
 **/.DS_Store
-PioneerApp/
+build/

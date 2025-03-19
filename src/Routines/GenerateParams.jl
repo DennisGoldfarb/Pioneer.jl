@@ -72,7 +72,7 @@ function GetSearchParams(lib_path::String, ms_data_path::String, results_path::S
     end
     
     # Read the JSON template and convert to OrderedDict
-    config_text = read(joinpath(@__DIR__, "../../data/example_config/defaultSearchParams.json"), String)
+    config_text = read(DEFAULT_SEARCH_PARAMS_PATH, String)
     config = JSON.parse(config_text, dicttype=OrderedDict)
 
         
@@ -130,7 +130,7 @@ function GetBuildLibParams(out_dir::String, lib_name::String, fasta_dir::String;
     end
 
     # Parse JSON
-    config_text = read(joinpath(@__DIR__, "../../data/example_config/defaultBuildLibParams.json"), String)
+    config_text = read(DEFAULT_BUILD_LIB_PARAMS_PATH, String)
     config = JSON.parse(config_text, dicttype=OrderedDict)
 
     # Find all FASTA files in the specified directory
