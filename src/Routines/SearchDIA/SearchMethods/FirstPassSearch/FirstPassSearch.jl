@@ -267,7 +267,7 @@ function process_file!(
         params::FirstPassSearchParameters
     )
         column_names = [
-            :spectral_contrast, :city_block, :entropy_score, :scribe,
+            :spectral_contrast, :city_block, :entropy_score, :scribe,# :num_scored_peaks,
             :charge2, :poisson, :irt_error, 
             :missed_cleavage, 
             :Mox,
@@ -289,7 +289,7 @@ function process_file!(
             )
         catch
             column_names = [
-            :spectral_contrast, :city_block, :entropy_score, :scribe,
+            :spectral_contrast, :city_block, :entropy_score, :scribe,# :num_scored_peaks,
             :charge2, :poisson, :irt_error, :TIC, :y_count, :err_norm, :spectrum_peak_count, :intercept
             ]
             score_main_search_psms!(
