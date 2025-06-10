@@ -158,9 +158,9 @@
         @test get_sequence(entries[1]) == "MAKRTGKRPEPT"
         @test get_sequence(entries[2]) == "ACDEFGHIJK"
         
-        # Check ID parsing (should extract P12345 from UniProt format)
-        @test get_id(entries[1]) == "P12345"
-        @test get_id(entries[2]) == "P67890"
+        # Without regex the entire header should be kept
+        @test get_id(entries[1]) == "sp|P12345|TEST_HUMAN Test protein 1"
+        @test get_id(entries[2]) == "P67890 Test protein 2"
         
         # Check proteome is set correctly
         @test all(e -> get_proteome(e) == "human", entries)

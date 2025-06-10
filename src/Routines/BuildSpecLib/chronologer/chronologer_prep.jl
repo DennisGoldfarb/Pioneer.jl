@@ -102,26 +102,39 @@ function prepare_chronologer_input(
     # Convert mass dictionary to float values
     mod_to_mass_float = Dict(k => parse(Float64, v) for (k, v) in mod_to_mass_dict)
 
-    accession_rgx = haskey(params, "fasta_header_regex_accession") &&
-                    !isempty(params["fasta_header_regex_accession"]) ? Regex(params["fasta_header_regex_accession"]) : nothing
-    gene_rgx = haskey(params, "fasta_header_regex_gene") &&
-               !isempty(params["fasta_header_regex_gene"]) ? Regex(params["fasta_header_regex_gene"]) : nothing
-    protein_rgx = haskey(params, "fasta_header_regex_protein") &&
-                  !isempty(params["fasta_header_regex_protein"])  ? Regex(params["fasta_header_regex_protein"]) : nothing
-    organism_rgx = haskey(params, "fasta_header_regex_organism") &&
-                   !isempty(params["fasta_header_regex_organism"]) ? Regex(params["fasta_header_regex_organism"]) : nothing
+       # Build per-FASTA regex lists; empty strings map to `nothing`
+    n_fastas = length(params["fasta_paths"])
+    function build_regex_list(key)
+        if haskey(params, key)
+            [ isempty(r) ? nothing : Regex(r) for r in params[key] ]
+        else
+            fill(nothing, n_fastas)
+        end
+    end
+
+    accession_rgxs = build_regex_list("fasta_header_regex_accessions")
+    gene_rgxs = build_regex_list("fasta_header_regex_genes")
+    protein_rgxs = build_regex_list("fasta_header_regex_proteins")
+    organism_rgxs = build_regex_list("fasta_header_regex_organisms")
 
     # Process FASTA files
     fasta_entries = Vector{FastaEntry}()
     protein_entries = Vector{FastaEntry}()
-    for (proteome_name, fasta) in zip(params["fasta_names"], params["fasta_paths"])
+    for (proteome_name, fasta, acc_rgx, gene_rgx, prot_rgx, org_rgx) in zip(
+            params["fasta_names"],
+            params["fasta_paths"],
+            accession_rgxs,
+            gene_rgxs,
+            protein_rgxs,
+            organism_rgxs,
+        )
         parsed = parse_fasta(
             fasta,
             proteome_name;
-            accession_regex = accession_rgx,
+            accession_regex = acc_rgx,
             gene_regex = gene_rgx,
-            protein_regex = protein_rgx,
-            organism_regex = organism_rgx,
+            protein_regex = prot_rgx,
+            organism_regex = org_rgx,
         )
         append!(protein_entries, parsed)
         append!(fasta_entries,
@@ -136,24 +149,10 @@ function prepare_chronologer_input(
         )
     end
 
-    accession_rgx = haskey(params, "fasta_header_regex_accession") &&
-                    !isempty(params["fasta_header_regex_accession"]) ? Regex(params["fasta_header_regex_accession"]) : nothing
-    gene_rgx = haskey(params, "fasta_header_regex_gene") &&
-               !isempty(params["fasta_header_regex_gene"]) ? Regex(params["fasta_header_regex_gene"]) : nothing
-    protein_rgx = haskey(params, "fasta_header_regex_protein") &&
-                  !isempty(params["fasta_header_regex_protein"]) ? Regex(params["fasta_header_regex_protein"]) : nothing
-    organism_rgx = haskey(params, "fasta_header_regex_organism") &&
-                   !isempty(params["fasta_header_regex_organism"]) ? Regex(params["fasta_header_regex_organism"]) : nothing
-
-    protein_df = build_protein_df(
-        protein_entries;
-        accession_regex = accession_rgx,
-        gene_regex = gene_rgx,
-        protein_regex = protein_rgx,
-        organism_regex = organism_rgx,
-    )
+    protein_df = build_protein_df(protein_entries)
     Arrow.write(proteins_out_path, protein_df)
     protein_idx_map = Dict{String,UInt32}(protein_df.accession[i] => UInt32(i) for i in 1:nrow(protein_df))
+
     # Combine shared peptides
     fasta_entries = combine_shared_peptides(fasta_entries)
     # Add entrapment sequences if specified
