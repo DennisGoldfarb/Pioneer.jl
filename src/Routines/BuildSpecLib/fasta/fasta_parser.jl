@@ -34,18 +34,14 @@ mouse_entries = parse_fasta("mouse_proteome.fasta.gz", "mouse")
 The resulting FastaEntry objects will have default values for fields other than sequence,
 identifier, and proteome_id. These can be modified later with functions like add_mods().
 """
-function parse_fasta(fasta_path::String, 
-                    proteome_id::String,
-                    #parse_identifier::Function = x -> split(x,"|")[2]
-                    )::Vector{FastaEntry}
-    
-    function parse_identifier(header::AbstractString)
-        if count("|", header) == 2
-            return split(header,"|")[2]
-        else
-            return first(split(header, " "))
-        end
-    end
+function parse_fasta(
+    fasta_path::String,
+    proteome_id::String;
+    accession_regex::Union{Regex,Nothing}=nothing,
+    gene_regex::Union{Regex,Nothing}=nothing,
+    protein_regex::Union{Regex,Nothing}=nothing,
+    organism_regex::Union{Regex,Nothing}=nothing,
+)::Vector{FastaEntry}
     
     function get_reader(fasta_path::String)
         if endswith(fasta_path, ".fasta.gz")
@@ -61,9 +57,42 @@ function parse_fasta(fasta_path::String,
     entries = Vector{FastaEntry}()
 
     for record in reader
+        header = string(FASTA.identifier(record), " ", FASTA.description(record))
+
+        accession = if accession_regex === nothing
+            header
+        else
+            m = match(accession_regex, header)
+            m === nothing ? header : String(first(m.captures))
+        end
+
+        gene = if gene_regex === nothing
+            ""
+        else
+            m = match(gene_regex, header)
+            m === nothing ? "" : String(first(m.captures))
+        end
+
+        protein = if protein_regex === nothing
+            ""
+        else
+            m = match(protein_regex, header)
+            m === nothing ? "" : String(first(m.captures))
+        end
+
+        organism = if organism_regex === nothing
+            ""
+        else
+            m = match(organism_regex, header)
+            m === nothing ? "" : String(first(m.captures))
+        end
+
         push!(entries, FastaEntry(
-            parse_identifier(FASTA.identifier(record)),
+            accession,
             FASTA.description(record),
+            gene,
+            protein,
+            organism,
             proteome_id,
             FASTA.sequence(record),
             one(UInt32),
@@ -73,7 +102,7 @@ function parse_fasta(fasta_path::String,
             zero(UInt32),
             zero(UInt32),
             zero(UInt8),
-            false
+            false,
         ))
     end
 

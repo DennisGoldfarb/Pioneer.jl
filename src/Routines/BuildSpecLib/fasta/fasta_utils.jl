@@ -201,16 +201,19 @@ function add_entrapment_sequences(
                     entrapment_fasta_entries[n] = FastaEntry(
                         get_id(target_entry),
                         get_description(target_entry),
+                        get_gene(target_entry),
+                        get_protein(target_entry),
+                        get_organism(target_entry),
                         get_proteome(target_entry),
                         new_sequence,
                         get_start_idx(target_entry),
-                        missing, #structural_mods 
-                        missing, #istopic_mods 
+                        missing,
+                        missing,
                         get_charge(target_entry),
                         get_base_pep_id(target_entry),
                         base_prec_id,
                         entrapment_group_id,
-                        false
+                        false,
                     )
                     base_prec_id += one(UInt32)
                     n += 1
@@ -428,6 +431,9 @@ function add_reverse_decoys(target_fasta_entries::Vector{FastaEntry}; max_shuffl
             decoy_fasta_entries[n] = FastaEntry(
                 get_id(target_entry),
                 get_description(target_entry),
+                get_gene(target_entry),
+                get_protein(target_entry),
+                get_organism(target_entry),
                 get_proteome(target_entry),
                 decoy_sequence,
                 get_start_idx(target_entry),
@@ -437,7 +443,7 @@ function add_reverse_decoys(target_fasta_entries::Vector{FastaEntry}; max_shuffl
                 get_base_pep_id(target_entry),
                 get_base_prec_id(target_entry),
                 get_entrapment_group_id(target_entry),
-                true  # This is a decoy sequence
+                true,
             )
             
             n += 1
@@ -471,16 +477,16 @@ This function:
 ```julia
 # Original entries with shared sequence
 entries = [
-    FastaEntry("P1", "desc1", "human", "PEPTIDE", 1, 0, false),
-    FastaEntry("P2", "desc2", "human", "PEPTIDE", 2, 0, false),
-    FastaEntry("P3", "desc3", "human", "UNIQUE", 3, 0, false)
+    FastaEntry("P1", "desc1", "geneA", "protA", "human", "human", "PEPTIDE", 1, missing, missing, 0, 0, 0, 0, false),
+    FastaEntry("P2", "desc2", "geneB", "protB", "human", "human", "PEPTIDE", 2, missing, missing, 0, 0, 0, 0, false),
+    FastaEntry("P3", "desc3", "geneC", "protC", "human", "human", "UNIQUE", 3, missing, missing, 0, 0, 0, 0, false)
 ]
 
 # Combine shared peptides
 combined = combine_shared_peptides(entries)
 # Results in 2 entries:
-# 1. FastaEntry("P1;P2", "desc1;desc2", "human;human", "PEPTIDE", 1, 0, false)
-# 2. FastaEntry("P3", "desc3", "human", "UNIQUE", 3, 0, false)
+# 1. FastaEntry("P1;P2", "desc1;desc2", "geneA;geneB", "protA;protB", "human;human", "human;human", "PEPTIDE", 1, missing, missing, 0, 0, 0, 0, false)
+# 2. FastaEntry("P3", "desc3", "geneC", "protC", "human", "human", "UNIQUE", 3, missing, missing, 0, 0, 0, 0, false)
 ```
 
 # Notes
@@ -501,8 +507,15 @@ function combine_shared_peptides(peptides::Vector{FastaEntry})
             accession = get_id(peptide)*";"*get_id(fasta_entry)
             proteome = get_proteome(peptide)*";"*get_proteome(fasta_entry)
             description = get_description(peptide)*";"*get_description(fasta_entry)
-            seq_to_fasta_entry[sequence_il_equiv] = FastaEntry(accession, 
-                                                        description, 
+            gene = get_gene(peptide)*";"*get_gene(fasta_entry)
+            protein = get_protein(peptide)*";"*get_protein(fasta_entry)
+            organism = get_organism(peptide)*";"*get_organism(fasta_entry)
+            seq_to_fasta_entry[sequence_il_equiv] = FastaEntry(
+                                                        accession,
+                                                        description,
+                                                        gene,
+                                                        protein,
+                                                        organism,
                                                         proteome,
                                                         get_sequence(fasta_entry),
                                                         get_start_idx(fasta_entry),
@@ -511,7 +524,7 @@ function combine_shared_peptides(peptides::Vector{FastaEntry})
                                                         get_charge(fasta_entry),
                                                         get_base_pep_id(fasta_entry),
                                                         get_base_prec_id(fasta_entry),
-                                                        get_entrapment_group_id(fasta_entry), 
+                                                        get_entrapment_group_id(fasta_entry),
                                                         is_decoy(fasta_entry)
                                                         )
         else
