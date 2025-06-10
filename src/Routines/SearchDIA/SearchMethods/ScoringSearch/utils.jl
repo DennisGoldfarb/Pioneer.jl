@@ -719,7 +719,8 @@ function get_protein_groups(
     passing_pg_paths::Vector{String},
     protein_groups_folder::String,
     temp_folder::String,
-    precursors::LibraryPrecursors;
+    precursors::LibraryPrecursors,
+    proteins::LibraryProteins;
     min_peptides = 2,
     protein_q_val_threshold::Float32 = 0.01f0,
     max_psms_in_memory::Int64 = 10000000  # Default value if not provided
@@ -738,6 +739,7 @@ function get_protein_groups(
     - `psm_is_target`: Boolean array indicating targets
     - `psm_entrapment_id`: Entrapment group IDs
     - `precursors`: Library precursor information
+    - `proteins`: Library protein information
     - `min_peptides`: Minimum peptides required per group
     
     # Returns
@@ -878,8 +880,9 @@ function get_protein_groups(
     end
 
     """
-        writeProteinGroups(acc_to_max_pg_score, protein_groups, 
-                          protein_to_possible_peptides, protein_to_possible_intervals, protein_groups_path)
+        writeProteinGroups(acc_to_max_pg_score, protein_groups,
+                          protein_to_possible_peptides, protein_to_possible_intervals,
+                          protein_peptide_intervals, protein_lengths, protein_groups_path)
     
     Write protein groups with features to Arrow file.
     
@@ -888,6 +891,8 @@ function get_protein_groups(
     - `protein_groups`: Dictionary of protein groups with scores and peptides
     - `protein_to_possible_peptides`: All possible peptides for each protein
     - `protein_to_possible_intervals`: Start and length for all peptides per protein
+    - `protein_peptide_intervals`: Intervals for each peptide within a protein
+    - `protein_lengths`: Mapping of protein accession to sequence length
     - `protein_groups_path`: Output file path
     
     # Returns
@@ -919,6 +924,8 @@ function get_protein_groups(
                                         @NamedTuple{protein_name::String, target::Bool, entrap_id::UInt8},
                                         Vector{Tuple{UInt32,UInt32}}
                                     },
+                                    protein_peptide_intervals::Dict{Tuple{String,Bool,UInt8,String}, Vector{Tuple{UInt32,UInt32}}},
+                                    protein_lengths::Dict{String,UInt32},
                                     protein_groups_path::String)
         # Extract keys and values
         keys_array = keys(protein_groups)
@@ -966,40 +973,40 @@ function get_protein_groups(
         # Calculate possible peptides and peptide coverage
         # Handle protein groups with multiple proteins separated by semicolons
         n_possible_peptides = zeros(Int64, length(keys_array))
-        possible_peptide_length = zeros(Int64, length(keys_array))
+        sequence_coverage = Float64[]
+
         for (i, k) in enumerate(keys_array)
-            # Split the protein group name by semicolons
             protein_names_in_group = split(k[:protein_name], ';')
-            
-            # Union of all peptide sets from proteins in the group
+
             all_possible_peptides = Set{String}()
-            all_possible_intervals = Tuple{UInt32,UInt32}[]
+            per_protein_cov = Float64[]
             for individual_protein in protein_names_in_group
-                # Create key for each individual protein
-                individual_key = (protein_name = String(individual_protein), 
-                                target = k[:target], 
-                                entrap_id = k[:entrap_id])
-                # Get the set of peptides for this protein and union with existing
-                if haskey(protein_to_possible_peptides, individual_key)
-                    union!(all_possible_peptides, protein_to_possible_peptides[individual_key])
+                individual_key = (protein_name = String(individual_protein),
+                                  target = k[:target],
+                                  entrap_id = k[:entrap_id])
+                possible_set = get(protein_to_possible_peptides, individual_key, Set{String}())
+                union!(all_possible_peptides, possible_set)
+
+                if haskey(protein_lengths, String(individual_protein))
+                    prot_len = Float64(protein_lengths[String(individual_protein)])
+                    identified = intersect(values_array[i][:peptides], possible_set)
+                    intervals = Tuple{UInt32,UInt32}[]
+                    for pep in identified
+                        pkey = (String(individual_protein), k[:target], k[:entrap_id], pep)
+                        if haskey(protein_peptide_intervals, pkey)
+                            append!(intervals, protein_peptide_intervals[pkey])
+                        end
+                    end
+                    covered = coverage_length(intervals)
+                    push!(per_protein_cov, prot_len == 0.0 ? 0.0 : covered / prot_len)
                 end
             end
-            
-            # Count unique peptides across all proteins in the group
+
             n_possible_peptides[i] = max(length(all_possible_peptides), 1)
-            possible_peptide_length[i] = coverage_length(all_possible_intervals)
+            push!(sequence_coverage, isempty(per_protein_cov) ? 0.0 : mean(per_protein_cov))
         end
-        println(possible_peptide_length)
-        
+
         peptide_coverage = [n_pep / n_poss for (n_pep, n_poss) in zip(n_peptides, n_possible_peptides)]
-        sequence_coverage = Float64[]
-        for (obs_len, poss_len) in zip(total_peptide_length, possible_peptide_length)
-            if poss_len == 0
-                push!(sequence_coverage, 0.0)
-            else
-                push!(sequence_coverage, obs_len / poss_len)
-            end
-        end
         # Create DataFrame
         df = DataFrame((
             protein_name = protein_name,
@@ -1029,6 +1036,7 @@ function get_protein_groups(
     # First, count all possible peptides for each protein in the library
     protein_to_possible_peptides = Dict{@NamedTuple{protein_name::String, target::Bool, entrap_id::UInt8}, Set{String}}()
     protein_to_possible_intervals = Dict{@NamedTuple{protein_name::String, target::Bool, entrap_id::UInt8}, Vector{Tuple{UInt32,UInt32}}}()
+    protein_peptide_intervals = Dict{Tuple{String,Bool,UInt8,String}, Vector{Tuple{UInt32,UInt32}}}()
     
     
     # Count all peptides in the library for each protein
@@ -1054,7 +1062,20 @@ function get_protein_groups(
             end
             push!(protein_to_possible_peptides[key], all_sequences[i])
             push!(protein_to_possible_intervals[key], (all_start_idx[i], all_length[i]))
+            pkey = (String(protein_name), !is_decoy, entrap_id, all_sequences[i])
+            if !haskey(protein_peptide_intervals, pkey)
+                protein_peptide_intervals[pkey] = Vector{Tuple{UInt32,UInt32}}()
+            end
+            push!(protein_peptide_intervals[pkey], (all_start_idx[i], all_length[i]))
         end
+    end
+
+    # Map protein accession to sequence length
+    protein_lengths = Dict{String,UInt32}()
+    prot_acc = getAccession(proteins)
+    prot_len = getLength(proteins)
+    for i in eachindex(prot_acc)
+        protein_lengths[String(prot_acc[i])] = prot_len[i]
     end
     
     #Concatenate psms 
@@ -1154,6 +1175,8 @@ function get_protein_groups(
             protein_groups,
             protein_to_possible_peptides,
             protein_to_possible_intervals,
+            protein_peptide_intervals,
+            protein_lengths,
             protein_groups_path
         )
     end
