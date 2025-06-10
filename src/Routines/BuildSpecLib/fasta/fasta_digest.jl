@@ -165,16 +165,19 @@ function digest_fasta(fasta::Vector{FastaEntry},
             push!(peptides_fasta, FastaEntry(
                 get_id(entry),
                 "", # Skip description to save memory
+                get_gene(entry),
+                get_protein(entry),
+                get_organism(entry),
                 proteome_id,
-                peptide,  # Now String instead of SubString
+                peptide,
                 start_idx,
-                missing, #structural_mods 
-                missing, #istopic_mods 
+                missing,
+                missing,
                 zero(UInt8),
                 base_pep_id,
                 base_prec_id,
                 zero(UInt8),
-                false
+                false,
             ))
             base_prec_id += one(UInt32)
             base_pep_id += one(UInt32)
