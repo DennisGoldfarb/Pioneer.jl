@@ -131,6 +131,15 @@ function summarize_results!(
         qc_plot_folder = joinpath(getDataOutDir(search_context), "qc_plots")
         precursors_long_path = joinpath(getDataOutDir(search_context), "precursors_long.arrow")
         protein_long_path = joinpath(getDataOutDir(search_context), "protein_groups_long.arrow")
+
+        # Build accession to gene/protein name dictionaries
+        proteins = getProteins(getSpecLib(search_context))
+        acc = getAccession(proteins)
+        gene_names = getGeneName(proteins)
+        prot_names = getProteinName(proteins)
+        gene_dict = Dict{String,String}(String(acc[i]) => String(gene_names[i]) for i in eachindex(acc))
+        prot_dict = Dict{String,String}(String(acc[i]) => String(prot_names[i]) for i in eachindex(acc))
+
         @info "Performing intensity normalization..."
         # Normalize quantitative values
         normalizeQuant(
@@ -154,7 +163,9 @@ function summarize_results!(
         precursors_wide_path = writePrecursorCSV(
             precursors_long_path,
             sort(collect(getParsedFileNames(getMSData(search_context)))),
-            params.run_to_run_normalization,
+            params.run_to_run_normalization;
+            gene_dict = gene_dict,
+            protein_name_dict = prot_dict,
             write_csv = params.write_csv
         )
 
@@ -183,7 +194,9 @@ function summarize_results!(
             getIsotopicMods(precursors),
             getStructuralMods(precursors),
             getCharge(precursors),
-            sort(collect(values(getFileIdToName(getMSData(search_context))))),
+            sort(collect(values(getFileIdToName(getMSData(search_context)))));
+            gene_dict = gene_dict,
+            protein_name_dict = prot_dict,
             write_csv = params.write_csv
         )
 

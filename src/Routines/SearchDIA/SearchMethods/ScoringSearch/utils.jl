@@ -782,7 +782,6 @@ function get_protein_groups(
             sequence = precursor_sequence[precursor_idx]
             missed_cleavage = missed_cleavages[precursor_idx]
             missed_cleavage_score = (2 * (missed_cleavage > 0)) - 1
-
             structural_mod_score = (2 * (countMOX(structural_mods[precursor_idx]) > 0)) - 1
             
             # Create key for protein_inference_dict lookup
@@ -801,12 +800,12 @@ function get_protein_groups(
             score = psm_score[i]
             protein_name = protein_inference_dict[peptide_key][:protein_name]
             keyname = (protein_name = protein_name, target = psm_is_target[i], entrap_id = psm_entrapment_id[i])
-            
+
             if haskey(protein_groups, keyname)
                 pg_score, peptides, intervals, diff_missed_cleavages, diff_mods, n_psms, top_peptide_score  = protein_groups[keyname]
                 pg_score += log1p(-score)
                 diff_missed_cleavages += missed_cleavage_score
-                diff_mods += structural_mod_score
+                diff_mods += structural_mod_score   
                 data = protein_groups[keyname]
                 n_psms = data.n_psms + 1
                 top_peptide_score = max(data.top_peptide_score, score)
@@ -1494,8 +1493,6 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
     n_targets = sum(all_protein_groups.target)
     n_decoys = sum(.!all_protein_groups.target)
 
-    CSV.write("/Users/dennisgoldfarb/Downloads/protein_scores.tsv", all_protein_groups, delim='\t')
-    
     # Define features to use
     feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :diff_missed_cleavages , :n_psms, :top_peptide_score, :sequence_coverage, :diff_mods, :abundance_similarity]
     y = all_protein_groups.target

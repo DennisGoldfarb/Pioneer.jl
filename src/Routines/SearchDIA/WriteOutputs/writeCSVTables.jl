@@ -68,12 +68,31 @@ function getModifiedSequence(
     mods = [("("*getModName(mod.match)*")", getModIndex(mod.match)) for mod in parseMods(mods)]
     return "_"*insert_at_indices(sequence, mods)*"_."*string(charge)
 end
+
+"""
+    join_dict_values(dict::Dict{String,String}, key_string::Union{Missing,String})
+
+Return a semicolon separated string of dictionary values corresponding to the
+accession numbers contained in `key_string`. Missing entries are ignored.
+"""
+function join_dict_values(dict::Dict{String,String}, key_string::Union{Missing,String})
+    if ismissing(key_string)
+        return ""
+    end
+    accessions = split(String(key_string), ';')
+    mapped = [get(dict, acc, "") for acc in accessions]
+    nonempty = filter(!isempty, mapped)
+    return join(nonempty, ';')
+end
+
 #Assume sorted by protein,peptide keys. Do this in batches and write a long and wide form .csv without
 #loading the entire table into memory. 
 function writePrecursorCSV(
     long_precursors_path::String,
     file_names::Vector{String},
     normalized::Bool;
+    gene_dict::Dict{String,String} = Dict{String,String}(),
+    protein_name_dict::Dict{String,String} = Dict{String,String}(),
     write_csv::Bool = true,
     batch_size::Int64 = 2000000)
 
@@ -94,6 +113,11 @@ function writePrecursorCSV(
     precursors_long = DataFrame(Arrow.Table(long_precursors_path))
     n_rows = size(precursors_long, 1)
 
+    # Map accession numbers to gene and protein names
+    precursors_long[!,:gene_names] = join_dict_values.(Ref(gene_dict), precursors_long.accession_numbers)
+    precursors_long[!,:protein_names] = join_dict_values.(Ref(protein_name_dict), precursors_long.accession_numbers)
+
+
     out_dir, arrow_path = splitdir(long_precursors_path)
     long_precursors_path = joinpath(out_dir,"precursors_long.tsv")
     wide_precursors_path = joinpath(out_dir,"precursors_wide.tsv")
@@ -102,8 +126,10 @@ function writePrecursorCSV(
         rm(wide_precursors_arrow_path)
     end
     wide_columns = ["species"
-    "inferred_protein_group"
+    "gene_names"
+    "protein_names"
     "accession_numbers"
+    "inferred_protein_group"
     "sequence"
     "charge"
     "structural_mods"
@@ -125,8 +151,10 @@ function writePrecursorCSV(
     # order columns
     select!(precursors_long, [:file_name,
                              :species,
-                             :inferred_protein_group,
+                             :gene_names,
+                             :protein_names,
                              :accession_numbers,
+                             :inferred_protein_group,
                              :sequence,
                              :charge,
                              :structural_mods,
@@ -214,13 +242,15 @@ function writeProteinGroupsCSV(
     structural_mods::AbstractVector{Union{String,Missing}},
     precursor_charge::AbstractVector{UInt8},
     file_names::Vector{String};
+    gene_dict::Dict{String,String} = Dict{String,String}(),
+    protein_name_dict::Dict{String,String} = Dict{String,String}(),
     write_csv::Bool = true,
     batch_size::Int64 = 2000000)
 
     function makeWideFormat(
         longdf::DataFrame)
         # First create a DataFrame with the non-abundance columns we want to keep
-        metadata_df = unique(longdf[:, [:species, :protein, :target]])#, :n_peptides]])
+        metadata_df = unique(longdf[:, [:species, :gene_names, :protein_names, :protein, :target]])#, :n_peptides]])
         
         # Create the abundance wide format
         abundance_df = unstack(longdf,
@@ -234,6 +264,10 @@ function writeProteinGroupsCSV(
     protein_groups_long = DataFrame(Arrow.Table(long_pg_path))
     n_rows = size(protein_groups_long, 1)
 
+    # Map accession numbers to gene names
+    protein_groups_long[!,:gene_names] = join_dict_values.(Ref(gene_dict), protein_groups_long.protein)
+    protein_groups_long[!,:protein_names] = join_dict_values.(Ref(protein_name_dict), protein_groups_long.protein)
+
     out_dir, arrow_path = splitdir(long_pg_path)
     long_protein_groups_path = joinpath(out_dir,"protein_groups_long.tsv")
     wide_protein_groups_path = joinpath(out_dir,"protein_groups_wide.tsv")
@@ -242,7 +276,20 @@ function writeProteinGroupsCSV(
         rm(wide_protein_groups_arrow)
     end
     # Update wide columns to include n_peptides
-    wide_columns = ["species", "protein", "target"]
+    wide_columns = ["species", "gene_names", "protein_names", "protein", "target"]
+
+    select!(protein_groups_long, [:file_name,
+                             :species,
+                             :gene_names,
+                             :protein_names,
+                             :protein,
+                             :target,
+                             :entrap_id,
+                             :peptides,
+                             :n_peptides,
+                             :global_qval,
+                             :run_specific_qval,
+                             :abundance])
 
     sorted_columns = vcat(wide_columns, file_names)
     open(long_protein_groups_path,"w") do io1
