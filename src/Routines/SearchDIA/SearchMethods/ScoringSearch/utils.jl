@@ -1283,7 +1283,7 @@ function perform_probit_analysis_oom(pg_paths::Vector{String}, total_protein_gro
     y = sampled_protein_groups.target
     
     # Fit probit model on sampled data
-    β_fitted, X_mean, X_std = fit_probit_model(X, y)
+    β_fitted, X_mean, X_std, keep_cols = fit_probit_model(X, y)
     
     @info "Fitted probit model coefficients: $β_fitted"
     
@@ -1311,7 +1311,7 @@ function perform_probit_analysis_oom(pg_paths::Vector{String}, total_protein_gro
             
             # Calculate probit scores
             X_file = Matrix{Float64}(df[:, feature_names])
-            prob_scores = calculate_probit_scores(X_file, β_fitted, X_mean, X_std)
+            prob_scores = calculate_probit_scores(X_file, β_fitted, X_mean, X_std, keep_cols)
             
             # Add scores to dataframe
             df[!, :probit_score] = prob_scores
@@ -1424,10 +1424,10 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
         X_train = Matrix{Float64}(all_protein_groups[train_mask, feature_names])
         y_train = all_protein_groups.target[train_mask]
 
-        β_fitted, X_mean, X_std = fit_probit_model(X_train, y_train)
+        β_fitted, X_mean, X_std, keep_cols = fit_probit_model(X_train, y_train)
 
         X_all = Matrix{Float64}(all_protein_groups[:, feature_names])
-        prob_scores = calculate_probit_scores(X_all, β_fitted, X_mean, X_std)
+        prob_scores = calculate_probit_scores(X_all, β_fitted, X_mean, X_std, keep_cols)
     end
     
 
@@ -1487,7 +1487,7 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
     
     # Create decision boundary plots
     # TODO: Fix plotting type error
-    # plot_probit_decision_boundary(all_protein_groups, β_fitted, X_mean, X_std, feature_names, qc_folder)
+    # plot_probit_decision_boundary(all_protein_groups, β_fitted, X_mean, X_std, feature_names, keep_cols, qc_folder)
 end
 
 """
@@ -1531,34 +1531,44 @@ Fit a probit regression model for protein group classification.
 - `β_fitted`: Fitted coefficients
 - `X_mean`: Feature means for standardization
 - `X_std`: Feature standard deviations for standardization
+- `keep_cols`: Boolean mask indicating which feature columns were retained
 """
 function fit_probit_model(X::Matrix{Float64}, y::Vector{Bool})
+    # Identify and remove constant columns which cause singularities
+    keep_cols = [maximum(@view X[:, i]) != minimum(@view X[:, i]) for i in 1:size(X, 2)]
+    if any(.!keep_cols)
+        @warn "Removing $(count(!, keep_cols)) constant feature columns before probit training"
+    end
+    X_filtered = X[:, keep_cols]
+
     # Standardize features
-    X_mean = mean(X, dims=1)
-    X_std = std(X, dims=1)
+    X_mean = mean(X_filtered, dims=1)
+    X_std = std(X_filtered, dims=1)
     X_std[X_std .== 0] .= 1.0  # Avoid division by zero
-    X_standardized = (X .- X_mean) ./ X_std
-    
+    X_standardized = (X_filtered .- X_mean) ./ X_std
+
     # Add intercept column
     X_with_intercept = hcat(ones(size(X_standardized, 1)), X_standardized)
-    X_df = DataFrame(X_with_intercept, [:intercept; Symbol.("feature_", 1:size(X, 2))])
-    
+    X_df = DataFrame(X_with_intercept, [:intercept; Symbol.("feature_", 1:size(X_filtered, 2))])
+
     # Initialize coefficients
     β = zeros(Float64, size(X_with_intercept, 2))
-    
+
     # Create data chunks for parallel processing
     n_chunks = max(1, Threads.nthreads())
     chunk_size = max(1, ceil(Int, length(y) / n_chunks))
     data_chunks = Iterators.partition(1:length(y), chunk_size)
-    
+
     # Fit probit model
     β_fitted = Pioneer.ProbitRegression(β, X_df, y, data_chunks, max_iter=30)
-    
-    return β_fitted, vec(X_mean), vec(X_std)
+
+    return β_fitted, vec(X_mean), vec(X_std), keep_cols
 end
 
 """
-    calculate_probit_scores(X::Matrix{Float64}, β::Vector{Float64}, X_mean::Vector{Float64}, X_std::Vector{Float64})
+    calculate_probit_scores(X::Matrix{Float64}, β::Vector{Float64},
+                            X_mean::Vector{Float64}, X_std::Vector{Float64},
+                            keep_cols::Vector{Bool})
 
 Calculate probit probability scores for new data.
 
@@ -1567,17 +1577,21 @@ Calculate probit probability scores for new data.
 - `β::Vector{Float64}`: Fitted coefficients
 - `X_mean::Vector{Float64}`: Feature means from training
 - `X_std::Vector{Float64}`: Feature standard deviations from training
+- `keep_cols::Vector{Bool}`: Boolean mask of columns retained during training
 
 # Returns
 - `Vector{Float64}`: Probability scores
 """
-function calculate_probit_scores(X::Matrix{Float64}, β::Vector{Float64}, X_mean::Vector{Float64}, X_std::Vector{Float64})
+function calculate_probit_scores(X::Matrix{Float64}, β::Vector{Float64}, X_mean::Vector{Float64}, X_std::Vector{Float64}, keep_cols::Vector{Bool})
+    # Apply the same feature filtering used during training
+    X_filtered = X[:, keep_cols]
+
     # Standardize using training statistics
-    X_standardized = (X .- X_mean') ./ X_std'
-    
+    X_standardized = (X_filtered .- X_mean') ./ X_std'
+
     # Add intercept
     X_with_intercept = hcat(ones(size(X_standardized, 1)), X_standardized)
-    X_df = DataFrame(X_with_intercept, [:intercept; Symbol.("feature_", 1:size(X, 2))])
+    X_df = DataFrame(X_with_intercept, [:intercept; Symbol.("feature_", 1:size(X_filtered, 2))])
     
     # Create data chunks
     n_chunks = max(1, Threads.nthreads())
@@ -1641,9 +1655,10 @@ function calculate_qvalues_from_scores(scores::Vector{<:Real}, labels::Vector{Bo
 end
 
 """
-    plot_probit_decision_boundary(all_protein_groups::DataFrame, β::Vector{Float64}, 
+    plot_probit_decision_boundary(all_protein_groups::DataFrame, β::Vector{Float64},
                                   X_mean::Vector{Float64}, X_std::Vector{Float64},
-                                  feature_names::Vector{Symbol}, qc_folder::String)
+                                  feature_names::Vector{Symbol}, keep_cols::Vector{Bool},
+                                  qc_folder::String)
 
 Create scatter plots showing the probit decision boundary.
 
@@ -1653,11 +1668,13 @@ Create scatter plots showing the probit decision boundary.
 - `X_mean::Vector{Float64}`: Feature means from training
 - `X_std::Vector{Float64}`: Feature standard deviations from training
 - `feature_names::Vector{Symbol}`: Names of features used
+- `keep_cols::Vector{Bool}`: Mask of features retained during training
 - `qc_folder::String`: Output folder for plots
 """
-function plot_probit_decision_boundary(all_protein_groups::DataFrame, β::Vector{Float64}, 
+function plot_probit_decision_boundary(all_protein_groups::DataFrame, β::Vector{Float64},
                                      X_mean::Vector{Float64}, X_std::Vector{Float64},
-                                     feature_names::Vector{Symbol}, qc_folder::String)
+                                     feature_names::Vector{Symbol}, keep_cols::Vector{Bool},
+                                     qc_folder::String)
     
     # Create output folder if it doesn't exist
     protein_ml_folder = joinpath(qc_folder, "protein_ml_plots")
@@ -1665,7 +1682,7 @@ function plot_probit_decision_boundary(all_protein_groups::DataFrame, β::Vector
     
     # Calculate probit scores for all data
     X = Matrix{Float64}(all_protein_groups[:, feature_names])
-    prob_scores = calculate_probit_scores(X, β, X_mean, X_std)
+    prob_scores = calculate_probit_scores(X, β, X_mean, X_std, keep_cols)
     
     # Separate targets and decoys
     target_mask = all_protein_groups.target
@@ -1716,7 +1733,7 @@ function plot_probit_decision_boundary(all_protein_groups::DataFrame, β::Vector
             end
             
             X_point = reshape([y, x, median_n_possible, log_binom], 1, :)  # Create 1x4 matrix
-            prob_score = calculate_probit_scores(X_point, β, X_mean, X_std)[1]
+            prob_score = calculate_probit_scores(X_point, β, X_mean, X_std, keep_cols)[1]
             z_grid[j, i] = prob_score
         end
     end
