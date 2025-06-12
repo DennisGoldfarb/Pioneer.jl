@@ -1373,7 +1373,7 @@ function perform_probit_analysis_oom(pg_paths::Vector{String}, total_protein_gro
     add_feature_columns!(sampled_protein_groups)
     
     # Define features to use
-    feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :abundance_similarity]
+    feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :diff_missed_cleavages , :n_psms, :top_peptide_score, :sequence_coverage, :diff_mods, :abundance_similarity]
     X = Matrix{Float64}(sampled_protein_groups[:, feature_names])
     y = sampled_protein_groups.target
     
