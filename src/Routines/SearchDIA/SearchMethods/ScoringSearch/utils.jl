@@ -1495,36 +1495,13 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
 
     # Define features to use
     feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :diff_missed_cleavages , :n_psms, :top_peptide_score, :sequence_coverage, :diff_mods, :abundance_similarity]
+    X = Matrix{Float64}(all_protein_groups[:, feature_names])
     y = all_protein_groups.target
 
-    n_train_rounds = 3
-    max_q_value = 0.01
-    q_values = zeros(Float64, nrow(all_protein_groups))
-    prob_scores = copy(all_protein_groups.pg_score)
-
-    β_fitted = zeros(Float64, length(feature_names) + 1)
-    X_mean = zeros(Float64, length(feature_names))
-    X_std  = ones(Float64, length(feature_names))
-
-    for i in 1:n_train_rounds
-        if i == 1
-            # Initial q-values are based on the pg_score column
-            get_qvalues!(all_protein_groups.pg_score, all_protein_groups.target, q_values)
-        else
-            get_qvalues!(prob_scores, all_protein_groups.target, q_values)
-        end
-
-        train_mask = ((q_values .<= max_q_value) .& all_protein_groups.target) .| (.!all_protein_groups.target)
-
-        X_train = Matrix{Float64}(all_protein_groups[train_mask, feature_names])
-        y_train = all_protein_groups.target[train_mask]
-
-        β_fitted, X_mean, X_std, keep_cols = fit_probit_model(X_train, y_train)
-
-        X_all = Matrix{Float64}(all_protein_groups[:, feature_names])
-        prob_scores = calculate_probit_scores(X_all, β_fitted, X_mean, X_std, keep_cols)
-    end
+    β_fitted, X_mean, X_std, keep_cols = fit_probit_model(X, y)
     
+    # Calculate probability scores
+    prob_scores = calculate_probit_scores(X, β_fitted, X_mean, X_std, keep_cols)
 
     # Final q-values from the last round
     probit_qvalues = calculate_qvalues_from_scores(prob_scores, y)
@@ -1534,7 +1511,6 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
 
     all_protein_groups.prob = prob_scores
     all_protein_groups.probit_qvalues = probit_qvalues
-    CSV.write("/Users/dennisgoldfarb/Downloads/protein_scores.tsv", all_protein_groups, delim='\t')
     
     # Count targets at different FDR thresholds
     probit_targets_1pct = sum(y .& (probit_qvalues .<= 0.01))

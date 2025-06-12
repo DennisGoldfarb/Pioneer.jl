@@ -44,7 +44,7 @@ function get_qvalues!(probs::AbstractVector{U}, labels::AbstractVector{Bool}, qv
             targets += labels[i]
             decoys += (1 - labels[i])
             # Apply FDR scale factor to correct for library target/decoy ratio
-            qvals[i] = (decoys * fdr_scale_factor) / targets
+            qvals[i] = (decoys * fdr_scale_factor) / max(targets, 1)
     end
 
     fdr = Inf

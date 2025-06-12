@@ -14,7 +14,7 @@ function fillZandW!(Z::Vector{T}, W::Vector{T}, η::Vector{T}, y::Vector{Bool},d
                     η[i] = log(μ)
                 else
                     Z[i] = η[i] - μ/ϕ
-                    η[i] = 1- log(μ)
+                    η[i] = log1p(-μ)
                 end
                 W[i] = (ϕ^2)/(μ*(1 - μ))
             end
@@ -142,7 +142,6 @@ function ProbitRegression(β::Vector{T}, X::DataFrame, y::Vector{Bool},
         old_loss = loss
     end
     return β
-
 end
 
 function ModelPredict!(scores::Vector{U}, 
