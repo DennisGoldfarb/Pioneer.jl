@@ -14,7 +14,7 @@ function fillZandW!(Z::Vector{T}, W::Vector{T}, η::Vector{T}, y::Vector{Bool},d
                     η[i] = log(μ)
                 else
                     Z[i] = η[i] - μ/ϕ
-                    η[i] = log1p(-μ)
+                    η[i] = 1 - log(μ)
                 end
                 W[i] = (ϕ^2)/(μ*(1 - μ))
             end

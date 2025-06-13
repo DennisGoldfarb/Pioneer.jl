@@ -769,7 +769,6 @@ function get_protein_groups(
             intervals::Set{Tuple{UInt32,UInt32}},
             diff_missed_cleavages::Int32,
             diff_mods::Int32,
-            n_psms::Int32,
             top_peptide_score::Float32}
         }()
 
@@ -802,19 +801,17 @@ function get_protein_groups(
             keyname = (protein_name = protein_name, target = psm_is_target[i], entrap_id = psm_entrapment_id[i])
 
             if haskey(protein_groups, keyname)
-                pg_score, peptides, intervals, diff_missed_cleavages, diff_mods, n_psms, top_peptide_score  = protein_groups[keyname]
+                pg_score, peptides, intervals, diff_missed_cleavages, diff_mods, top_peptide_score  = protein_groups[keyname]
                 pg_score += log1p(-score)
                 diff_missed_cleavages += missed_cleavage_score
                 diff_mods += structural_mod_score   
                 data = protein_groups[keyname]
-                n_psms = data.n_psms + 1
                 top_peptide_score = max(data.top_peptide_score, score)
                 push!(peptides, sequence)
                 push!(intervals, (start_idxs[precursor_idx], pep_lengths[precursor_idx]))
                 protein_groups[keyname] = (pg_score = pg_score, peptides = peptides, intervals = intervals,
                     diff_missed_cleavages = diff_missed_cleavages,
                     diff_mods = diff_mods,
-                    n_psms = n_psms,
                     top_peptide_score = top_peptide_score)
             else
                 sequences = Set{String}((sequence,))
@@ -826,7 +823,6 @@ function get_protein_groups(
                     intervals = intv,
                     diff_missed_cleavages = missed_cleavage_score,
                     diff_mods = structural_mod_score,
-                    n_psms = 1,
                     top_peptide_score = score)
                 )
             end
@@ -842,7 +838,6 @@ function get_protein_groups(
                 intervals = data.intervals,
                 diff_missed_cleavages = data.diff_missed_cleavages,
                 diff_mods = data.diff_mods,
-                n_psms = data.n_psms,
                 top_peptide_score = data.top_peptide_score,
             )
         end
@@ -913,7 +908,7 @@ function get_protein_groups(
                                                     intervals::Set{Tuple{UInt32,UInt32}}, 
                                                     diff_missed_cleavages::Int32,
                                                     diff_mods::Int32,
-                                                    n_psms::Int32, top_peptide_score::Float32}
+                                                    top_peptide_score::Float32}
                                     },
                                     protein_to_possible_peptides::Dict{
                                         @NamedTuple{protein_name::String, target::Bool, entrap_id::UInt8},
@@ -921,8 +916,6 @@ function get_protein_groups(
                                     },
                                     protein_peptide_intervals::Dict{Tuple{String,Bool,UInt8,String}, Vector{Tuple{UInt32,UInt32}}},
                                     protein_lengths::Dict{String,UInt32},
-                                    protein_groups_path::String,
-                                    abundance_similarity::Dict{NamedTuple{(:protein_name,:target,:entrap_id),Tuple{String,Bool,UInt8}},Float64}=Dict())
                                     protein_groups_path::String,
                                     abundance_similarity::Dict{NamedTuple{(:protein_name,:target,:entrap_id),Tuple{String,Bool,UInt8}},Float64}=Dict())
         # Extract keys and values
@@ -959,7 +952,6 @@ function get_protein_groups(
         pg_score = [v[:pg_score] for v in values_array]
         diff_missed_cleavages = [v[:diff_missed_cleavages] for v in values_array]
         diff_mods = [v[:diff_mods] for v in values_array]
-        n_psms = [v[:n_psms] for v in values_array]
         top_peptide_score = [v[:top_peptide_score] for v in values_array]
         global_pg_score = [get(acc_to_max_pg_score, k, 0.0f0) for k in keys_array]
         abundance_similarity_values = [get(abundance_similarity, k, 0.0) for k in keys_array]
@@ -1019,70 +1011,16 @@ function get_protein_groups(
             peptide_coverage = peptide_coverage,
             diff_missed_cleavages = diff_missed_cleavages,
             diff_mods = diff_mods,
-            n_psms = n_psms,
             top_peptide_score = top_peptide_score,
             sequence_coverage = sequence_coverage,
             abundance_similarity = abundance_similarity_values,
-            per_protein_sequence_coverage = per_protein_sequence_coverage,
-            abundance_similarity = abundance_similarity_values
+            per_protein_sequence_coverage = per_protein_sequence_coverage
         ))
 
         sort!(df, :global_pg_score, rev = true)
         # Convert DataFrame to Arrow.Table
         Arrow.write(protein_groups_path, df)
         return size(df, 1)
-    end
-
-    function compute_expected_abundances(
-        passing_psms_paths::Vector{String},
-        run_to_protein_groups::Dict{UInt64,Dictionary},
-        protein_to_precursor_indices::Dict{NamedTuple{(:protein_name,:target,:entrap_id),Tuple{String,Bool,UInt8}}, Vector{UInt32}}
-    )
-        run_weights = Vector{Dict{NamedTuple{(:protein_name,:target,:entrap_id),Tuple{String,Bool,UInt8}}, Dict{UInt32,Float64}}}(undef, length(passing_psms_paths))
-        run_pseudocounts = Vector{Float64}(undef, length(passing_psms_paths))
-        for (ms_idx, fpath) in enumerate(passing_psms_paths)
-            weights_dict = Dict{NamedTuple{(:protein_name,:target,:entrap_id),Tuple{String,Bool,UInt8}}, Dict{UInt32,Float64}}()
-            pseudocount_val = 1.0
-            if isfile(fpath) && endswith(fpath, ".arrow")
-                df = DataFrame(Tables.columntable(Arrow.Table(fpath)))
-                weights = Vector{Float64}(df.weight)
-                if !isempty(weights)
-                    pseudocount_val = quantile(weights, 0.01)
-                end
-                for (prot, tgt, ent, pid, w) in zip(df.inferred_protein_group, df.target, df.entrapment_group_id, df.precursor_idx, df.weight)
-                    key = (protein_name = String(prot), target = tgt, entrap_id = ent)
-                    if !haskey(weights_dict, key)
-                        weights_dict[key] = Dict{UInt32,Float64}()
-                    end
-                    weights_dict[key][pid] = get(weights_dict[key], pid, 0.0) + w
-                end
-            end
-            run_weights[ms_idx] = weights_dict
-            run_pseudocounts[ms_idx] = pseudocount_val
-        end
-
-        expected = Dict{NamedTuple{(:protein_name,:target,:entrap_id),Tuple{String,Bool,UInt8}}, NamedTuple{(:precursors,:abundance),Tuple{Vector{UInt32},Vector{Float64}}}}()
-        for (key, prec_list) in pairs(protein_to_precursor_indices)
-            sum_vec = zeros(Float64, length(prec_list))
-            total_score = 0.0
-            for (ms_idx, fpath) in enumerate(passing_psms_paths)
-                run_groups = run_to_protein_groups[ms_idx]
-                if !haskey(run_groups, key)
-                    continue
-                end
-                pg_score = run_groups[key].pg_score
-                weights_dict = get(run_weights[ms_idx], key, Dict{UInt32,Float64}())
-                pc = run_pseudocounts[ms_idx]
-                obs_vec = [get(weights_dict, pid, 0.0) + pc for pid in prec_list]
-                obs_vec ./= sum(obs_vec)
-                sum_vec .+= obs_vec .* pg_score
-                total_score += pg_score
-            end
-            if total_score > 0
-                expected[key] = (precursors = prec_list, abundance = sum_vec ./ total_score)
-            end
-        end
-        return expected, run_weights, run_pseudocounts
     end
 
     function compute_expected_abundances(
@@ -1130,7 +1068,9 @@ function get_protein_groups(
             end
         end
 
-        expected = Dict{NamedTuple{(:protein_name,:target,:entrap_id),Tuple{String,Bool,UInt8}}, NamedTuple{(:precursors,:abundance),Tuple{Vector{UInt32},Vector{Float64}}}}()
+        expected = Dict{NamedTuple{(:protein_name,:target,:entrap_id),Tuple{String,Bool,UInt8}},
+                        NamedTuple{(:precursors,:abundance,:confidence),
+                                   Tuple{Vector{UInt32},Vector{Float64},Float64}}}()
         for (key, prec_list) in pairs(group_to_precursor_indices)
             sum_vec = zeros(Float64, length(prec_list))
             total_score = 0.0
@@ -1148,7 +1088,9 @@ function get_protein_groups(
                 total_score += pg_score
             end
             if total_score > 0
-                expected[key] = (precursors = prec_list, abundance = sum_vec ./ total_score)
+                expected[key] = (precursors = prec_list,
+                                 abundance = sum_vec ./ total_score,
+                                 confidence = total_score)
             end
         end
         return expected, run_weights, run_pseudocounts
@@ -1303,11 +1245,14 @@ function get_protein_groups(
             if haskey(expected_abundances, k)
                 precs = expected_abundances[k].precursors
                 expected_vec = expected_abundances[k].abundance
+                confidence = expected_abundances[k].confidence
                 obs_weights = get(run_w, k, Dict{UInt32,Float64}())
                 obs_vec = [get(obs_weights, pid, 0.0) + run_pc for pid in precs]
                 obs_vec ./= sum(obs_vec)
-                sim = dot(obs_vec, expected_vec) / (norm(obs_vec) * norm(expected_vec))
-                sim_dict[k] = sim
+                raw_sim = dot(obs_vec, expected_vec) / (norm(obs_vec) * norm(expected_vec))
+                #weight_factor = tanh(confidence)
+                weight_factor = 1 - exp(-confidence / 100.0)
+                sim_dict[k] = raw_sim * weight_factor
             else
                 sim_dict[k] = 0.0
             end
@@ -1429,7 +1374,7 @@ function perform_probit_analysis_oom(pg_paths::Vector{String}, total_protein_gro
     add_feature_columns!(sampled_protein_groups)
     
     # Define features to use
-    feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :abundance_similarity, :diff_missed_cleavages , :n_psms, :top_peptide_score, :sequence_coverage, :diff_mods, :abundance_similarity]
+    feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :abundance_similarity, :diff_missed_cleavages, :top_peptide_score, :sequence_coverage, :diff_mods, :abundance_similarity]
     X = Matrix{Float64}(sampled_protein_groups[:, feature_names])
     y = sampled_protein_groups.target
     
@@ -1550,7 +1495,7 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
     n_decoys = sum(.!all_protein_groups.target)
 
     # Define features to use
-    feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :diff_missed_cleavages , :n_psms, :top_peptide_score, :sequence_coverage, :diff_mods, :abundance_similarity]
+    feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :diff_missed_cleavages, :top_peptide_score, :sequence_coverage, :diff_mods, :abundance_similarity]
     X = Matrix{Float64}(all_protein_groups[:, feature_names])
     y = all_protein_groups.target
 
@@ -1567,6 +1512,8 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
 
     all_protein_groups.prob = prob_scores
     all_protein_groups.probit_qvalues = probit_qvalues
+    CSV.write("/Users/dennisgoldfarb/Downloads/protein_scores.tsv", all_protein_groups, delim='\t')
+	
     
     # Count targets at different FDR thresholds
     probit_targets_1pct = sum(y .& (probit_qvalues .<= 0.01))
