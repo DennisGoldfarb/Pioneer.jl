@@ -265,7 +265,8 @@ function summarize_results!(
             passing_proteins_folder,
             temp_folder,
             getPrecursors(getSpecLib(search_context)),
-            getProteins(getSpecLib(search_context));
+            getProteins(getSpecLib(search_context)),
+            collect(getFileIdToName(getMSData(search_context)));
             min_peptides = params.min_peptides,
             max_psms_in_memory = params.max_psms_in_memory
         )

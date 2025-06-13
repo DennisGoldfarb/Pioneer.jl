@@ -690,7 +690,8 @@ Protein group analysis
 """
     get_protein_groups(passing_psms_paths::Vector{String}, passing_pg_paths::Vector{String},
                       protein_groups_folder::String, temp_folder::String,
-                      precursors::LibraryPrecursors; min_peptides=2,
+                      precursors::LibraryPrecursors, proteins::LibraryProteins,
+                      file_names::Vector{String}; min_peptides=2,
                       protein_q_val_threshold::Float32=0.01f0)
 
 Create and score protein groups from passing PSMs.
@@ -698,9 +699,10 @@ Create and score protein groups from passing PSMs.
 # Arguments
 - `passing_psms_paths`: Paths to PSM files that passed FDR threshold
 - `passing_pg_paths`: Output paths for protein group files
-- `protein_groups_folder`: Folder to store protein group results
-- `temp_folder`: Temporary folder for intermediate files
-- `precursors`: Library precursor information
+    - `protein_groups_folder`: Folder to store protein group results
+    - `temp_folder`: Temporary folder for intermediate files
+    - `precursors`: Library precursor information
+    - `file_names`: Parsed file names corresponding to each MS file
 - `min_peptides`: Minimum peptides required for a protein group (default: 2)
 - `protein_q_val_threshold`: Q-value threshold for protein groups (default: 0.01)
 
@@ -720,7 +722,8 @@ function get_protein_groups(
     protein_groups_folder::String,
     temp_folder::String,
     precursors::LibraryPrecursors,
-    proteins::LibraryProteins;
+    proteins::LibraryProteins,
+    file_names::Vector{String};
     min_peptides = 2,
     protein_q_val_threshold::Float32 = 0.01f0,
     max_psms_in_memory::Int64 = 10000000  # Default value if not provided
@@ -892,7 +895,7 @@ function get_protein_groups(
     - Number of protein groups written
     
     # Output columns
-    - Basic: protein_name, target, entrap_id, pg_score, global_pg_score
+    - Basic: file_name, species, protein_name, target, entrap_id, pg_score, global_pg_score
     - Features: n_peptides, total_peptide_length, n_possible_peptides, peptide_coverage
       sequence_coverage, per_protein_sequence_coverage
     """
@@ -903,9 +906,9 @@ function get_protein_groups(
                                     },
                                     protein_groups::Dictionary{
                                         @NamedTuple{protein_name::String, target::Bool, entrap_id::UInt8},
-                                        @NamedTuple{pg_score::Float32, 
-                                                    peptides::Set{String}, 
-                                                    intervals::Set{Tuple{UInt32,UInt32}}, 
+                                        @NamedTuple{pg_score::Float32,
+                                                    peptides::Set{String},
+                                                    intervals::Set{Tuple{UInt32,UInt32}},
                                                     diff_missed_cleavages::Int32,
                                                     diff_mods::Int32,
                                                     top_peptide_score::Float32}
@@ -917,6 +920,8 @@ function get_protein_groups(
                                     protein_peptide_intervals::Dict{Tuple{String,Bool,UInt8,String}, Vector{Tuple{UInt32,UInt32}}},
                                     protein_lengths::Dict{String,UInt32},
                                     protein_groups_path::String,
+                                    file_name::String,
+                                    protein_species::Dict{String,String},
                                     abundance_similarity::Dict{NamedTuple{(:protein_name,:target,:entrap_id),Tuple{String,Bool,UInt8}},Float64}=Dict())
         # Extract keys and values
         keys_array = collect(keys(protein_groups))
@@ -998,8 +1003,12 @@ function get_protein_groups(
         end
 
         peptide_coverage = [n_pep / n_poss for (n_pep, n_poss) in zip(n_peptides, n_possible_peptides)]
+        species = [join(unique([get(protein_species, pn, "") for pn in split(k[:protein_name], ';')]), ';') for k in keys_array]
+        file_names_vec = fill(file_name, length(keys_array))
         # Create DataFrame
         df = DataFrame((
+            file_name = file_names_vec,
+            species = species,
             protein_name = protein_name,
             target = target,
             entrap_id = entrap_id,
@@ -1140,8 +1149,11 @@ function get_protein_groups(
     protein_lengths = Dict{String,UInt32}()
     prot_acc = getAccession(proteins)
     prot_len = getLength(proteins)
+    prot_species = getOrganism(proteins)
+    protein_species = Dict{String,String}()
     for i in eachindex(prot_acc)
         protein_lengths[String(prot_acc[i])] = prot_len[i]
+        protein_species[String(prot_acc[i])] = String(prot_species[i])
     end
     
     #Concatenate psms 
@@ -1265,6 +1277,8 @@ function get_protein_groups(
             protein_peptide_intervals,
             protein_lengths,
             protein_groups_path,
+            file_names[ms_file_idx],
+            protein_species,
             sim_dict
         )
     end
