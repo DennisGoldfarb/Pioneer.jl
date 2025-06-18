@@ -1282,20 +1282,54 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
     
     # Define features to use
     feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff]
-    X = Matrix{Float64}(all_protein_groups[:, feature_names])
+    #X = Matrix{Float64}(all_protein_groups[:, feature_names])
     y = all_protein_groups.target
+
+    n_train_rounds = 10
+    max_q_value = 0.01
+    q_values = zeros(Float64, nrow(all_protein_groups))
+
+    β_fitted = zeros(Float64, length(feature_names) + 1)
+    X_mean = zeros(Float64, length(feature_names))
+    X_std  = ones(Float64, length(feature_names))
+
+    for i in 1:n_train_rounds
+        if i == 1
+            # Initial q-values are based on the pg_score column
+            sort!(all_protein_groups, :pg_score, rev=true)
+            get_qvalues!(all_protein_groups.pg_score, all_protein_groups.target, q_values)
+        else
+            sort!(all_protein_groups, :prob, rev=true)
+            get_qvalues!(all_protein_groups.prob, all_protein_groups.target, q_values)
+        end
+
+        train_mask = ((q_values .<= max_q_value) .& all_protein_groups.target) .| (.!all_protein_groups.target)
+
+        X_train = Matrix{Float64}(all_protein_groups[train_mask, feature_names])
+        y_train = all_protein_groups.target[train_mask]
+
+        β_fitted, X_mean, X_std = fit_probit_model(X_train, y_train)
+
+        println(i, " ", sum(y_train), " ", sum(.!y_train))
+
+        X_all = Matrix{Float64}(all_protein_groups[:, feature_names])
+        all_protein_groups.prob = calculate_probit_scores(X_all, β_fitted, X_mean, X_std)
+    end
     
     # Fit probit model
-    β_fitted, X_mean, X_std = fit_probit_model(X, y)
+    #β_fitted, X_mean, X_std = fit_probit_model(X, y)
     
     # Calculate probability scores
-    prob_scores = calculate_probit_scores(X, β_fitted, X_mean, X_std)
+    #prob_scores = calculate_probit_scores(X, β_fitted, X_mean, X_std)
     
     # Calculate q-values for probit model
-    probit_qvalues = calculate_qvalues_from_scores(prob_scores, y)
+    probit_qvalues = calculate_qvalues_from_scores(all_protein_groups.prob, y)
     
     # Calculate q-values for pg_score only baseline
     pg_qvalues = calculate_qvalues_from_scores(all_protein_groups.pg_score, y)
+
+    all_protein_groups.probit_qvalues = probit_qvalues
+    CSV.write("/Users/dennisgoldfarb/Downloads/protein_scores.tsv", all_protein_groups, delim='\t')
     
     # Count targets at different FDR thresholds
     probit_targets_1pct = sum(y .& (probit_qvalues .<= 0.01))
