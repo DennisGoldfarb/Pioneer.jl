@@ -765,10 +765,6 @@ function get_protein_groups(
         for i in range(1, length(psm_precursor_idx))
             precursor_idx = psm_precursor_idx[i]
             sequence = precursor_sequence[precursor_idx]
-            missed_cleavage = missed_cleavages[precursor_idx]
-            missed_cleavage_score = (2 * (missed_cleavage > 0)) - 1
-
-            structural_mod_score = (2 * (countMOX(structural_mods[precursor_idx]) > 0)) - 1
             
             # Create key for protein_inference_dict lookup
             peptide_key = (peptide = sequence, decoy = !psm_is_target[i], entrap_id = psm_entrapment_id[i])
