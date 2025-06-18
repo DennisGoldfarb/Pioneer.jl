@@ -103,17 +103,13 @@ function prepare_chronologer_input(
     mod_to_mass_float = Dict(k => parse(Float64, v) for (k, v) in mod_to_mass_dict)
 
     accession_rgx = haskey(params, "fasta_header_regex_accession") &&
-                    !isempty(params["fasta_header_regex_accession"])
-                    ? Regex(params["fasta_header_regex_accession"]) : nothing
+                    !isempty(params["fasta_header_regex_accession"]) ? Regex(params["fasta_header_regex_accession"]) : nothing
     gene_rgx = haskey(params, "fasta_header_regex_gene") &&
-               !isempty(params["fasta_header_regex_gene"])
-               ? Regex(params["fasta_header_regex_gene"]) : nothing
+               !isempty(params["fasta_header_regex_gene"]) ? Regex(params["fasta_header_regex_gene"]) : nothing
     protein_rgx = haskey(params, "fasta_header_regex_protein") &&
-                  !isempty(params["fasta_header_regex_protein"])
-                  ? Regex(params["fasta_header_regex_protein"]) : nothing
+                  !isempty(params["fasta_header_regex_protein"])  ? Regex(params["fasta_header_regex_protein"]) : nothing
     organism_rgx = haskey(params, "fasta_header_regex_organism") &&
-                   !isempty(params["fasta_header_regex_organism"])
-                   ? Regex(params["fasta_header_regex_organism"]) : nothing
+                   !isempty(params["fasta_header_regex_organism"]) ? Regex(params["fasta_header_regex_organism"]) : nothing
 
     # Process FASTA files
     fasta_entries = Vector{FastaEntry}()
@@ -140,7 +136,22 @@ function prepare_chronologer_input(
         )
     end
 
-    protein_df = FastaProteinTable.build_protein_df(protein_entries)
+    accession_rgx = haskey(params, "fasta_header_regex_accession") &&
+                    !isempty(params["fasta_header_regex_accession"]) ? Regex(params["fasta_header_regex_accession"]) : nothing
+    gene_rgx = haskey(params, "fasta_header_regex_gene") &&
+               !isempty(params["fasta_header_regex_gene"]) ? Regex(params["fasta_header_regex_gene"]) : nothing
+    protein_rgx = haskey(params, "fasta_header_regex_protein") &&
+                  !isempty(params["fasta_header_regex_protein"]) ? Regex(params["fasta_header_regex_protein"]) : nothing
+    organism_rgx = haskey(params, "fasta_header_regex_organism") &&
+                   !isempty(params["fasta_header_regex_organism"]) ? Regex(params["fasta_header_regex_organism"]) : nothing
+
+    protein_df = build_protein_df(
+        protein_entries;
+        accession_regex = accession_rgx,
+        gene_regex = gene_rgx,
+        protein_regex = protein_rgx,
+        organism_regex = organism_rgx,
+    )
     Arrow.write(proteins_out_path, protein_df)
     protein_idx_map = Dict{String,UInt32}(protein_df.accession[i] => UInt32(i) for i in 1:nrow(protein_df))
     # Combine shared peptides

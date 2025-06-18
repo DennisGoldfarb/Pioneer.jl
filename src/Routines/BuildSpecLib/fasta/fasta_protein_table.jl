@@ -1,9 +1,3 @@
-module FastaProteinTable
-
-using DataFrames
-
-export build_protein_df
-
 """
     build_protein_df(entries::Vector{FastaEntry})
 
@@ -36,5 +30,3 @@ function build_protein_df(entries::Vector{FastaEntry})
         sequence = sequence,
     )
 end
-
-end # module
