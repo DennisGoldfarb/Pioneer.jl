@@ -1,5 +1,7 @@
 """
-    parse_fasta(fasta_path::String, proteome_id::String)::Vector{FastaEntry}
+    parse_fasta(fasta_path::String, proteome_id::String; accession_regex=nothing,
+                 gene_regex=nothing, protein_regex=nothing,
+                 organism_regex=nothing)::Vector{FastaEntry}
 
 Parse a FASTA file and return a vector of FastaEntry objects.
     
@@ -13,13 +15,9 @@ Parse a FASTA file and return a vector of FastaEntry objects.
 # Details
 The function:
 1. Automatically detects and handles compressed (.fasta.gz) or uncompressed (.fasta) files
-2. Parses the headers to extract identifiers
+2. Optionally parses headers for accession, gene, protein and organism using the provided regexes
 3. Creates FastaEntry objects for each sequence with the specified proteome ID
 4. Sets default values for optional fields (modifications, charge, etc.)
-
-The identifier parsing attempts to extract:
-- UniProt-style identifiers when headers contain pipe symbols (e.g., ">sp|P12345|GENE_HUMAN")
-- The first word before any space in other cases
 
 # Examples
 ```julia
@@ -31,8 +29,10 @@ mouse_entries = parse_fasta("mouse_proteome.fasta.gz", "mouse")
 ```
 
 # Notes
-The resulting FastaEntry objects will have default values for fields other than sequence,
-identifier, and proteome_id. These can be modified later with functions like add_mods().
+The resulting `FastaEntry` objects will contain the raw header in the `description`
+field and parsed metadata when the corresponding regular expressions are provided.
+Fields not parsed default to empty strings. Modifications and charge can be added
+later with functions like `add_mods()`.
 """
 function parse_fasta(
     fasta_path::String,
@@ -57,33 +57,34 @@ function parse_fasta(
     entries = Vector{FastaEntry}()
 
     for record in reader
-        header = string(FASTA.identifier(record), " ", FASTA.description(record))
+        identifier = FASTA.identifier(record)
+        description = FASTA.description(record)
 
         accession = if accession_regex === nothing
-            header
+            identifier
         else
-            m = match(accession_regex, header)
+            m = match(accession_regex, identifier)
             m === nothing ? header : String(first(m.captures))
         end
 
         gene = if gene_regex === nothing
             ""
         else
-            m = match(gene_regex, header)
+            m = match(gene_regex, description)
             m === nothing ? "" : String(first(m.captures))
         end
 
         protein = if protein_regex === nothing
             ""
         else
-            m = match(protein_regex, header)
+            m = match(protein_regex, description)
             m === nothing ? "" : String(first(m.captures))
         end
 
         organism = if organism_regex === nothing
             ""
         else
-            m = match(organism_regex, header)
+            m = match(organism_regex, description)
             m === nothing ? "" : String(first(m.captures))
         end
 
