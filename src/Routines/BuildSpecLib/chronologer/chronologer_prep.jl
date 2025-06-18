@@ -102,24 +102,6 @@ function prepare_chronologer_input(
     # Convert mass dictionary to float values
     mod_to_mass_float = Dict(k => parse(Float64, v) for (k, v) in mod_to_mass_dict)
 
-    # Process FASTA files
-    fasta_entries = Vector{FastaEntry}()
-    protein_entries = Vector{FastaEntry}()
-    for (proteome_name, fasta) in zip(params["fasta_names"], params["fasta_paths"])
-        parsed = parse_fasta(fasta, proteome_name)
-        append!(protein_entries, parsed)
-        append!(fasta_entries,
-            digest_fasta(
-                parsed,
-                proteome_name,
-                regex = Regex(_params.fasta_digest_params["cleavage_regex"]),
-                max_length = _params.fasta_digest_params["max_length"],
-                min_length = _params.fasta_digest_params["min_length"],
-                missed_cleavages = _params.fasta_digest_params["missed_cleavages"]
-            )
-        )
-    end
-
     accession_rgx = haskey(params, "fasta_header_regex_accession") &&
                     !isempty(params["fasta_header_regex_accession"])
                     ? Regex(params["fasta_header_regex_accession"]) : nothing
@@ -133,13 +115,32 @@ function prepare_chronologer_input(
                    !isempty(params["fasta_header_regex_organism"])
                    ? Regex(params["fasta_header_regex_organism"]) : nothing
 
-    protein_df = FastaProteinTable.build_protein_df(
-        protein_entries;
-        accession_regex = accession_rgx,
-        gene_regex = gene_rgx,
-        protein_regex = protein_rgx,
-        organism_regex = organism_rgx,
-    )
+    # Process FASTA files
+    fasta_entries = Vector{FastaEntry}()
+    protein_entries = Vector{FastaEntry}()
+    for (proteome_name, fasta) in zip(params["fasta_names"], params["fasta_paths"])
+        parsed = parse_fasta(
+            fasta,
+            proteome_name;
+            accession_regex = accession_rgx,
+            gene_regex = gene_rgx,
+            protein_regex = protein_rgx,
+            organism_regex = organism_rgx,
+        )
+        append!(protein_entries, parsed)
+        append!(fasta_entries,
+            digest_fasta(
+                parsed,
+                proteome_name,
+                regex = Regex(_params.fasta_digest_params["cleavage_regex"]),
+                max_length = _params.fasta_digest_params["max_length"],
+                min_length = _params.fasta_digest_params["min_length"],
+                missed_cleavages = _params.fasta_digest_params["missed_cleavages"]
+            )
+        )
+    end
+
+    protein_df = FastaProteinTable.build_protein_df(protein_entries)
     Arrow.write(proteins_out_path, protein_df)
     protein_idx_map = Dict{String,UInt32}(protein_df.accession[i] => UInt32(i) for i in 1:nrow(protein_df))
     # Combine shared peptides
@@ -280,6 +281,9 @@ function add_mods(
                 FastaEntry(
                     get_id(fasta_peptide),
                     get_description(fasta_peptide),
+                    get_gene(fasta_peptide),
+                    get_protein(fasta_peptide),
+                    get_organism(fasta_peptide),
                     get_proteome(fasta_peptide),
                     get_sequence(fasta_peptide),
                     get_start_idx(fasta_peptide),
@@ -331,6 +335,9 @@ function add_charge(
                 FastaEntry(
                     get_id(fasta_peptide),
                     get_description(fasta_peptide),
+                    get_gene(fasta_peptide),
+                    get_protein(fasta_peptide),
+                    get_organism(fasta_peptide),
                     get_proteome(fasta_peptide),
                     get_sequence(fasta_peptide),
                     get_start_idx(fasta_peptide),
