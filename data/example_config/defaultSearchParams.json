@@ -116,7 +116,9 @@
             "max_q_value_xgboost_rescore": 0.01,
 			"max_q_value_xgboost_mbr_rescore": 0.20,
             "spline_points": 500,
-            "interpolation_points": 10
+            "interpolation_points": 10,
+            "protein_n_train_rounds": 10,
+            "protein_max_q_value_probit_rescore": 0.01
         }
     },
     "proteinInference": {

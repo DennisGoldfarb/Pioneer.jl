@@ -723,7 +723,9 @@ function get_protein_groups(
     proteins::LibraryProteins;
     min_peptides = 2,
     protein_q_val_threshold::Float32 = 0.01f0,
-    max_psms_in_memory::Int64 = 10000000  # Default value if not provided
+    max_psms_in_memory::Int64 = 10000000,  # Default value if not provided
+    protein_probit_n_train_rounds = 10,
+    max_q_value_protein_probit_rescore = 0.01f0
 )
 
     """
@@ -1155,7 +1157,7 @@ function get_protein_groups(
     
     if total_protein_groups > max_protein_groups_in_memory_limit
         @info "Using out-of-memory probit regression (exceeds limit of $max_protein_groups_in_memory_limit)"
-        perform_probit_analysis_oom(passing_pg_paths, total_protein_groups, max_protein_groups_in_memory_limit, qc_folder)
+        perform_probit_analysis_oom(passing_pg_paths, total_protein_groups, max_protein_groups_in_memory_limit, protein_probit_n_train_rounds, max_q_value_protein_probit_rescore, qc_folder)
     else
         @info "Using in-memory probit regression"
         # Load all protein group tables into a single DataFrame
@@ -1175,7 +1177,7 @@ function get_protein_groups(
             add_feature_columns!(all_protein_groups)
             
             # Perform probit regression analysis
-            perform_probit_analysis(all_protein_groups, qc_folder)
+            perform_probit_analysis(all_protein_groups, protein_probit_n_train_rounds, max_q_value_protein_probit_rescore, qc_folder)
         else
             @info "Skipping Probit analysis: insufficient data (targets: $n_targets, decoys: $n_decoys)"
         end
@@ -1205,7 +1207,10 @@ Perform out-of-memory probit regression analysis on protein groups.
 5. Calculate and report performance metrics
 """
 function perform_probit_analysis_oom(pg_paths::Vector{String}, total_protein_groups::Int, 
-                                    max_protein_groups_in_memory::Int, qc_folder::String)
+                                    max_protein_groups_in_memory::Int, 
+                                    n_train_rounds::Int,
+                                    max_q_value::Float32,
+                                    qc_folder::String)
     
     # Calculate sampling ratio
     sampling_ratio = max_protein_groups_in_memory / total_protein_groups
@@ -1238,8 +1243,6 @@ function perform_probit_analysis_oom(pg_paths::Vector{String}, total_protein_gro
     # Define features to use
     feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :any_common_peps, :sequence_coverage]
 
-    n_train_rounds = 10
-    max_q_value = 0.01
     q_values = zeros(Float64, nrow(sampled_protein_groups))
 
     β_fitted = zeros(Float64, length(feature_names) + 1)
@@ -1379,7 +1382,10 @@ Perform probit regression analysis on protein groups with comparison to baseline
 3. Compares to pg_score-only baseline
 4. Generates decision boundary plots
 """
-function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::String)
+function perform_probit_analysis(all_protein_groups::DataFrame, 
+                                    n_train_rounds::Int,
+                                    max_q_value::Float32,
+                                    qc_folder::String)
     n_targets = sum(all_protein_groups.target)
     n_decoys = sum(.!all_protein_groups.target)
     
@@ -1387,8 +1393,6 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
     feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :any_common_peps, :sequence_coverage]
     y = all_protein_groups.target
 
-    n_train_rounds = 10
-    max_q_value = 0.01
     q_values = zeros(Float64, nrow(all_protein_groups))
 
     β_fitted = zeros(Float64, length(feature_names) + 1)

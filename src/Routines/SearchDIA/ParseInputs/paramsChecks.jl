@@ -145,6 +145,8 @@ function checkParams(json_path::String)
     check_param(ml_params, "max_q_value_xgboost_mbr_rescore", Real)
     check_param(ml_params, "spline_points", Integer)
     check_param(ml_params, "interpolation_points", Integer)
+    check_param(ml_params, "protein_n_train_rounds", Integer)
+    check_param(ml_params, "protein_max_q_value_probit_rescore", Real)
 
     # Validate Protein Inference parameters
     output = params["proteinInference"]

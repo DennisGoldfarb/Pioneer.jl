@@ -38,6 +38,8 @@ struct ScoringSearchParameters{I<:IsotopeTraceType} <: SearchParameters
     min_peptides::Int64
     max_q_value_xgboost_rescore::Float32
     max_q_value_xgboost_mbr_rescore::Float32
+    max_q_value_protein_probit_rescore::Float32
+    n_iterations_protein_probit::Int64
     q_value_threshold::Float32
     isotope_tracetype::I
 
@@ -65,6 +67,8 @@ struct ScoringSearchParameters{I<:IsotopeTraceType} <: SearchParameters
             Int64(protein_inference_params.min_peptides),
             Float32(ml_params.max_q_value_xgboost_rescore),
             Float32(ml_params.max_q_value_xgboost_mbr_rescore),
+            Float32(ml_params.protein_max_q_value_probit_rescore),
+            Int64(ml_params.protein_n_train_rounds),
             Float32(global_params.scoring.q_value_threshold),
             isotope_trace_type
         )
@@ -267,7 +271,9 @@ function summarize_results!(
             getPrecursors(getSpecLib(search_context)),
             getProteins(getSpecLib(search_context)),
             min_peptides = params.min_peptides,
-            max_psms_in_memory = params.max_psms_in_memory
+            max_psms_in_memory = params.max_psms_in_memory,
+            protein_probit_n_train_rounds = params.n_iterations_protein_probit,
+            max_q_value_protein_probit_rescore = params.max_q_value_protein_probit_rescore
         )
 
         add_protein_inference_col(

@@ -136,6 +136,8 @@ Most parameters should not be changed, but the following may need adjustement.
 | `machine_learning.max_q_value_xgboost_mbr_rescore` | Float | q-value threshold for match-between-runs candidates during semi-supervised learning with XGBoost (default: 0.20) |
 | `machine_learning.spline_points` | Int | Number of points for probability spline (default: 500) |
 | `machine_learning.interpolation_points` | Int | Number of interpolation points (default: 10) |
+| `machine_learning.protein_n_train_rounds` | Int | Number of training rounds for protein scoring model (default: 10) |
+| `machine_learning.protein_max_q_value_probit_rescore` | Float | Maximum q-value threshold for semi-supervised learning durning protein probit regression (default: 0.01) |
 
 ### Protein Inference Parameters
 | Parameter | Type | Description |
