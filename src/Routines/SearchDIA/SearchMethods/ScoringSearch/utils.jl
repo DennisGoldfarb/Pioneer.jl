@@ -703,6 +703,8 @@ Create and score protein groups from passing PSMs.
 - `precursors`: Library precursor information
 - `min_peptides`: Minimum peptides required for a protein group (default: 2)
 - `protein_q_val_threshold`: Q-value threshold for protein groups (default: 0.01)
+- `protein_probit_n_train_rounds`: Number of iterations for training protein probit model (default: 10)
+- `max_q_value_protein_probit_rescore`: Q-value threshold for protein probit rescoring (default: 0.01)
 
 # Returns
 - `protein_inference_dict`: Dictionary mapping peptides to protein groups
@@ -853,7 +855,7 @@ function get_protein_groups(
 
     """
         writeProteinGroups(acc_to_max_pg_score, protein_groups, 
-                          protein_to_possible_peptides, protein_groups_path)
+                          protein_to_possible_peptides, protein_peptide_intervals, protein_lengths, protein_groups_path)
     
     Write protein groups with features to Arrow file.
     
@@ -861,6 +863,8 @@ function get_protein_groups(
     - `acc_to_max_pg_score`: Maximum scores across runs for each protein
     - `protein_groups`: Dictionary of protein groups with scores and peptides
     - `protein_to_possible_peptides`: All possible peptides for each protein
+    - `protein_peptide_intervals`: Intervals for each peptide within a protein
+    - `protein_lengths`: Mapping of protein accession to sequence length
     - `protein_groups_path`: Output file path
     
     # Returns
@@ -869,6 +873,7 @@ function get_protein_groups(
     # Output columns
     - Basic: protein_name, target, entrap_id, pg_score, global_pg_score
     - Features: n_peptides, total_peptide_length, n_possible_peptides, peptide_coverage
+      sequence_coverage
     """
     function writeProteinGroups(
                                     acc_to_max_pg_score::Dict{
@@ -1189,7 +1194,8 @@ end
 
 """
     perform_probit_analysis_oom(pg_paths::Vector{String}, total_protein_groups::Int, 
-                               max_protein_groups_in_memory::Int, qc_folder::String)
+                               max_protein_groups_in_memory::Int, n_train_rounds::Int, 
+                               max_q_value::Float32, qc_folder::String)
 
 Perform out-of-memory probit regression analysis on protein groups.
 
@@ -1197,6 +1203,8 @@ Perform out-of-memory probit regression analysis on protein groups.
 - `pg_paths`: Vector of paths to protein group Arrow files
 - `total_protein_groups`: Total number of protein groups across all files
 - `max_protein_groups_in_memory`: Maximum number of protein groups to hold in memory
+- `n_train_rounds`: Number of training iterations
+- `max_q_value`: Q-value threshold for iterative training
 - `qc_folder`: Folder for QC plots
 
 # Process
@@ -1368,12 +1376,14 @@ function perform_probit_analysis_oom(pg_paths::Vector{String}, total_protein_gro
 end
 
 """
-    perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::String)
+    perform_probit_analysis(all_protein_groups::DataFrame, n_train_rounds::Int, max_q_value::Float32, qc_folder::String)
 
 Perform probit regression analysis on protein groups with comparison to baseline.
 
 # Arguments
 - `all_protein_groups::DataFrame`: Protein group data with features
+- `n_train_rounds`: Number of training iterations
+- `max_q_value`: Q-value threshold for iterative training
 - `qc_folder::String`: Folder for QC plots
 
 # Process
@@ -1429,9 +1439,7 @@ function perform_probit_analysis(all_protein_groups::DataFrame,
     # Calculate q-values for pg_score only baseline
     pg_qvalues = calculate_qvalues_from_scores(all_protein_groups.pg_score, y)
 
-    #all_protein_groups.probit_qvalues = probit_qvalues
-    #CSV.write("/Users/dennisgoldfarb/Downloads/protein_scores.tsv", all_protein_groups, delim='\t')
-    
+
     # Count targets at different FDR thresholds
     probit_targets_1pct = sum(y .& (probit_qvalues .<= 0.01))
     probit_targets_5pct = sum(y .& (probit_qvalues .<= 0.05))
@@ -1557,7 +1565,7 @@ function fit_probit_model(X::Matrix{Float64}, y::Vector{Bool})
 end
 
 """
-    calculate_probit_scores(X::Matrix{Float64}, β::Vector{Float64}, X_mean::Vector{Float64}, X_std::Vector{Float64})
+    calculate_probit_scores(X::Matrix{Float64}, β::Vector{Float64}, X_mean::Vector{Float64}, X_std::Vector{Float64}, keep_cols::Vector{Bool})
 
 Calculate probit probability scores for new data.
 
