@@ -719,7 +719,8 @@ function get_protein_groups(
     passing_pg_paths::Vector{String},
     protein_groups_folder::String,
     temp_folder::String,
-    precursors::LibraryPrecursors;
+    precursors::LibraryPrecursors,
+    proteins::LibraryProteins;
     min_peptides = 2,
     protein_q_val_threshold::Float32 = 0.01f0,
     max_psms_in_memory::Int64 = 10000000  # Default value if not provided
@@ -756,16 +757,26 @@ function get_protein_groups(
 
         #accession_numbers = getAccessionNumbers(precursors)
         precursor_sequence = getSequence(precursors)
+        missed_cleavages = getMissedCleavages(precursors)
+        structural_mods = getStructuralMods(precursors)
         protein_groups = Dictionary{@NamedTuple{protein_name::String, target::Bool, entrap_id::UInt8},
         @NamedTuple{
             pg_score::Float32, 
-            peptides::Set{String}}
+            peptides::Set{String},
+            any_common_peps::Bool}
         }()
+
+        function countMOX(seq::String)
+            return UInt8(count("Unimod:35", seq))
+        end
 
         for i in range(1, length(psm_precursor_idx))
             precursor_idx = psm_precursor_idx[i]
             sequence = precursor_sequence[precursor_idx]
-            
+            has_missed_cleavage = missed_cleavages[precursor_idx] > 0
+            has_structural_mod = countMOX(structural_mods[precursor_idx]) > 0
+            is_common_pep = !(has_missed_cleavage || has_structural_mod) 
+
             # Create key for protein_inference_dict lookup
             peptide_key = (peptide = sequence, decoy = !psm_is_target[i], entrap_id = psm_entrapment_id[i])
             
@@ -784,16 +795,18 @@ function get_protein_groups(
             keyname = (protein_name = protein_name, target = psm_is_target[i], entrap_id = psm_entrapment_id[i])
 
             if haskey(protein_groups, keyname)
-                pg_score, peptides = protein_groups[keyname]
+                pg_score, peptides, any_common_peps = protein_groups[keyname]
                 pg_score += log1p(-score)
+                any_common_peps = any_common_peps || is_common_pep
                 push!(peptides, sequence)
-                protein_groups[keyname] = (pg_score = pg_score, peptides = peptides)
+                protein_groups[keyname] = (pg_score = pg_score, peptides = peptides, any_common_peps = any_common_peps)
             else
                 sequences = Set{String}((sequence,))
                 insert!(protein_groups,
                     keyname,
                     (pg_score = log1p(-score),
-                    peptides = sequences)
+                    peptides = sequences,
+                    any_common_peps = is_common_pep)
                 )
             end
         end
@@ -801,12 +814,11 @@ function get_protein_groups(
         filter!(x->length(x[:peptides])>=min_peptides, protein_groups)
 
         for key in keys(protein_groups)
-            pg_score, peptides = protein_groups[key]
+            pg_score, peptides, any_common_peps = protein_groups[key]
             pg_score = -pg_score
-            protein_groups[key] = (pg_score = pg_score, peptides = peptides)
+            protein_groups[key] = (pg_score = pg_score, peptides = peptides, any_common_peps = any_common_peps)
         end
         
-        # Rest of the function remains the same...
         pg_score = Vector{Union{Missing, Float32}}(undef, length(psm_precursor_idx))
         inferred_protein_group_names = Vector{Union{Missing, String}}(undef, length(psm_precursor_idx))
         for i in range(1, length(psm_precursor_idx))
@@ -863,16 +875,42 @@ function get_protein_groups(
                                     },
                                     protein_groups::Dictionary{
                                         @NamedTuple{protein_name::String, target::Bool, entrap_id::UInt8},
-                                        @NamedTuple{pg_score::Float32,  peptides::Set{String}}
+                                        @NamedTuple{pg_score::Float32,  peptides::Set{String}, any_common_peps::Bool}
                                     },
                                     protein_to_possible_peptides::Dict{
                                         @NamedTuple{protein_name::String, target::Bool, entrap_id::UInt8},
                                         Set{String}
                                     },
+                                    protein_peptide_intervals::Dict{Tuple{String,Bool,UInt8,String}, Vector{Tuple{UInt32,UInt32}}},
+                                    protein_lengths::Dict{String,UInt32},
                                     protein_groups_path::String)
         # Extract keys and values
-        keys_array = keys(protein_groups)
-        values_array = values(protein_groups)
+        keys_array = collect(keys(protein_groups))
+        values_array = collect(values(protein_groups))
+
+        # Use precursor sequence intervals to compute protein coverage length
+        coverage_length(intervals::AbstractVector{<:Tuple}) = begin
+            if isempty(intervals)
+                return 0
+            end
+            sorted = sort(collect(intervals), by = x -> x[1])
+            total = 0
+            cur_s, cur_len = sorted[1]
+            cur_e = cur_s + cur_len - 1
+            for j in 2:length(sorted)
+                s, l = sorted[j]
+                e = s + l - 1
+                if s > cur_e
+                    total += cur_e - cur_s + 1
+                    cur_s = s
+                    cur_e = e
+                else
+                    cur_e = max(cur_e, e)
+                end
+            end
+            total += cur_e - cur_s + 1
+            return total
+        end
 
         # Create vectors for each column
         protein_name = [k[:protein_name] for k in keys_array]
@@ -880,6 +918,7 @@ function get_protein_groups(
         entrap_id = [k[:entrap_id] for k in keys_array]
         pg_score = [v[:pg_score] for v in values_array]
         global_pg_score = [get(acc_to_max_pg_score, k, 0.0f0) for k in keys_array]
+        any_common_peps = [v[:any_common_peps] for v in values_array]
         #peptides = [join(v[:peptides], ";") for v in values_array]  # Convert Set to String
         
         # New feature columns
@@ -889,25 +928,41 @@ function get_protein_groups(
         # Calculate possible peptides and peptide coverage
         # Handle protein groups with multiple proteins separated by semicolons
         n_possible_peptides = zeros(Int64, length(keys_array))
+        sequence_coverage = Float64[]
         for (i, k) in enumerate(keys_array)
             # Split the protein group name by semicolons
             protein_names_in_group = split(k[:protein_name], ';')
             
             # Union of all peptide sets from proteins in the group
             all_possible_peptides = Set{String}()
+            per_protein_cov = Float64[]
             for individual_protein in protein_names_in_group
                 # Create key for each individual protein
                 individual_key = (protein_name = String(individual_protein), 
                                 target = k[:target], 
                                 entrap_id = k[:entrap_id])
                 # Get the set of peptides for this protein and union with existing
-                if haskey(protein_to_possible_peptides, individual_key)
-                    union!(all_possible_peptides, protein_to_possible_peptides[individual_key])
+                possible_set = get(protein_to_possible_peptides, individual_key, Set{String}())
+                union!(all_possible_peptides, possible_set)
+
+                if haskey(protein_lengths, String(individual_protein))
+                    prot_len = Float64(protein_lengths[String(individual_protein)])
+                    identified = intersect(values_array[i][:peptides], possible_set)
+                    intervals = Tuple{UInt32,UInt32}[]
+                    for pep in identified
+                        pkey = (String(individual_protein), k[:target], k[:entrap_id], pep)
+                        if haskey(protein_peptide_intervals, pkey)
+                            append!(intervals, protein_peptide_intervals[pkey])
+                        end
+                    end
+                    covered = coverage_length(intervals)
+                    push!(per_protein_cov, prot_len == 0.0 ? 0.0 : covered / prot_len)
                 end
             end
             
             # Count unique peptides across all proteins in the group
             n_possible_peptides[i] = max(length(all_possible_peptides), 1)
+            push!(sequence_coverage, isempty(per_protein_cov) ? 0.0 : mean(per_protein_cov))
         end
         
         peptide_coverage = [n_pep / n_poss for (n_pep, n_poss) in zip(n_peptides, n_possible_peptides)]
@@ -921,7 +976,9 @@ function get_protein_groups(
             n_peptides = n_peptides,
             total_peptide_length = total_peptide_length,
             n_possible_peptides = n_possible_peptides,
-            peptide_coverage = peptide_coverage
+            peptide_coverage = peptide_coverage,
+            any_common_peps = any_common_peps,
+            sequence_coverage = sequence_coverage
         ))
 
         sort!(df, :global_pg_score, rev = true)
@@ -934,12 +991,15 @@ function get_protein_groups(
     
     # First, count all possible peptides for each protein in the library
     protein_to_possible_peptides = Dict{@NamedTuple{protein_name::String, target::Bool, entrap_id::UInt8}, Set{String}}()
+    protein_peptide_intervals = Dict{Tuple{String,Bool,UInt8,String}, Vector{Tuple{UInt32,UInt32}}}()
     
     # Count all peptides in the library for each protein
     all_accession_numbers = getAccessionNumbers(precursors)
     all_sequences = getSequence(precursors)
     all_decoys = getIsDecoy(precursors)
     all_entrap_ids = getEntrapmentGroupId(precursors)
+    all_start_idx = getStartIdx(precursors)
+    all_length = getLength(precursors)
     
     for i in 1:length(all_accession_numbers)
         protein_names = split(all_accession_numbers[i], ';')  # Handle shared peptides
@@ -952,7 +1012,21 @@ function get_protein_groups(
                 protein_to_possible_peptides[key] = Set{String}()
             end
             push!(protein_to_possible_peptides[key], all_sequences[i])
+
+            pkey = (String(protein_name), !is_decoy, entrap_id, all_sequences[i])
+            if !haskey(protein_peptide_intervals, pkey)
+                protein_peptide_intervals[pkey] = Vector{Tuple{UInt32,UInt32}}()
+            end
+            push!(protein_peptide_intervals[pkey], (all_start_idx[i], all_length[i]))
         end
+    end
+
+    # Map protein accession to sequence length
+    protein_lengths = Dict{String,UInt32}()
+    prot_acc = getAccession(proteins)
+    prot_len = getLength(proteins)
+    for i in eachindex(prot_acc)
+        protein_lengths[String(prot_acc[i])] = prot_len[i]
     end
     
     #Concatenate psms 
@@ -1051,6 +1125,8 @@ function get_protein_groups(
             acc_to_max_pg_score,
             protein_groups,
             protein_to_possible_peptides,
+            protein_peptide_intervals,
+            protein_lengths,
             protein_groups_path
         )
     end
@@ -1160,12 +1236,39 @@ function perform_probit_analysis_oom(pg_paths::Vector{String}, total_protein_gro
     add_feature_columns!(sampled_protein_groups)
     
     # Define features to use
-    feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff]
-    X = Matrix{Float64}(sampled_protein_groups[:, feature_names])
-    y = sampled_protein_groups.target
-    
-    # Fit probit model on sampled data
-    β_fitted, X_mean, X_std = fit_probit_model(X, y)
+    feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :any_common_peps, :sequence_coverage]
+
+    n_train_rounds = 10
+    max_q_value = 0.01
+    q_values = zeros(Float64, nrow(sampled_protein_groups))
+
+    β_fitted = zeros(Float64, length(feature_names) + 1)
+    X_mean = zeros(Float64, length(feature_names))
+    X_std  = ones(Float64, length(feature_names))
+    keep_cols = ones(Bool, length(feature_names))
+
+    for i in 1:n_train_rounds
+        if i == 1
+            # Initial q-values are based on the pg_score column
+            sort!(sampled_protein_groups, :pg_score, rev=true)
+            get_qvalues!(sampled_protein_groups.pg_score, sampled_protein_groups.target, q_values)
+        else
+            sort!(sampled_protein_groups, :prob, rev=true)
+            get_qvalues!(sampled_protein_groups.prob, sampled_protein_groups.target, q_values)
+        end
+
+        train_mask = ((q_values .<= max_q_value) .& sampled_protein_groups.target) .| (.!sampled_protein_groups.target)
+
+        X_train = Matrix{Float64}(sampled_protein_groups[train_mask, feature_names])
+        y_train = sampled_protein_groups.target[train_mask]
+
+        # Fit probit model
+        β_fitted, X_mean, X_std, keep_cols = fit_probit_model(X_train, y_train)
+
+        # Calculate probability scores for all
+        X_all = Matrix{Float64}(sampled_protein_groups[:, feature_names])
+        sampled_protein_groups.prob = calculate_probit_scores(X_all, β_fitted, X_mean, X_std, keep_cols)
+    end
     
     @info "Fitted probit model coefficients: $β_fitted"
     
@@ -1193,7 +1296,7 @@ function perform_probit_analysis_oom(pg_paths::Vector{String}, total_protein_gro
             
             # Calculate probit scores
             X_file = Matrix{Float64}(df[:, feature_names])
-            prob_scores = calculate_probit_scores(X_file, β_fitted, X_mean, X_std)
+            prob_scores = calculate_probit_scores(X_file, β_fitted, X_mean, X_std, keep_cols)
             
             # Add scores to dataframe
             df[!, :probit_score] = prob_scores
@@ -1281,8 +1384,7 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
     n_decoys = sum(.!all_protein_groups.target)
     
     # Define features to use
-    feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff]
-    #X = Matrix{Float64}(all_protein_groups[:, feature_names])
+    feature_names = [:pg_score, :peptide_coverage, :n_possible_peptides, :log_binom_coeff, :any_common_peps, :sequence_coverage]
     y = all_protein_groups.target
 
     n_train_rounds = 10
@@ -1292,6 +1394,7 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
     β_fitted = zeros(Float64, length(feature_names) + 1)
     X_mean = zeros(Float64, length(feature_names))
     X_std  = ones(Float64, length(feature_names))
+    keep_cols = ones(Bool, length(feature_names))
 
     for i in 1:n_train_rounds
         if i == 1
@@ -1308,19 +1411,13 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
         X_train = Matrix{Float64}(all_protein_groups[train_mask, feature_names])
         y_train = all_protein_groups.target[train_mask]
 
-        β_fitted, X_mean, X_std = fit_probit_model(X_train, y_train)
+        # Fit probit model
+        β_fitted, X_mean, X_std, keep_cols = fit_probit_model(X_train, y_train)
 
-        println(i, " ", sum(y_train), " ", sum(.!y_train))
-
+        # Calculate probability scores for all
         X_all = Matrix{Float64}(all_protein_groups[:, feature_names])
-        all_protein_groups.prob = calculate_probit_scores(X_all, β_fitted, X_mean, X_std)
+        all_protein_groups.prob = calculate_probit_scores(X_all, β_fitted, X_mean, X_std, keep_cols)
     end
-    
-    # Fit probit model
-    #β_fitted, X_mean, X_std = fit_probit_model(X, y)
-    
-    # Calculate probability scores
-    #prob_scores = calculate_probit_scores(X, β_fitted, X_mean, X_std)
     
     # Calculate q-values for probit model
     probit_qvalues = calculate_qvalues_from_scores(all_protein_groups.prob, y)
@@ -1328,8 +1425,8 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
     # Calculate q-values for pg_score only baseline
     pg_qvalues = calculate_qvalues_from_scores(all_protein_groups.pg_score, y)
 
-    all_protein_groups.probit_qvalues = probit_qvalues
-    CSV.write("/Users/dennisgoldfarb/Downloads/protein_scores.tsv", all_protein_groups, delim='\t')
+    #all_protein_groups.probit_qvalues = probit_qvalues
+    #CSV.write("/Users/dennisgoldfarb/Downloads/protein_scores.tsv", all_protein_groups, delim='\t')
     
     # Count targets at different FDR thresholds
     probit_targets_1pct = sum(y .& (probit_qvalues .<= 0.01))
@@ -1374,6 +1471,9 @@ function perform_probit_analysis(all_protein_groups::DataFrame, qc_folder::Strin
     else
         @info "  At 10% FDR: +$improvement_10pct targets"
     end
+    
+    # filter for the final columns used for plotting purposes
+    feature_names = feature_names[keep_cols]
     
     # Create decision boundary plots
     # TODO: Fix plotting type error
@@ -1421,17 +1521,22 @@ Fit a probit regression model for protein group classification.
 - `β_fitted`: Fitted coefficients
 - `X_mean`: Feature means for standardization
 - `X_std`: Feature standard deviations for standardization
+- `keep_cols`: Boolean mask indicating which feature columns were retained
 """
 function fit_probit_model(X::Matrix{Float64}, y::Vector{Bool})
+    # Identify and remove constant columns which cause singularities
+    keep_cols = [maximum(@view X[:, i]) != minimum(@view X[:, i]) for i in 1:size(X, 2)]
+    X_filtered = X[:, keep_cols]
+
     # Standardize features
-    X_mean = mean(X, dims=1)
-    X_std = std(X, dims=1)
+    X_mean = mean(X_filtered, dims=1)
+    X_std = std(X_filtered, dims=1)
     X_std[X_std .== 0] .= 1.0  # Avoid division by zero
-    X_standardized = (X .- X_mean) ./ X_std
+    X_standardized = (X_filtered .- X_mean) ./ X_std
     
     # Add intercept column
     X_with_intercept = hcat(ones(size(X_standardized, 1)), X_standardized)
-    X_df = DataFrame(X_with_intercept, [:intercept; Symbol.("feature_", 1:size(X, 2))])
+    X_df = DataFrame(X_with_intercept, [:intercept; Symbol.("feature_", 1:size(X_filtered, 2))])
     
     # Initialize coefficients
     β = zeros(Float64, size(X_with_intercept, 2))
@@ -1444,7 +1549,7 @@ function fit_probit_model(X::Matrix{Float64}, y::Vector{Bool})
     # Fit probit model
     β_fitted = Pioneer.ProbitRegression(β, X_df, y, data_chunks, max_iter=30)
     
-    return β_fitted, vec(X_mean), vec(X_std)
+    return β_fitted, vec(X_mean), vec(X_std), keep_cols
 end
 
 """
@@ -1457,25 +1562,28 @@ Calculate probit probability scores for new data.
 - `β::Vector{Float64}`: Fitted coefficients
 - `X_mean::Vector{Float64}`: Feature means from training
 - `X_std::Vector{Float64}`: Feature standard deviations from training
+- `keep_cols::Vector{Bool}`: Boolean mask of columns retained during training
 
 # Returns
 - `Vector{Float64}`: Probability scores
 """
-function calculate_probit_scores(X::Matrix{Float64}, β::Vector{Float64}, X_mean::Vector{Float64}, X_std::Vector{Float64})
+function calculate_probit_scores(X::Matrix{Float64}, β::Vector{Float64}, X_mean::Vector{Float64}, X_std::Vector{Float64}, keep_cols::Vector{Bool})
+    X_filtered = X[:, keep_cols]
+
     # Standardize using training statistics
-    X_standardized = (X .- X_mean') ./ X_std'
+    X_standardized = (X_filtered .- X_mean') ./ X_std'
     
     # Add intercept
     X_with_intercept = hcat(ones(size(X_standardized, 1)), X_standardized)
-    X_df = DataFrame(X_with_intercept, [:intercept; Symbol.("feature_", 1:size(X, 2))])
+    X_df = DataFrame(X_with_intercept, [:intercept; Symbol.("feature_", 1:size(X_standardized, 2))])
     
     # Create data chunks
     n_chunks = max(1, Threads.nthreads())
-    chunk_size = max(1, ceil(Int, size(X, 1) / n_chunks))
-    data_chunks = Iterators.partition(1:size(X, 1), chunk_size)
+    chunk_size = max(1, ceil(Int, size(X_standardized, 1) / n_chunks))
+    data_chunks = Iterators.partition(1:size(X_standardized, 1), chunk_size)
     
     # Calculate probabilities
-    prob_scores = zeros(Float64, size(X, 1))
+    prob_scores = zeros(Float64, size(X_standardized, 1))
     Pioneer.ModelPredictProbs!(prob_scores, X_df, β, data_chunks)
     
     return prob_scores
