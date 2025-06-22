@@ -36,7 +36,8 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     pbar = ProgressBar(total=length(unique_cv_folds)*length(iter_scheme))
     for test_fold_idx in unique_cv_folds
         #Clear prob stats 
-        clear_prob_and_group_features!(psms, match_between_runs)
+        #clear_prob_and_group_features!(psms, match_between_runs)
+        initialize_group_features!(psms, match_between_runs)
         # Get training data
         psms_train = @view(psms[findall(x -> x != test_fold_idx, psms[!, :cv_fold]), :])
         # Train models for each iteration
@@ -284,7 +285,8 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
     Random.seed!(1776);
     for test_fold_idx in unique_cv_folds#(0, 1)#range(1, n_folds)
         #Clear prob stats 
-        clear_prob_and_group_features!(psms, match_between_runs)
+        #clear_prob_and_group_features!(psms, match_between_runs)
+        initialize_group_features!(psms, match_between_runs)
         # Get training data
         psms_train = @view(psms[findall(x -> x != test_fold_idx, psms[!, :cv_fold]), :])
 
@@ -384,27 +386,61 @@ end
 function summarize_precursors!(psms::AbstractDataFrame)
     # Collect the grouped pairs so we can iterate in a threaded for loop.
     grouped_data = collect(pairs(groupby(psms, [:pair_id, :isotopes_captured])))
+    #grouped_data = collect(pairs(groupby(psms, [:precursor_idx, :isotopes_captured])))
 
     Threads.@threads for idx in eachindex(grouped_data)
         key, sub_psms = grouped_data[idx]
-        
-        min_prob, max_prob, mean_prob = summarize_prob(sub_psms[!,:prob])
-        best_idx = argmax(sub_psms.prob)
-        best_log2_weights = log2.(sub_psms.weights[best_idx])
-        best_iRTs = sub_psms.irts[best_idx]
+
+        #min_prob, max_prob, mean_prob = summarize_prob(sub_psms[!,:prob])
+        #best_idx = argmax(sub_psms.prob)
+        #best_log2_weights = log2.(sub_psms.weights[best_idx])
+        #best_iRTs = sub_psms.irts[best_idx]
+
+        run_best_indices = Dict{eltype(sub_psms.ms_file_idx), Int}()
+        run_prob_stats = Dict{eltype(sub_psms.ms_file_idx), Tuple{Float32,Float32,Float32}}()
+
+        unique_runs = unique(sub_psms.ms_file_idx)
+        num_runs = length(unique_runs)
+
+        run_best_indices = Dict{eltype(sub_psms.ms_file_idx), Int}()
+        if num_runs > 1
+            for run in unique_runs
+                other_idxs = findall(sub_psms.ms_file_idx .!= run)
+                best_idx = other_idxs[argmax(sub_psms.prob[other_idxs])]
+                run_best_indices[run] = best_idx
+                run_prob_stats[run] = summarize_prob(sub_psms.prob[other_idxs])
+            end
+        end
 
         for i in 1:nrow(sub_psms)
+            sub_psms.num_runs[i] = num_runs
+
+            if num_runs == 1
+                sub_psms.min_prob[i] = missing
+                sub_psms.max_prob[i] = missing
+                sub_psms.mean_prob[i] = missing
+                sub_psms.best_irt_diff[i] = missing
+                sub_psms.rv_coefficient[i] = missing
+                sub_psms.is_best_decoy[i] = missing
+                continue
+            end
+
+            best_idx = run_best_indices[sub_psms.ms_file_idx[i]]
+            best_log2_weights = log2.(sub_psms.weights[best_idx])
+            best_iRTs = sub_psms.irts[best_idx]
+
             best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(sub_psms.weights[i]))
             best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_iRTs, sub_psms.irts[i])
                     
             best_irt_at_apex = sub_psms.irts[best_idx][argmax(best_log2_weights)]
             sub_psms.best_irt_diff[i] = abs(best_irt_at_apex - sub_psms.irts[i][argmax(sub_psms.weights[i])])
             sub_psms.rv_coefficient[i] = rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
-            sub_psms.min_prob[i] = min_prob
-            sub_psms.max_prob[i] = max_prob
-            sub_psms.mean_prob[i] = mean_prob
+            stats = run_prob_stats[sub_psms.ms_file_idx[i]]
+            sub_psms.min_prob[i] = stats[1]
+            sub_psms.max_prob[i] = stats[2]
+            sub_psms.mean_prob[i] = stats[3]
             sub_psms.is_best_decoy[i] = sub_psms.decoy[best_idx]
-            sub_psms.num_runs[i] = nrow(sub_psms)
+            #sub_psms.num_runs[i] = nrow(sub_psms)
         end
     end
 
@@ -418,13 +454,15 @@ function clear_prob_and_group_features!(
     psms[!, :prob] .= zero(Float32)
 
     if match_between_runs
-        psms[!, :max_prob]       .= zero(Float32)
-        psms[!, :mean_prob]      .= zero(Float32)
-        psms[!, :min_prob]       .= zero(Float32)
-        psms[!, :rv_coefficient] .= zero(Float32)
-        psms[!, :best_irt_diff]  .= zero(Float32)
+        allowmissing!(psms, [:max_prob, :mean_prob, :min_prob, :rv_coefficient,
+                             :best_irt_diff, :is_best_decoy])
+        psms[!, :max_prob]       .= missing
+        psms[!, :mean_prob]      .= missing
+        psms[!, :min_prob]       .= missing
+        psms[!, :rv_coefficient] .= missing
+        psms[!, :best_irt_diff]  .= missing
         psms[!, :num_runs]       .= zero(Int32)
-        psms[!, :is_best_decoy]  .= zero(Bool)
+        psms[!, :is_best_decoy]  .= missing
         psms[!, :q_value]        .= zero(Float64)
     end
 
@@ -439,14 +477,16 @@ function initialize_group_features!(
     psms[!, :prob] = zeros(Float32, n)
 
     if match_between_runs
-        psms[!, :max_prob]       = zeros(Float32, n)
-        psms[!, :mean_prob]      = zeros(Float32, n)
-        psms[!, :min_prob]       = zeros(Float32, n)
-        psms[!, :rv_coefficient] = zeros(Float32, n)
-        psms[!, :best_irt_diff]  = zeros(Float32, n)
+        psms[!, :max_prob]       = Vector{Union{Missing, Float32}}(missing, n)
+        psms[!, :mean_prob]      = Vector{Union{Missing, Float32}}(missing, n)
+        psms[!, :min_prob]       = Vector{Union{Missing, Float32}}(missing, n)
+        psms[!, :rv_coefficient] = Vector{Union{Missing, Float32}}(missing, n)
+        psms[!, :best_irt_diff]  = Vector{Union{Missing, Float32}}(missing, n)
         psms[!, :num_runs]       = zeros(Int32, n)
-        psms[!, :is_best_decoy]  = zeros(Bool, n)
+        psms[!, :is_best_decoy]  = Vector{Union{Missing, Bool}}(missing, n)
         psms[!, :q_value]        = zeros(Float64, n)
+        allowmissing!(psms, [:max_prob, :mean_prob, :min_prob, :rv_coefficient,
+                              :best_irt_diff, :is_best_decoy])
     end
 
     return psms
@@ -460,7 +500,7 @@ function get_training_data_for_iteration!(
     max_q_value_xgboost_mbr_rescore::Float32
 )
     # Train on all precursors during first iteration
-    psms_train_itr = psms_train
+    psms_train_itr = copy(psms_train)
 
     if itr > 1
         # For subsequent iterations, train on top scoring precursors
@@ -469,6 +509,20 @@ function get_training_data_for_iteration!(
             psms_train_itr[!,:target],
             psms_train_itr[!,:q_value]
         )
+
+        # Convert the worst-scoring targets to negatives using PEP estimate
+        order = sortperm(psms_train_itr.prob, rev=true)
+        sorted_scores  = psms_train_itr.prob[order]
+        sorted_targets = psms_train_itr.target[order]
+        PEPs = Vector{Float32}(undef, length(order))
+        get_PEP!(sorted_scores, sorted_targets, PEPs; doSort=false)
+
+        idx_cutoff = findfirst(x -> x >= 0.9f0, PEPs)
+        if !isnothing(idx_cutoff)
+            worst_idxs = order[idx_cutoff:end]
+            println("added negatives: ", sum(.!sorted_targets[idx_cutoff:end]), " ", sum(sorted_targets[idx_cutoff:end]), " ", nrow(psms_train_itr), "\n")
+            psms_train_itr.target[worst_idxs] .= false
+        end
 
         # Also train on top scoring MBR candidates if requested
         if match_between_runs
@@ -481,15 +535,16 @@ function get_training_data_for_iteration!(
 
             # Hacky way to ensure anything passing the initial q-value threshold
             # will pass the next q-value threshold
-            psms_train.q_value[psms_train_itr.q_value .<= max_q_value_xgboost_rescore] .= 0.0
-            psms_train.q_value[psms_train_itr.q_value .> max_q_value_xgboost_rescore]  .= 1.0
+            psms_train_itr.q_value[psms_train_itr.q_value .<= max_q_value_xgboost_rescore] .= 0.0
+            psms_train_itr.q_value[psms_train_itr.q_value .> max_q_value_xgboost_rescore]  .= 1.0
 
             # Must have at least one precursor passing the q-value threshold,
             # and the best precursor can't be a decoy
             psms_train_mbr = subset(
                 psms_train_itr,
                 [:is_best_decoy, :max_prob, :prob] => ByRow((d, mp, p) ->
-                    (!d) && (mp >= max_prob_threshold) && (p < max_prob_threshold)
+                    #(!ismissing(d) && !d && !ismissing(mp) && !ismissing(p) && mp >= max_prob_threshold && p < max_prob_threshold)
+                    (!ismissing(mp) && !ismissing(p) && mp >= max_prob_threshold && p < max_prob_threshold)
                 );
                 view = true
             )
@@ -500,15 +555,18 @@ function get_training_data_for_iteration!(
                 psms_train_mbr[!,:target],
                 psms_train_mbr[!,:q_value]
             )
+
+            println("added MBR: ", sum((psms_train_mbr.q_value .<= max_q_value_xgboost_mbr_rescore) .& psms_train_mbr.target), " out of ", sum(psms_train_mbr.target), " out of ", nrow(psms_train_mbr), " ", max_q_value_xgboost_rescore, "\n")
+
             # Take all decoys and targets passing q_thresh (all 0's now) or mbr_q_thresh
             psms_train_itr = subset(
-                psms_train,
+                psms_train_itr,
                 [:target, :q_value] => ByRow((t,q) -> (!t) || (t && q <= max_q_value_xgboost_mbr_rescore))
             )
         else
             # Take all decoys and targets passing q_thresh
             psms_train_itr = subset(
-                psms_train,
+                psms_train_itr,
                 [:target, :q_value] => ByRow((t,q) -> (!t) || (t && q <= max_q_value_xgboost_rescore))
             )
         end
