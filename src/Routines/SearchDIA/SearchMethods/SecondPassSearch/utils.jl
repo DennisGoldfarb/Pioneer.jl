@@ -912,7 +912,7 @@ function init_summary_columns!(
         (:max_y_ions,               UInt16)
         (:max_matched_ratio,        Float16)
         (:num_scans,        UInt16)
-        (:smoothness,        Float16)
+        (:smoothness,        Float32)
         (:weights,        Vector{Float32})
         (:irts,         Vector{Float32})
         ];
@@ -1003,21 +1003,32 @@ function get_summary_scores!(
 
     irts = rt_to_irt_interp.(psms.rt)
     
-    @inbounds @fastmath for i in range(1, length(weight))
-        if length(weight) == 1
-            smoothness = (-2*weight[i] / weight[apex_scan])^2
-        else
-            if (i == 1)
-                smoothness += (((weight[i+1] - weight[i]) / (psms.rt[i+1] - psms.rt[i]) + (-weight[i]) / (psms.rt[i+1] - psms.rt[i])) / weight[apex_scan]) ^2
-            elseif (i > 1) & (i < length(weight))
-                smoothness += (((weight[i-1] - weight[i]) / (psms.rt[i] - psms.rt[i-1]) + (weight[i+1]-weight[i]) / (psms.rt[i+1] - psms.rt[i])) / weight[apex_scan]) ^2
-            elseif (i == length(weight))
-                smoothness += (((weight[i-1] - weight[i]) / (psms.rt[i] - psms.rt[i-1]) + (-weight[i]) / (psms.rt[i] - psms.rt[i-1])) / weight[apex_scan]) ^2
+    apex_w = weight[apex_scan]
+    if apex_w > 0
+        @inbounds @fastmath for i in range(1, length(weight))
+            if length(weight) == 1
+                smoothness = (-2 * weight[i] / apex_w)^2
+            else
+                if i == 1
+                    dt = psms.rt[i+1] - psms.rt[i]
+                    if dt != 0
+                        smoothness += (((weight[i+1] - weight[i]) / dt + (-weight[i]) / dt) / apex_w)^2
+                    end
+                elseif i < length(weight)
+                    dt1 = psms.rt[i] - psms.rt[i-1]
+                    dt2 = psms.rt[i+1] - psms.rt[i]
+                    if dt1 != 0 && dt2 != 0
+                        smoothness += (((weight[i-1] - weight[i]) / dt1 + (weight[i+1] - weight[i]) / dt2) / apex_w)^2
+                    end
+                else
+                    dt = psms.rt[i] - psms.rt[i-1]
+                    if dt != 0
+                        smoothness += (((weight[i-1] - weight[i]) / dt + (-weight[i]) / dt) / apex_w)^2
+                    end
+                end
             end
         end
     end
-
-   
 
     psms.max_gof[apex_scan] = max_gof
     psms.max_matched_ratio[apex_scan] = max_matched_ratio
