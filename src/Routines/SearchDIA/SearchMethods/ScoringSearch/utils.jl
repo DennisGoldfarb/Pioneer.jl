@@ -508,7 +508,8 @@ function get_psms_passing_qval(
             :isotopes_captured,
             :scan_idx,
             :entrapment_group_id,
-            :ms_file_idx
+            :ms_file_idx,
+            :transfer_candidate
         ]
         available_cols = intersect(cols, Symbol.(names(passing_psms)))
 

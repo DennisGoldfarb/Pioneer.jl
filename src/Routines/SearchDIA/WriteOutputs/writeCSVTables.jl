@@ -139,6 +139,7 @@ function writePrecursorCSV(
     "use_for_protein_quant"
     "precursor_idx"
     "target"
+    "entrapment_group_id"
     ]
 
     long_columns_exclude = [:isotopes_captured, :scan_idx, :protein_idx, :weight, :ms_file_idx]
@@ -177,7 +178,9 @@ function writePrecursorCSV(
                              :run_specific_pg_score,
                              :use_for_protein_quant,
                              :precursor_idx,
-                             :target])
+                             :target,
+                             :transfer_candidate,
+                             :entrapment_group_id])
 
     sorted_columns = vcat(wide_columns, file_names)
     open(long_precursors_path,"w") do io1
@@ -250,15 +253,15 @@ function writeProteinGroupsCSV(
     function makeWideFormat(
         longdf::DataFrame)
         # First create a DataFrame with the non-abundance columns we want to keep
-        metadata_df = unique(longdf[:, [:species, :gene_names, :protein_names, :protein, :target]])#, :n_peptides]])
+        metadata_df = unique(longdf[:, [:species, :gene_names, :protein_names, :protein, :target, :entrap_id]])#, :n_peptides]])
         
         # Create the abundance wide format
         abundance_df = unstack(longdf,
-            [:species, :protein, :target],
+            [:species, :protein, :target, :entrap_id],
             :file_name, :abundance)
             
         # Join the metadata with the abundance data
-        return leftjoin(metadata_df, abundance_df, on=[:species, :protein, :target])
+        return leftjoin(metadata_df, abundance_df, on=[:species, :protein, :target, :entrap_id])
     end
 
     protein_groups_long = DataFrame(Arrow.Table(long_pg_path))

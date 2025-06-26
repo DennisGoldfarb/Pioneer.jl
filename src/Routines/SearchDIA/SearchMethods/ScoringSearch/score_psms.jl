@@ -158,12 +158,12 @@ function score_precursor_isotope_traces_in_memory!(
         features = [f for f in features if hasproperty(best_psms, f)];
         if match_between_runs
             append!(features, [
-                :max_prob, 
-                :mean_prob, 
-                :min_prob,
                 :rv_coefficient,
                 :best_irt_diff,
-                :num_runs
+                :num_runs,
+                :max_pair_prob,
+                :BBR_log2_weight_ratio,
+                :BBR_log2_explained_ratio
                 ])
         end
 
@@ -179,6 +179,7 @@ function score_precursor_isotope_traces_in_memory!(
                                 match_between_runs;
                                 max_q_value_xgboost_rescore,
                                 max_q_value_xgboost_mbr_rescore,
+                                max_ftr = 0.01f0,
                                 colsample_bytree = 0.5, 
                                 colsample_bynode = 0.5,
                                 min_child_weight = 5, 
@@ -186,7 +187,7 @@ function score_precursor_isotope_traces_in_memory!(
                                 subsample = 0.25, 
                                 max_depth = 10,
                                 eta = 0.05, 
-                                iter_scheme = [100, 100, 200],
+                                iter_scheme = [100, 100, 200, 200],
                                 print_importance = false);
         return models;#best_psms
     else
