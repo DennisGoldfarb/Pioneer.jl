@@ -173,8 +173,7 @@ function get_qvalue_spline(
     bin_qval, bin_mean_prob = Vector{Float32}(undef, M), Vector{Float32}(undef, M)
     bin_size = 0
     bin_idx = 0
-    mean_prob, targets, decoys = 0.0f0, 0, 0
-    targets, decoys = 0, 0
+    mean_prob, targets, decoys = 0.0f0, 0, 1 # psuedocount
     for i in range(1, Q)
         targets += psms_scores[!, :target][i]
         decoys += (1 - psms_scores[!, :target][i])
