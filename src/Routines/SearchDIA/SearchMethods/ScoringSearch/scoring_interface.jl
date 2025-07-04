@@ -32,46 +32,46 @@ Calculate global protein scores and add them to files via references.
 Returns the score dictionary for downstream use.
 """
 function calculate_and_add_global_scores!(pg_refs::Vector{ProteinGroupFileReference})
-    # First pass: collect max scores
-    acc_to_max_pg_score = Dict{ProteinKey, Float32}()
-    
+    log_n_runs = max(1, floor(Int, log2(length(pg_refs))))
+    acc_to_scores = Dict{ProteinKey, Vector{Float32}}()
+
+    # First pass: collect scores per protein across all files
     for ref in pg_refs
-        process_with_memory_limit(ref, 
-            batch -> begin
-                for row in eachrow(batch)
-                    key = ProteinKey(
-                        row.protein_name,
-                        row.target,
-                        row.entrap_id
-                    )
-                    old = get(acc_to_max_pg_score, key, -Inf32)
-                    acc_to_max_pg_score[key] = max(row.pg_score, old)
-                end
+        process_with_memory_limit(ref) do batch
+            for row in eachrow(batch)
+                key = ProteinKey(row.protein_name, row.target, row.entrap_id)
+                push!(get!(acc_to_scores, key, Float32[]), row.pg_score)
             end
-        )
+        end
     end
-    
+
+    # Compute global score using log-odds combination
+    acc_to_global_score = Dict{ProteinKey, Float32}()
+    for (key, scores) in acc_to_scores
+        acc_to_global_score[key] = logodds(scores, log_n_runs)
+    end
+
     # Second pass: add global_pg_score column and sort
     for ref in pg_refs
-        add_column_and_sort!(ref, :global_pg_score, 
+        add_column_and_sort!(ref, :global_pg_score,
             batch -> begin
-                scores = Vector{Float32}(undef, nrow(batch))
+                scores_out = Vector{Float32}(undef, nrow(batch))
                 for i in 1:nrow(batch)
                     key = ProteinKey(
                         batch.protein_name[i],
                         batch.target[i],
                         batch.entrap_id[i]
                     )
-                    scores[i] = get(acc_to_max_pg_score, key, batch.pg_score[i])
+                    scores_out[i] = get(acc_to_global_score, key, batch.pg_score[i])
                 end
-                scores
+                scores_out
             end,
             :global_pg_score, :target;  # sort keys
             reverse=true
         )
     end
-    
-    return acc_to_max_pg_score
+
+    return acc_to_global_score
 end
 
 """
@@ -162,6 +162,25 @@ function logodds(probs::AbstractVector{T}, top_n::Int) where {T<:AbstractFloat}
     # Convert to log-odds, clip to avoid Inf or negative contribution
     logodds = log.(clamp.(selected, 0.5f0, 1 - eps) ./ (1 .- clamp.(selected, 0.5f0, 1 - eps)))
     avg = sum(logodds) / n
+    return 1.0f0 / (1 + exp(-avg))
+end
+
+"""
+    logodds_weighted(probs::AbstractVector{T}, top_n::Int) where {T<:AbstractFloat}
+
+Combine probabilities using a log-odds average but divide by the total number of
+runs to prevent saturation when many probabilities are present. Only the top
+`top_n` probabilities contribute to the sum.
+"""
+function logodds_weighted(probs::AbstractVector{T}, top_n::Int) where {T<:AbstractFloat}
+    isempty(probs) && return 0.0f0
+    n_total = length(probs)
+    n = min(n_total, top_n)
+    sorted = sort(probs; rev=true)
+    selected = sorted[1:n]
+    eps = 1f-6
+    logodds = log.(clamp.(selected, 0.5f0, 1 - eps) ./ (1 .- clamp.(selected, 0.5f0, 1 - eps)))
+    avg = sum(logodds) / n_total
     return 1.0f0 / (1 + exp(-avg))
 end
 
