@@ -14,7 +14,7 @@ jobs:
       matrix:
         include:
           - os: macos
-            runner: macos-latest
+            runner: macos-13
             arch: x64
             identifier: macos-x64
           #- os: macos
@@ -127,14 +127,30 @@ jobs:
           mkdir -p "$PKGROOT/usr/local/$APPNAME"
           cp -R "$DIST"/* "$PKGROOT/usr/local/$APPNAME/"
 
+          # bundle assets used at runtime
+          mkdir -p "$PKGROOT/usr/local/$APPNAME/data"
+          cp -R data/IsotopeSplines "$PKGROOT/usr/local/$APPNAME/data/"
+
+          # ensure CLI wrappers set a writable depot path
+          for f in "$PKGROOT/usr/local/$APPNAME/bin"/*; do
+            [ -f "$f" ] || continue
+            if head -n1 "$f" | grep -q "^#!"; then
+              if [[ "$(uname)" == "Darwin" ]]; then
+                sed -i '' '2iexport JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-$HOME/.julia}"' "$f"
+              else
+                sed -i '2iexport JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-$HOME/.julia}"' "$f"
+              fi
+            fi
+          done
+
           # ensure files are writable so codesign can modify them
           find "$PKGROOT/usr/local/$APPNAME" -type f -exec chmod u+w {} +
 
           echo "Codesigning binaries"
           while IFS= read -r -d '' file; do
             if file "$file" | grep -q 'Mach-O'; then
-              codesign --verbose=4 --force --options runtime --timestamp \
-                --entitlements src/build/entitlements.plist \
+              codesign --deep --verbose=4 --force --options runtime --timestamp \
+                --entitlements src/build/windows/entitlements.plist \
                 --sign "$CODESIGN_IDENTITY" "$file"
             fi
           done < <(find "$PKGROOT/usr/local/$APPNAME" -type f -print0)
@@ -187,6 +203,17 @@ jobs:
         run: |
           mkdir -p deb/usr/local/Pioneer
           cp -r build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/* deb/usr/local/Pioneer/
+
+          # bundle assets used at runtime
+          mkdir -p deb/usr/local/Pioneer/data
+          cp -r data/IsotopeSplines deb/usr/local/Pioneer/data/
+          
+          for f in deb/usr/local/Pioneer/bin/*; do
+            [ -f "$f" ] || continue
+            if head -n1 "$f" | grep -q "^#!"; then
+              sed -i '2iexport JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-$HOME/.julia}"' "$f"
+            fi
+          done
           dpkg-deb --build deb PioneerInstaller.deb
       
       - name: Upload artifact
