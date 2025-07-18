@@ -30,7 +30,7 @@
     <true/>
 
     <key>com.apple.security.get-task-allow</key>
-    <true/>
+    <false/>
 
     <key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
     <array>
