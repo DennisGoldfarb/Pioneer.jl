@@ -23,10 +23,10 @@ jobs:
           #  runner: macos-latest
           #  arch: arm64
           #  identifier: osx-arm64
-          - os: windows
-            runner: windows-latest
-            arch: x64
-            identifier: win-x64
+          #- os: windows
+          #  runner: windows-latest
+          #  arch: x64
+          #  identifier: win-x64
           #- os: linux
           #  runner: ubuntu-latest
           #  arch: x64
@@ -123,7 +123,8 @@ jobs:
         if: matrix.os != 'windows'
         run: |
           for f in build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin/*; do
-            sed -i '2iexport JULIA_NUM_THREADS=${JULIA_NUM_THREADS:-auto}' "$f"
+            sed -i.bak '2iexport JULIA_NUM_THREADS=${JULIA_NUM_THREADS:-auto}' "$f"
+            rm "$f.bak"
           done
 
       - name: Ensure executables default to all CPU threads (Windows)
