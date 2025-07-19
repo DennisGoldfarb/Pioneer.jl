@@ -224,7 +224,9 @@ jobs:
         if: matrix.os == 'windows'
         shell: pwsh
         run: |
-          $pioneerRoot = "build\Pioneer_${{ matrix.identifier }}\Applications\Pioneer"
+          $longPath = "build\Pioneer_${{ matrix.identifier }}\Applications\Pioneer"
+          subst P: $longPath
+          $pioneerRoot = "P:\"
           
           # Copy any additional resources needed
           if (Test-Path "data\IsotopeSplines") {
@@ -263,6 +265,8 @@ jobs:
             -cultures:en-us `
             -out "Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.msi" `
             installer.wixobj components.wixobj
+
+          subst P: /D
       
       - name: Package Linux .deb
         if: matrix.os == 'linux'
