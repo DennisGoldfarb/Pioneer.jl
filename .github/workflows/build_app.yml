@@ -28,7 +28,7 @@ jobs:
           #  arch: x64
           #  identifier: windows-x64
           - os: linux
-            runner: ubuntu-latest-8-cores
+            runner: ubuntu-latest
             arch: x64
             identifier: linux-x64
     steps:
@@ -112,11 +112,33 @@ jobs:
           julia --project=. -e 'using Pkg; Pkg.add("PackageCompiler"); Pkg.instantiate()'
           
       - name: Compile application
+        if: matrix.os != 'linux'
         run: |
           julia --project=. -e '
             using PackageCompiler;
             create_app(".", "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/", incremental=false, force=true,
               executables=["SearchDIA" => "main_SearchDIA", "BuildSpecLib" => "main_BuildSpecLib", "GetSearchParams" => "main_GetSearchParams", "GetBuildLibParams" => "main_GetBuildLibParams", "convertMzML" => "main_convertMzML", "ParseSpecLib" => "main_ParseSpecLib"]);
+          '
+
+      - name: Compile application (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          julia --project=. -e '
+            using PackageCompiler;
+            # Build each executable separately to reduce memory usage
+            for (exe, main) in [
+              "SearchDIA" => "main_SearchDIA",
+              "BuildSpecLib" => "main_BuildSpecLib",
+              "GetSearchParams" => "main_GetSearchParams",
+              "GetBuildLibParams" => "main_GetBuildLibParams",
+              "convertMzML" => "main_convertMzML",
+              "ParseSpecLib" => "main_ParseSpecLib"
+            ]
+              create_app(".", "build/temp_$exe/", incremental=false, force=true,
+                executables=[exe => main], cpu_target="generic");
+              # Move the executable to final location
+              run(`mv build/temp_$exe/bin/$exe build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin/`)
+            end
           '
       
       - name: Ensure executables default to all CPU threads
