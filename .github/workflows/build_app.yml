@@ -140,6 +140,16 @@ jobs:
             Set-Content -Path $file -Value ($header + "`r`n" + ($content -join "`r`n"))
           }
 
+      - name: Remove headers with long paths (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $artifactDir = "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/share/julia/artifacts"
+          if (Test-Path $artifactDir) {
+            Get-ChildItem -Path $artifactDir -Recurse -Directory -Filter include |
+              ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+          }
+
       - name: Codesign and package macOS app
         if: matrix.os == 'macos'
         env:
