@@ -218,8 +218,9 @@ jobs:
         if: matrix.os == 'windows'
         shell: pwsh
         run: |
-          &"${env:WIX}\bin\candle.exe" src\build\windows\installer.wxs
-          &"${env:WIX}\bin\light.exe" installer.wixobj -b . -o Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.msi
+          &"${env:WIX}\bin\heat.exe" dir build\Pioneer_${{ matrix.identifier }}\Applications\Pioneer -cg PioneerFiles -dr INSTALLDIR -gg -srd -sreg -out harvested.wxs
+          &"${env:WIX}\bin\candle.exe" src\build\windows\installer.wxs harvested.wxs
+          &"${env:WIX}\bin\light.exe" installer.wixobj harvested.wixobj -b . -o Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.msi
       
       - name: Package Linux .deb
         if: matrix.os == 'linux'
