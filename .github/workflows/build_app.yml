@@ -1,14 +1,15 @@
 name: Build App
 on:
   push:
-    branches:
-      - main
     tags: ['v*']
-  workflow_dispatch:
+  release:
+    types: [published]
 
 jobs:
   build:
     runs-on: ${{ matrix.runner }}
+    env:
+      JULIA_NUM_THREADS: auto
     strategy:
       fail-fast: false
       matrix:
@@ -16,15 +17,15 @@ jobs:
           - os: macos
             runner: macos-latest
             arch: x64
-            identifier: macos-x64
+            identifier: osx-x64
           #- os: macos
           #  runner: macos-latest
           #  arch: arm64
-          #  identifier: macos-arm64
+          #  identifier: osx-arm64
           - os: windows
             runner: windows-latest
             arch: x64
-            identifier: windows-x64
+            identifier: win-x64
           #- os: linux
           #  runner: ubuntu-latest
           #  arch: x64
@@ -35,6 +36,10 @@ jobs:
         uses: julia-actions/setup-julia@v2
         with:
           version: '1.11'
+
+      - name: Determine tag version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
       
       - name: Install the Apple certificate and provisioning profile
         if: matrix.os == 'macos'
@@ -112,6 +117,25 @@ jobs:
             create_app(".", "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/", incremental=false, force=true,
               executables=["SearchDIA" => "main_SearchDIA", "BuildSpecLib" => "main_BuildSpecLib", "GetSearchParams" => "main_GetSearchParams", "GetBuildLibParams" => "main_GetBuildLibParams", "convertMzML" => "main_convertMzML", "ParseSpecLib" => "main_ParseSpecLib"]);
           '
+
+      - name: Ensure executables default to all CPU threads
+        if: matrix.os != 'windows'
+        run: |
+          for f in build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin/*; do
+            sed -i '2iexport JULIA_NUM_THREADS=${JULIA_NUM_THREADS:-auto}' "$f"
+          done
+
+      - name: Ensure executables default to all CPU threads (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $binDir = "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin"
+          Get-ChildItem $binDir -Filter *.bat | ForEach-Object {
+            $file = $_.FullName
+            $content = Get-Content $file
+            $header = 'IF NOT DEFINED JULIA_NUM_THREADS SET JULIA_NUM_THREADS=auto'
+            Set-Content -Path $file -Value ($header + "`r`n" + ($content -join "`r`n"))
+          }
       - name: Codesign and package macOS app
         if: matrix.os == 'macos'
         env:
@@ -129,10 +153,10 @@ jobs:
           security list-keychains -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           codesign --deep --force --options runtime --sign "$BUILD_CERTIFICATE_BASE64" build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/Pioneer.app
-          pkgbuild --root build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/Pioneer.app --identifier com.example.pioneer --install-location /Applications/Pioneer.app --sign "$BUILD_CERTIFICATE_BASE64" Pioneer.pkg
-          productbuild --package Pioneer.pkg --sign "$INSTALLER_CERT_BASE64" PioneerInstaller.pkg
-          xcrun notarytool submit PioneerInstaller.pkg --apple-id "$NOTARIZE_APPLE_ID" --team-id "$NOTARIZE_TEAM_ID" --password "$NOTARIZE_PASSWORD" --wait
-          xcrun stapler staple PioneerInstaller.pkg
+          pkgbuild --root build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/Pioneer.app --identifier edu.washu.goldfarblab.pioneer --install-location /Applications/Pioneer.app --sign "$BUILD_CERTIFICATE_BASE64" Pioneer.pkg
+          productbuild --package Pioneer.pkg --sign "$INSTALLER_CERT_BASE64" Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.pkg
+          xcrun notarytool submit Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.pkg --apple-id "$NOTARIZE_APPLE_ID" --team-id "$NOTARIZE_TEAM_ID" --password "$NOTARIZE_PASSWORD" --wait
+          xcrun stapler staple Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.pkg
       
       
       - name: Package Windows MSI
@@ -140,21 +164,21 @@ jobs:
         shell: pwsh
         run: |
           &"${env:WIX}\bin\candle.exe" src\build\windows\installer.wxs
-          &"${env:WIX}\bin\light.exe" installer.wixobj -o PioneerInstaller.msi
+          &"${env:WIX}\bin\light.exe" installer.wixobj -o Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.msi
       
       - name: Package Linux .deb
         if: matrix.os == 'linux'
         run: |
           mkdir -p deb/usr/local/Pioneer
           cp -r build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/* deb/usr/local/Pioneer/
-          dpkg-deb --build deb PioneerInstaller.deb
+          dpkg-deb --build deb Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.deb
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Pioneer-${{ matrix.identifier }}
           path: |
-            PioneerInstaller.pkg
-            PioneerInstaller.msi
-            PioneerInstaller.deb
+            Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.pkg
+            Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.msi
+            Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.deb
 
