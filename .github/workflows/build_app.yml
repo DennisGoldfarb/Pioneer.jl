@@ -120,13 +120,19 @@ jobs:
               executables=["SearchDIA" => "main_SearchDIA", "BuildSpecLib" => "main_BuildSpecLib", "GetSearchParams" => "main_GetSearchParams", "GetBuildLibParams" => "main_GetBuildLibParams", "convertMzML" => "main_convertMzML", "ParseSpecLib" => "main_ParseSpecLib"]);
           '
 
-      - name: Compile application (Linux)
+      - name: Compile application (Linux - Memory Optimized)
         if: matrix.os == 'linux'
         run: |
           julia --project=. -e '
             using PackageCompiler;
-            # Build each executable separately to reduce memory usage
-            for (exe, main) in [
+            
+            # Create the final directory structure
+            mkpath("build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin")
+            mkpath("build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/lib")
+            mkpath("build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/share")
+            
+            # Build executables one at a time to reduce memory usage
+            executables = [
               "SearchDIA" => "main_SearchDIA",
               "BuildSpecLib" => "main_BuildSpecLib",
               "GetSearchParams" => "main_GetSearchParams",
@@ -134,10 +140,29 @@ jobs:
               "convertMzML" => "main_convertMzML",
               "ParseSpecLib" => "main_ParseSpecLib"
             ]
-              create_app(".", "build/temp_$exe/", incremental=false, force=true,
-                executables=[exe => main], cpu_target="generic");
-              # Move the executable to final location
-              run(`mv build/temp_$exe/bin/$exe build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin/`)
+            
+            # First executable creates the base structure
+            first_exe, first_main = first(executables)
+            create_app(".", "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/", 
+              incremental=false, force=true,
+              executables=[first_exe => first_main],
+              cpu_target="generic");
+            
+            # Build remaining executables one at a time
+            for (exe, main) in executables[2:end]
+              println("Building $exe...")
+              create_app(".", "build/temp_$exe/", 
+                incremental=false, force=true,
+                executables=[exe => main],
+                cpu_target="generic");
+              
+              # Copy just the executable
+              cp("build/temp_$exe/bin/$exe", 
+                 "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin/$exe",
+                 force=true)
+              
+              # Clean up temp directory to save space
+              rm("build/temp_$exe", recursive=true)
             end
           '
       
