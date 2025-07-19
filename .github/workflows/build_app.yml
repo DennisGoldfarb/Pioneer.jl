@@ -28,7 +28,7 @@ jobs:
           #  arch: x64
           #  identifier: windows-x64
           - os: linux
-            runner: ubuntu-latest
+            runner: ubuntu-latest-8-cores
             arch: x64
             identifier: linux-x64
     steps:
