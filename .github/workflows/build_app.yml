@@ -253,9 +253,9 @@ jobs:
 
             # Compile WiX sources
             & candle.exe `
-              -dSourceDir="$pioneerRoot" `
-              -dProductVersion="${{ steps.get_version.outputs.VERSION }}" `
-              -dPlatform="$platform" `
+              -dSourceDir=$pioneerRoot `
+              -dProductVersion=${{ steps.get_version.outputs.VERSION }} `
+              -dPlatform=$platform `
               -arch ${{ matrix.arch }} `
               -ext WixUIExtension `
               src\build\windows\installer.wxs components.wxs
