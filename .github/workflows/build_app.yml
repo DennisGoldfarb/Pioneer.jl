@@ -276,6 +276,17 @@ jobs:
           # bundle assets used at runtime
           mkdir -p deb/usr/local/Pioneer/data
           cp -r data/IsotopeSplines deb/usr/local/Pioneer/data/
+
+
+          mkdir -p deb/DEBIAN
+          cat <<EOF > deb/DEBIAN/control
+          Package: pioneer
+          Version: ${{ steps.get_version.outputs.VERSION }}
+          Architecture: amd64
+          Maintainer: Pioneer
+          Description: Pioneer command line tools
+          EOF
+
           
           for f in deb/usr/local/Pioneer/bin/*; do
             [ -f "$f" ] || continue
