@@ -115,6 +115,11 @@ jobs:
         if: matrix.os == 'macos'
         run: brew install poppler
 
+      - name: Install PDF utilities (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: choco install poppler -y
+
       - name: Download precompile data
         shell: bash
         run: |
