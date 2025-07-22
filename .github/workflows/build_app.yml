@@ -44,8 +44,10 @@ jobs:
         run: |
           # Download and extract the latest Poppler release for Windows
           release_json=$(curl -s https://api.github.com/repos/oschwartz10612/poppler-windows/releases/latest)
-          echo $release_json
-          #asset_url=$(echo "$release_json" | grep browser_download_url | grep x86_64.zip | head -n 1 | cut -d '"' -f 4)
+          asset_url=$(echo "$release_json" | grep browser_download_url | grep x86_64.zip | head -n 1 | cut -d '"' -f 4)
+          echo $asset_url
+          asset_url=$(echo "$release_json" | grep browser_download_url | head -n 1 | cut -d '"' -f 4)
+           echo $asset_url
 
           #workdir=$(mktemp -d)
           #trap 'rm -rf "$workdir"' EXIT
