@@ -50,7 +50,10 @@ jobs:
           workdir=$(mktemp -d)
           trap 'rm -rf "$workdir"' EXIT
 
-          #curl -Lf --retry 3 --retry-delay 2 "$asset_url" -o "$workdir/poppler.zip"
+          echo $asset_url
+          echo $workdir
+          
+          curl -Lf --retry 3 --retry-delay 2 "$asset_url" -o "$workdir/poppler.zip"
 
           #if command -v unzip >/dev/null 2>&1; then
           #    unzip -q "$workdir/poppler.zip" -d "$workdir"
