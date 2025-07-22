@@ -54,8 +54,8 @@ jobs:
 
           unzip -q "$workdir/poppler.zip" -d "$workdir"
 
-          bindir=$(find "$workdir/Library/bin" -name 'pdfunite.exe' -exec dirname {} \; | head -n 1)
-
+          bindir=$(find "$workdir" -name 'pdfunite.exe' -exec dirname {} \; | head -n 1)
+          
           echo $bindir
 
           # Add Poppler bin directory to PATH for subsequent steps
