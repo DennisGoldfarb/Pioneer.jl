@@ -55,14 +55,16 @@ jobs:
           
           curl -Lf --retry 3 --retry-delay 2 "$asset_url" -o "$workdir/poppler.zip"
 
-          #if command -v unzip >/dev/null 2>&1; then
-          #    unzip -q "$workdir/poppler.zip" -d "$workdir"
-          #elif command -v 7z >/dev/null 2>&1; then
-          #    7z x "$workdir/poppler.zip" -o"$workdir" >/dev/null
-          #else
-          #    echo "No unzip utility found" >&2
-          #    exit 1
-          #fi
+          if command -v unzip >/dev/null 2>&1; then
+              echo "unzip"
+              unzip -q "$workdir/poppler.zip" -d "$workdir"
+          elif command -v 7z >/dev/null 2>&1; then
+              echo "7zip"
+              7z x "$workdir/poppler.zip" -o"$workdir" >/dev/null
+          else
+              echo "No unzip utility found"
+              exit 1
+          fi
 
           #bindir=$(find "$workdir" -path '*pdfunite.exe' -exec dirname {} \; | head -n 1)
           # Add Poppler bin directory to PATH for subsequent steps
