@@ -16,52 +16,44 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """
-    B(x, k, i, t)
+    splevl_fast(x, knots, c, k)
 
-Evaluate B-spline basis function of degree k for the i-th basis function.
+Evaluate a B-spline using De Boor's algorithm. This implementation is
+optimized for cubic splines but works for any degree `k`.
 """
-function B(x::T, k::Int, i::Int, t::NTuple{N,T}) where {N,T<:AbstractFloat}
-    # Base case for k=0 (constant basis function)
-    if k == 0
-        return T(t[i] ≤ x < t[i+1])
+function splevl_fast(x::T, knots::NTuple{N,T}, c::NTuple{M,T}, k::Int) where {M,N,T<:AbstractFloat}
+    n = length(c)
+    m = length(knots) - 1
+    j = searchsortedlast(knots, x) - 1
+    if j < 0 || j > m - 1
+        return zero(T)
     end
-    
-    # First term: uses nodes t[i] through t[i+k]
-    c1 = if t[i+k] == t[i]
-        zero(T)
-    else
-        ((x - t[i]) / (t[i+k] - t[i])) * B(x, k-1, i, t)
+
+    d = Vector{T}(undef, k + 1)
+    for i in 0:k
+        idx = j - k + i
+        d[i+1] = (0 <= idx < n) ? c[idx + 1] : zero(T)
     end
-    
-    # Second term: uses nodes t[i+1] through t[i+k+1]
-    c2 = if t[i+k+1] == t[i+1]
-        zero(T)
-    else
-        ((t[i+k+1] - x) / (t[i+k+1] - t[i+1])) * B(x, k-1, i+1, t)
+
+    for r in 1:k
+        for i in k:-1:r
+            left = knots[j - k + i + 1]
+            right = knots[j + i - r + 2]
+            denom = right - left
+            α = denom == 0 ? zero(T) : (x - left) / denom
+            d[i+1] = (1 - α) * d[i] + α * d[i+1]
+        end
     end
-    
-    return c1 + c2
+    return d[k+1]
 end
 
 """
-    splevl(x, t, c, k)
+    splevl(x, knots, c, k)
 
-Evaluate B-spline with knots t, coefficients c, and degree k at point x.
+Deprecated wrapper kept for backward compatibility.  Calls `splevl_fast`.
 """
-function splevl(x::T, knots::NTuple{N,T}, c::NTuple{M,T}, k::Int) where {M,N,T<:AbstractFloat}
-    # Number of basis functions is (length(t) - k - 1)
-    n = length(knots) - k - 1
-    
-    # Input validation
-    @assert n ≥ k+1 && length(c) ≥ n "Invalid input sizes"
-    
-    # Sum up the contributions from each basis function
-    v = zero(T)
-    for i in 1:n
-        v += c[i] * B(x, k, i, knots)
-    end
-    return v
-end
+splevl(x::T, knots::NTuple{N,T}, c::NTuple{M,T}, k::Int) where {M,N,T<:AbstractFloat} =
+    splevl_fast(x, knots, c, k)
 
 """
     getSplineQuadrature(dtype::Type)

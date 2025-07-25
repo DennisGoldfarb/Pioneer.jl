@@ -382,7 +382,12 @@ function getIntensity(
                     pf::SplineDetailedFrag{N, T},
                     intensity_type::SplineType{M, T}
                     ) where {M, N, T<:AbstractFloat}
-   return splevl(getNCE(intensity_type), getKnots(intensity_type), pf.intensity, getDegree(intensity_type))::T
+   return splevl_fast(
+        getNCE(intensity_type),
+        getKnots(intensity_type),
+        pf.intensity,
+        getDegree(intensity_type),
+    )::T
 end
 
 #LibraryFragment{T}() where {T<:AbstractFloat} = LibraryFragment(zero(T), zero(UInt8), false, zero(UInt8), zero(UInt8), zero(Float32), zero(UInt8), zero(UInt32), zero(UInt8), zero(UInt8))
