@@ -22,29 +22,31 @@ Evaluate a B-spline using De Boor's algorithm. This implementation is
 optimized for cubic splines but works for any degree `k`.
 """
 function splevl_fast(x::T, knots::NTuple{N,T}, c::NTuple{M,T}, k::Int) where {M,N,T<:AbstractFloat}
+    t = collect(knots)
     n = length(c)
-    m = length(knots) - 1
-    j = searchsortedlast(knots, x) - 1
-    if j < 0 || j > m - 1
+
+    # identify knot span; return zero if x outside support
+    j = searchsortedlast(t, x)
+    if j <= k || j > n
         return zero(T)
     end
 
     d = Vector{T}(undef, k + 1)
     for i in 0:k
-        idx = j - k + i
-        d[i+1] = (0 <= idx < n) ? c[idx + 1] : zero(T)
+        d[i + 1] = c[j - k + i]
     end
 
     for r in 1:k
         for i in k:-1:r
-            left = knots[j - k + i + 1]
-            right = knots[j + i - r + 2]
+            left = t[j - k + i]
+            right = t[j + i - r + 1]
             denom = right - left
             α = denom == 0 ? zero(T) : (x - left) / denom
-            d[i+1] = (1 - α) * d[i] + α * d[i+1]
+            d[i + 1] = (1 - α) * d[i] + α * d[i + 1]
         end
     end
-    return d[k+1]
+
+    return d[k + 1]
 end
 
 """
