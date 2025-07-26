@@ -128,3 +128,98 @@ degree = 3
 gqx, gqw = getSplineQuadrature(Float32, 20.0, 40.0);
 @btime splint(knots, c, 3, gqx, gqw)
 =#
+
+
+
+
+"""
+    BSplineEvaluator
+Struct to hold precomputed values for efficient B-spline evaluation.
+"""
+struct BSplineEvaluator{N,T<:AbstractFloat}
+    knots::NTuple{N,T}
+    k::Int
+    n::Int
+    denoms1::Vector{T}
+    denoms2::Vector{T}
+    workspace::Vector{T}
+    workspace2::Vector{T}
+end
+
+function BSplineEvaluator(knots::NTuple{N,T}, k::Int) where {N,T<:AbstractFloat}
+    n = length(knots) - k - 1
+    denoms1, denoms2 = precompute_denominators(knots, k)
+    workspace = zeros(T, n + k)
+    workspace2 = zeros(T, n + k)
+    return BSplineEvaluator(knots, k, n, denoms1, denoms2, workspace, workspace2)
+end
+
+
+"""
+    precompute_denominators(knots, k)
+Precompute all denominators used in B-spline recursion since knots are fixed.
+"""
+function precompute_denominators(knots::NTuple{N,T}, k::Int) where {N,T<:AbstractFloat}
+    n = length(knots) - k - 1
+    denoms1 = Vector{T}(undef, n * k)
+    denoms2 = Vector{T}(undef, n * k)
+    
+    idx = 1
+    for deg in 1:k
+        for i in 1:n
+            if i + deg - 1 ≤ length(knots) - 1
+                denoms1[idx] = knots[i+deg] - knots[i]
+                denoms2[idx] = knots[i+deg+1] - knots[i+1]
+            else
+                denoms1[idx] = zero(T)
+                denoms2[idx] = zero(T)
+            end
+            idx += 1
+        end
+    end
+    
+    return denoms1, denoms2
+end
+
+
+"""
+    evaluate!(evaluator, x, c)
+Evaluate B-spline with precomputed evaluator. Most efficient method.
+"""
+function evaluate!(evaluator::BSplineEvaluator{N,T}, x::T, c::NTuple{M,T}) where {N,M,T<:AbstractFloat}
+    (; knots, k, n, denoms1, denoms2, workspace, workspace2) = evaluator
+    
+    # Initialize degree 0 basis functions
+    @inbounds for i in 1:length(workspace)-1
+        workspace[i] = T(knots[i] ≤ x < knots[i+1])
+    end
+    workspace[end] = zero(T)
+    
+    # Build up higher degree basis functions
+    for deg in 1:k
+        fill!(workspace2, zero(T))
+        base_idx = (deg - 1) * n
+        
+        @inbounds for i in 1:n
+            idx = base_idx + i
+            
+            if denoms1[idx] != zero(T)
+                workspace2[i] += ((x - knots[i]) / denoms1[idx]) * workspace[i]
+            end
+            
+            if denoms2[idx] != zero(T)
+                workspace2[i] += ((knots[i+deg+1] - x) / denoms2[idx]) * workspace[i+1]
+            end
+        end
+        
+        workspace, workspace2 = workspace2, workspace
+    end
+    
+    # Sum contributions
+    result = zero(T)
+    @inbounds for i in 1:n
+        result += c[i] * workspace[i]
+    end
+    
+    return result
+end
