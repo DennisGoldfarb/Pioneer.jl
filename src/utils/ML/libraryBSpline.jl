@@ -155,6 +155,7 @@ function BSplineEvaluator(knots::NTuple{N,T}, k::Int) where {N,T<:AbstractFloat}
 end
 
 
+
 """
     precompute_denominators(knots, k)
 Precompute all denominators used in B-spline recursion since knots are fixed.

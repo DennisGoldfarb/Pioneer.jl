@@ -146,11 +146,13 @@ struct SplineType{M,T<:AbstractFloat} <: IntensityDataType
     knots::NTuple{M, T}
     nce::T
     degree::Int64
+    evaluator::BSplineEvaluator{M,T}
 end
 
 getNCE(st::SplineType) = st.nce
 getKnots(st::SplineType) = st.knots
 getDegree(st::SplineType) = st.degree
+getEvaluator(st::SplineType) = st.evaluator
 
 struct ConstantType <: IntensityDataType end
 
@@ -382,7 +384,7 @@ function getIntensity(
                     pf::SplineDetailedFrag{N, T},
                     intensity_type::SplineType{M, T}
                     ) where {M, N, T<:AbstractFloat}
-   return splevl(getNCE(intensity_type), getKnots(intensity_type), pf.intensity, getDegree(intensity_type))::T
+   return evaluate!(getEvaluator(intensity_type), getNCE(intensity_type), pf.intensity)::T
 end
 
 #LibraryFragment{T}() where {T<:AbstractFloat} = LibraryFragment(zero(T), zero(UInt8), false, zero(UInt8), zero(UInt8), zero(Float32), zero(UInt8), zero(UInt32), zero(UInt8), zero(UInt8))
@@ -578,9 +580,23 @@ struct SplineFragmentLookup{N,M,T<:AbstractFloat} <: LibraryFragmentLookup
     knots::NTuple{M, T}
     nce_model::Base.Ref{<:NceModel{T}}
     degree::Int64
+    evaluator::BSplineEvaluator{M,T}
+end
+
+function SplineFragmentLookup(
+    frags::Vector{SplineDetailedFrag{N,T}},
+    prec_frag_ranges::Vector{UInt64},
+    knots::NTuple{M,T},
+    nce_model::Base.Ref{<:NceModel{T}},
+    degree::Int
+) where {N,M,T<:AbstractFloat}
+    evaluator = BSplineEvaluator(knots, degree)
+    return SplineFragmentLookup{N,M,T}(frags, prec_frag_ranges, knots, nce_model, degree, evaluator)
 end
 end
 getDegree(lfp::SplineFragmentLookup) = lfp.degree
+#getKnots(lfp::SplineFragmentLookup) = lfp.knots
+getEvaluator(lfp::SplineFragmentLookup) = lfp.evaluator
 #getKnots(lfp::SplineFragmentLookup) = lfp.knots
 getFrag(lfp::SplineFragmentLookup, prec_idx::Integer) = lfp.frags[prec_idx]
 getFragments(lfp::SplineFragmentLookup) = lfp.frags
@@ -601,7 +617,8 @@ function getSplineData(lfp::SplineFragmentLookup{N,M,T}, prec_charge::UInt8, pre
     return SplineType(
         getKnots(lfp),
         getNCE(lfp, prec_charge, prec_mz),
-        getDegree(lfp)
+        getDegree(lfp),
+        getEvaluator(lfp)
     )
 end
 
@@ -609,7 +626,8 @@ function getSplineData(lfp::SplineFragmentLookup{N,M,T}) where {N,M,T<:AbstractF
     return SplineType(
         getKnots(lfp),
         getNCE(lfp),
-        getDegree(lfp)
+        getDegree(lfp),
+        getEvaluator(lfp)
     )
 end
 
@@ -627,7 +645,8 @@ function updateNceModel(lookup::SplineFragmentLookup{N,M,T}, new_nce_model::NceM
         lookup.prec_frag_ranges,
         lookup.knots,
         new_nce_model,
-        lookup.degree
+        lookup.degree,
+        lookup.evaluator
     )
 end
 #=

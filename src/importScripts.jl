@@ -102,6 +102,8 @@ function importScripts()
 
     safe_include!(joinpath(package_root, "src", "Routines","SearchDIA", "ParseInputs", "parseParams.jl"))
     safe_include!(joinpath(package_root, "src", "Routines","BuildSpecLib", "structs", "mods.jl"))
+    # Load BSpline utilities early so structs can depend on them
+    safe_include!(joinpath(package_root, "src", "utils", "ML", "libraryBSpline.jl"))
     
     include_files!(
         joinpath(package_root, "src","structs"),
@@ -137,8 +139,7 @@ function importScripts()
             "probitRegression.jl",
             "spectralLinearRegression.jl",
             "uniformBasisCubicSpline.jl",
-            "wittakerHendersonSmoothing.jl",
-            "libraryBSpline.jl"
+            "wittakerHendersonSmoothing.jl"
         ]
     )
 

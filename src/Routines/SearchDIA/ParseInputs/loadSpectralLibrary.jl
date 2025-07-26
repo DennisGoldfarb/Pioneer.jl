@@ -85,9 +85,9 @@ function loadSpectralLibrary(SPEC_LIB_DIR::String,
 
             spl_knots = load(joinpath(SPEC_LIB_DIR,"spline_knots.jld2"))["spl_knots"]
             library_fragment_lookup_table = SplineFragmentLookup(
-                detailed_frags, 
-                prec_frag_ranges, 
-                Tuple(spl_knots), 
+                detailed_frags,
+                prec_frag_ranges,
+                Tuple(spl_knots),
                 Ref(nmc),
                 3
             )
