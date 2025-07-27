@@ -18,8 +18,6 @@
 module Pioneer
 #__precompile__(false)
 using Arrow, ArrowTypes, ArgParse
-using Profile
-using PProf
 #using BSplineKit Don't need this imports anymore?
 using Base64
 using Base.Order
@@ -34,8 +32,8 @@ using LinearAlgebra, LoopVectorization, LinearSolve, LightXML
 using Measures
 using NumericalIntegration
 using Optim
-using Plots, PrettyPrinting, Polynomials, Profile, ProgressBars, Pkg, Printf
-using Tables, Test
+using Plots, PrettyPrinting, Polynomials, ProgressBars, Printf
+using Tables
 using StatsPlots, SentinelArrays
 using Random
 using StaticArrays, StatsBase, SpecialFunctions, Statistics, SparseArrays
