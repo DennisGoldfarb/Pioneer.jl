@@ -17,6 +17,9 @@
 
 # Entry point for PackageCompiler
 function main_SearchDIA()::Cint
+    if !haskey(ENV, "JULIA_DEPOT_PATH")
+        ENV["JULIA_DEPOT_PATH"] = joinpath(homedir(), ".julia")
+    end
     try
         SearchDIA(ARGS[1])
     catch

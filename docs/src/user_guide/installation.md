@@ -53,6 +53,30 @@ To install Pioneer for development, clone the github repository and use in a loc
    pkg> test
    ```
 
+### 2a. Set a Writable Julia Depot
+Pioneer stores package data in Julia's *depot* directory. If the installer places
+Pioneer under `/usr/local` or another system location, the default depot may be
+read-only, resulting in errors like
+
+```text
+InitError(mod=:TZData, error=Base.IOError(msg="mkdir(…/scratchspaces): permission denied (EACCES)"))
+```
+
+Ensure the environment variable `JULIA_DEPOT_PATH` points to a directory you own
+(for example `~/.julia`):
+
+```bash
+export JULIA_DEPOT_PATH="$HOME/.julia"
+```
+
+Add the line above to your shell profile if you want it to persist across
+sessions.
+
+The `pioneer` wrapper installed with the application automatically sets
+`JULIA_DEPOT_PATH` to `~/.julia` when the variable is unset. If you invoke the
+compiled subcommands directly, be sure to set `JULIA_DEPOT_PATH` yourself to
+avoid permission errors.
+
 !!! note "'note'"
     On the first attempt ```using Pioneer``` requires an internet connection, and it may take several minutes to download and install dependencies.
 

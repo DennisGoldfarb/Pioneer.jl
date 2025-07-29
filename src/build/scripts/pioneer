@@ -5,6 +5,13 @@ if [ -z "$JULIA_NUM_THREADS" ]; then
     export JULIA_NUM_THREADS=auto
 fi
 
+# Default the Julia depot to a user-writable location if not already set. This
+# ensures packages can create necessary scratch spaces when Pioneer is
+# installed system-wide.
+if [ -z "$JULIA_DEPOT_PATH" ]; then
+    export JULIA_DEPOT_PATH="$HOME/.julia"
+fi
+
 # Valid subcommands
 VALID_COMMANDS="search predict empirical search-config predict-config empirical-config convert-mzml"
 

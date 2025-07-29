@@ -19,6 +19,9 @@
 
 # Entry point for PackageCompiler
 function main_ParseSpecLib()::Cint
+    if !haskey(ENV, "JULIA_DEPOT_PATH")
+        ENV["JULIA_DEPOT_PATH"] = joinpath(homedir(), ".julia")
+    end
     try
         ParseSpecLib(ARGS[1])
     catch
