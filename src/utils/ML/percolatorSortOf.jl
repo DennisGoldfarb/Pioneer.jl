@@ -15,6 +15,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+const Booster = EvoTrees.EvoTreeClassifier
+
 function sort_of_percolator_in_memory!(psms::DataFrame, 
                   file_paths::Vector{String},
                   features::Vector{Symbol},
@@ -420,29 +422,24 @@ function train_booster(psms::AbstractDataFrame, features, num_round;
                        subsample::Float64,
                        gamma::Int,
                        max_depth::Int)
-    bst = xgboost(
-        (psms[!, features], psms[!, :target]),
-        num_round = num_round,
-        colsample_bytree = colsample_bytree,
-        colsample_bynode = colsample_bynode,
-        scale_pos_weight = sum(psms.decoy) / sum(psms.target),
-        gamma = gamma,
-        max_depth = max_depth,
+    model = EvoTreeClassifier(
+        loss = :logistic,
+        nrounds = num_round,
         eta = eta,
-        min_child_weight = min_child_weight,
-        subsample = subsample,
-        objective = "binary:logistic",
-        seed = rand(UInt32),
-        watchlist = (;),
+        max_depth = max_depth,
+        min_weight = min_child_weight,
+        row_sample = subsample,
+        col_sample = colsample_bytree,
+        gamma = gamma,
     )
-    bst.feature_names = string.(features)
-    return bst
+    fit!(model, Matrix(psms[:, features]), Vector(psms[:, :target]))
+    return model
 end
 
 function predict_fold!(bst::Booster, psms_train::AbstractDataFrame,
                        test_fold_psms::AbstractDataFrame, features)
-    test_fold_psms[!, :prob] = XGBoost.predict(bst, test_fold_psms[!, features])
-    psms_train[!, :prob] = XGBoost.predict(bst, psms_train[!, features])
+    test_fold_psms[!, :prob] = predict(bst, Matrix(test_fold_psms[:, features]))
+    psms_train[!, :prob] = predict(bst, Matrix(psms_train[:, features]))
     get_qvalues!(psms_train.prob, psms_train.target, psms_train.q_value)
 end
 
@@ -699,7 +696,7 @@ function predict_cv_models(models::Dictionary{UInt8,Booster},
     for (fold_idx, bst) in pairs(models)
         fold_rows = findall(==(fold_idx), df[!, :cv_fold])
         if !isempty(fold_rows)
-            probs[fold_rows] = XGBoost.predict(bst, df[fold_rows, features])
+            probs[fold_rows] = predict(bst, Matrix(df[fold_rows, features]))
         end
     end
     return probs
