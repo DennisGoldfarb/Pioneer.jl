@@ -17,6 +17,9 @@
 
 # Entry point for PackageCompiler
 function main_convertMzML()::Cint
+    if !haskey(ENV, "JULIA_DEPOT_PATH")
+        ENV["JULIA_DEPOT_PATH"] = joinpath(homedir(), ".julia")
+    end
     try
         convertMzML(ARGS[1], # input data path
                     skip_scan_header = length(ARGS) >= 2 ? parse(Bool, ARGS[2]) : true # skip scan header

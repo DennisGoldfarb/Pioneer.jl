@@ -17,6 +17,9 @@
 
 # Entry point for PackageCompiler
 function main_GetSearchParams()::Cint
+    if !haskey(ENV, "JULIA_DEPOT_PATH")
+        ENV["JULIA_DEPOT_PATH"] = joinpath(homedir(), ".julia")
+    end
     try
         GetSearchParams(ARGS[1], # library path
                         ARGS[2], # MS data path
@@ -33,6 +36,9 @@ end
 
 # Entry point for PackageCompiler
 function main_GetBuildLibParams()::Cint
+    if !haskey(ENV, "JULIA_DEPOT_PATH")
+        ENV["JULIA_DEPOT_PATH"] = joinpath(homedir(), ".julia")
+    end
     try
         GetBuildLibParams(ARGS[1], # library output path
                           ARGS[2], # library name
@@ -48,6 +54,9 @@ end
 
 # Entry point for PackageCompiler
 function main_GetParseSpecLibParams()::Cint
+    if !haskey(ENV, "JULIA_DEPOT_PATH")
+        ENV["JULIA_DEPOT_PATH"] = joinpath(homedir(), ".julia")
+    end
     try
         GetParseSpecLibParams(ARGS[1], ARGS[2];
             params_path = length(ARGS) >= 3 ? ARGS[3] : missing)
