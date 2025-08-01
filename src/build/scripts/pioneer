@@ -1,25 +1,20 @@
 #!/bin/bash
 
-# Set default threads to auto if not specified
+# Default to automatic threading if JULIA_NUM_THREADS is not set
 if [ -z "$JULIA_NUM_THREADS" ]; then
     export JULIA_NUM_THREADS=auto
 fi
 
-# Valid subcommands
-VALID_COMMANDS="search predict empirical search-config predict-config empirical-config convert-mzml"
-
-# Parse command line arguments for thread override
-SUBCOMMAND=""
-SUBCOMMAND_ARGS=()
-
+ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
         --threads)
             if [[ -n "$2" && "$2" != --* ]]; then
                 export JULIA_NUM_THREADS="$2"
                 shift 2
+                continue
             else
-                echo "Error: --threads requires a value"
+                echo "Error: --threads requires a value" >&2
                 exit 1
             fi
             ;;
@@ -27,104 +22,13 @@ while [[ $# -gt 0 ]]; do
             export JULIA_NUM_THREADS="${1#*=}"
             shift
             ;;
-        --help|-h)
-            echo "Pioneer - Mass Spectrometry Data Analysis"
-            echo ""
-            echo "Usage: pioneer [options] <subcommand> [subcommand-args...]"
-            echo ""
-            echo "Options:"
-            echo "  --threads N        Set number of Julia threads (default: auto)"
-            echo "  --threads=N        Alternative syntax for setting threads"
-            echo "  --help, -h         Show this help message"
-            echo ""
-            echo "Subcommands:"
-            echo "  search <path_to_config.json>                Perform DIA search analysis"
-            echo "  predict <path_to_config.json>               Predict spectral library"
-            echo "  empirical <path_to_config.json>             Parse spectral library"
-            echo "  search-config <path_to_spectral_lib> <path_to_ms_data> <path_to_search_results> [config_output_path]"
-            echo "                                              Generate search parameter template."
-            echo "                                              Default config output path: ./search_parameters.json"
-            echo "  predict-config <output_path_to_spectral_lib> <lib_name> <path_to_fasta_dir> [config_output_path]"
-            echo "                                              Generate library build parameter template."
-            echo "                                              Default config output path: ./buildspeclib_params.json"
-            echo "  empirical-config <input_path_to_empirical_lib> <output_path_to_spectral_lib> [config_output_path]"
-            echo "                                              Generate parse parameter template"
-            echo "                                              Default config output path: ./parsespeclib_params.json"
-            echo "  convert-mzml <path_to_mzml_dir> [skip_header]"
-            echo "                                              Convert mzML files"
-            
-            echo ""
-            echo "Examples:"
-            echo "  pioneer predict-config yeast.poin yeast fasta/ predict_config.json"
-            echo "  pioneer predict predict_config.json"
-            echo "  pioneer search-config yeast.poin data/ results/ search_config.json"
-            echo "  pioneer search search_config.json                                        # Use auto threading"
-            echo "  pioneer --threads=8 search search_config.json                            # Use 8 threads"
-            echo ""
-            echo "For subcommand-specific help:"
-            echo "  pioneer <subcommand> --help"
-            exit 0
-            ;;
-        -*)
-            echo "Error: Unknown option $1"
-            echo "Use --help for usage information"
-            exit 1
-            ;;
         *)
-            # First non-option argument should be the subcommand
-            if [[ -z "$SUBCOMMAND" ]]; then
-                # Check if it's a valid subcommand
-                if [[ " $VALID_COMMANDS " =~ " $1 " ]]; then
-                    SUBCOMMAND="$1"
-                else
-                    echo "Error: Unknown subcommand '$1'"
-                    echo "Valid subcommands: $VALID_COMMANDS"
-                    echo "Use --help for usage information"
-                    exit 1
-                fi
-            else
-                # All remaining arguments go to the subcommand
-                SUBCOMMAND_ARGS+=("$1")
-            fi
+            ARGS+=("$1")
             shift
             ;;
     esac
 done
 
-# Check if subcommand was provided
-if [[ -z "$SUBCOMMAND" ]]; then
-    echo "Error: Subcommand required"
-    echo "Valid subcommands: $VALID_COMMANDS"
-    echo "Use --help for usage information"
-    exit 1
-fi
-
-# Map aliases to the canonical executable names
-case "$SUBCOMMAND" in
-    search)
-        SUBCOMMAND="SearchDIA"
-        ;;
-    predict)
-        SUBCOMMAND="BuildSpecLib"
-        ;;
-    empirical)
-        SUBCOMMAND="ParseSpecLib"
-        ;;
-    empirical-config)
-        SUBCOMMAND="GetParseSpecLibParams"
-        ;;
-    search-config)
-        SUBCOMMAND="GetSearchParams"
-        ;;
-    predict-config)
-        SUBCOMMAND="GetBuildLibParams"
-        ;;
-    convert-mzml)
-        SUBCOMMAND="convertMzML"
-        ;;
-esac
-
-# Resolve the actual script location, handling symlinks
 SCRIPT_PATH="$0"
 while [ -L "$SCRIPT_PATH" ]; do
     SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
@@ -133,6 +37,4 @@ while [ -L "$SCRIPT_PATH" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" && pwd)"
 
-# Call the actual Pioneer executable with subcommand and its arguments
-# The executables are in the bin/ subdirectory relative to the script location
-exec "$SCRIPT_DIR/bin/$SUBCOMMAND" "${SUBCOMMAND_ARGS[@]}"
+exec "$SCRIPT_DIR/bin/PioneerCLI" "${ARGS[@]}"
