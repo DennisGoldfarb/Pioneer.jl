@@ -107,7 +107,8 @@ jobs:
           fi
           curl -L "https://github.com/DennisGoldfarb/PioneerConverter/releases/latest/download/$ASSET" -o converter.zip
           unzip -q converter.zip -d converter
-          cp -r "converter/PioneerConverter-${PATTERN}/"* "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin/"
+          cp converter/*/bin/PioneerConverter.exe "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin/"
+          cp -r converter/*/lib/* "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/lib/"
 
       - name: Add wrapper scripts
         shell: bash
