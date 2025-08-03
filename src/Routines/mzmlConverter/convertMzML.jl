@@ -17,7 +17,6 @@
 
 # Entry point for PackageCompiler
 function main_convertMzML(argv=ARGS)::Cint
-    println("Raw arguments: ", argv)
     settings = ArgParseSettings(; autofix_names = true)
     @add_arg_table! settings begin
         "mzml_dir"
@@ -30,9 +29,8 @@ function main_convertMzML(argv=ARGS)::Cint
             required = false
     end
     parsed_args = parse_args(argv, settings; as_symbols = true)
-    println("Parsed arguments: ", parsed_args)
     try
-        convertMzML(parsed_args[:mzml_dir]; 
+        convertMzML(parsed_args[:mzml_dir];
                     skip_scan_header = parsed_args[:skip_header])
     catch
         Base.invokelatest(Base.display_error, Base.catch_stack())

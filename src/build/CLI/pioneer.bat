@@ -7,7 +7,7 @@ set SCRIPT_DIR=%~dp0
 
 set SUBCOMMAND=
 set SUBCOMMAND_ARGS=
-set VALID_COMMANDS=search predict empirical params-search params-predict params-empirical convert-raw convert-mzml
+set VALID_COMMANDS=search predict empirical params-search params-predict convert-raw convert-mzml
 
 :parse_args
 if "%~1"=="" goto check_subcommand
@@ -107,9 +107,6 @@ echo                                                 Default params output path:
 echo   params-predict ^<library_outpath^> ^<lib_name^> ^<fasta_path^> [--params-path ^<params_out_path^>]
 echo                                                 Generate library build parameter template
 echo                                                 Default params output path: ./buildspeclib_params.json
-echo   params-empirical ^<empirical_lib_path^> ^<library_outpath^> [--params-path ^<params_out_path^>]
-echo                                                 Generate parse parameter template
-echo                                                 Default params output path: ./parsespeclib_params.json
 echo   convert-raw ^<data_path^> [options]
 echo                                                 Convert Thermo RAW files
 echo   convert-mzml ^<data_path^> [skip_header]
@@ -139,7 +136,6 @@ rem Map aliases to canonical executable names
 if /I "%SUBCOMMAND%"=="search" set SUBCOMMAND=SearchDIA
 if /I "%SUBCOMMAND%"=="predict" set SUBCOMMAND=BuildSpecLib
 if /I "%SUBCOMMAND%"=="empirical" set SUBCOMMAND=ParseSpecLib
-if /I "%SUBCOMMAND%"=="params-empirical" set SUBCOMMAND=GetParseSpecLibParams
 if /I "%SUBCOMMAND%"=="params-search" set SUBCOMMAND=GetSearchParams
 if /I "%SUBCOMMAND%"=="params-predict" set SUBCOMMAND=GetBuildLibParams
 if /I "%SUBCOMMAND%"=="convert-mzml" set SUBCOMMAND=convertMzML
@@ -149,7 +145,6 @@ if /I "%SUBCOMMAND%"=="convert-raw" set SUBCOMMAND=PioneerConverter
 :run_pioneer
 rem The executables are in the bin\ subdirectory
 set "EXEC=%SCRIPT_DIR%bin\%SUBCOMMAND%.exe"
-echo Executing: "%EXEC%" %SUBCOMMAND_ARGS%
 if "%SUBCOMMAND_ARGS%"=="" (
     "%EXEC%"
 ) else (

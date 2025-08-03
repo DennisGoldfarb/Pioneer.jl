@@ -17,7 +17,6 @@
 
 # Entry point for PackageCompiler
 function main_GetSearchParams(argv=ARGS)::Cint
-    println("Raw arguments: ", argv)
     settings = ArgParseSettings(; autofix_names = true)
     @add_arg_table! settings begin
         "library_path"
@@ -35,7 +34,6 @@ function main_GetSearchParams(argv=ARGS)::Cint
             default = joinpath(pwd(), "search_parameters.json")
     end
     parsed_args = parse_args(argv, settings; as_symbols = true)
-    println("Parsed arguments: ", parsed_args)
     params_path = parsed_args[:params_path]
     try
        GetSearchParams(parsed_args[:library_path],
@@ -52,7 +50,6 @@ end
 
 # Entry point for PackageCompiler
 function main_GetBuildLibParams(argv=ARGS)::Cint
-    println("Raw arguments: ", argv)
     settings = ArgParseSettings(; autofix_names = true)
     @add_arg_table! settings begin
         "out_dir"
@@ -70,7 +67,6 @@ function main_GetBuildLibParams(argv=ARGS)::Cint
             default = joinpath(pwd(), "buildspeclib_params.json")
     end
     parsed_args = parse_args(argv, settings; as_symbols = true)
-    println("Parsed arguments: ", parsed_args)
     params_path = parsed_args[:params_path]
     try
         GetBuildLibParams(parsed_args[:out_dir],
@@ -86,7 +82,6 @@ end
 
 # Entry point for PackageCompiler
 function main_GetParseSpecLibParams(argv=ARGS)::Cint
-    println("Raw arguments: ", argv)
     settings = ArgParseSettings(; autofix_names = true)
     @add_arg_table! settings begin
         "input_lib_path"
@@ -101,7 +96,6 @@ function main_GetParseSpecLibParams(argv=ARGS)::Cint
             default = joinpath(pwd(), "parsespeclib_params.json")
     end
     parsed_args = parse_args(argv, settings; as_symbols = true)
-    println("Parsed arguments: ", parsed_args)
     params_path = parsed_args[:params_path]
     try
         GetParseSpecLibParams(parsed_args[:input_lib_path], 
