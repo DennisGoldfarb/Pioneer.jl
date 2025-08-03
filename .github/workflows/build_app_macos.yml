@@ -120,6 +120,7 @@ jobs:
                 "SearchDIA" => "main_SearchDIA",
                 "convertMzML" => "main_convertMzML"
               ],
+              include_lazy_artifacts=true,
               precompile_execution_file="src/build/snoop.jl",
             );
           '

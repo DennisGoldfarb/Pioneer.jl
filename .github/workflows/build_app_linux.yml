@@ -74,6 +74,7 @@ jobs:
               incremental=false, force=true,
               executables=[first_exe => first_main],
               cpu_target="generic",
+              include_lazy_artifacts=true,
               precompile_execution_file="src/build/snoop.jl");
 
             for (exe, main) in executables[2:end]
@@ -83,6 +84,7 @@ jobs:
                 incremental=false, force=true,
                 executables=[exe => main],
                 cpu_target="generic",
+                include_lazy_artifacts=true,
                 precompile_execution_file="src/build/snoop.jl");
 
               cp("build/temp_$exe/bin/$exe",
