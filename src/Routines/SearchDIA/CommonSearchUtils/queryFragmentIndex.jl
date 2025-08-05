@@ -21,10 +21,11 @@
                                lower_bound_guess::UInt32,
                                upper_bound_guess::UInt32,
                                frag_mz_min::Float32,
-                               frag_mz_max::Float32,
-                               step_size::UInt32) -> Tuple{UInt32, UInt32}
+                               frag_mz_max::Float32) -> Tuple{UInt32, UInt32}
 
 Find new lower and upper bounds for fragment bin search using exponential search.
+The initial step size is derived from the distance between the prior search
+bounds, allowing the search to adapt to recent query patterns.
 
 # Arguments
 - `frag_index_bins`: Array of fragment index bins
@@ -33,7 +34,6 @@ Find new lower and upper bounds for fragment bin search using exponential search
 - `upper_bound_guess`: Initial upper bound guess
 - `frag_mz_min`: Minimum fragment m/z value
 - `frag_mz_max`: Maximum fragment m/z value
-- `step_size`: Initial step size for exponential search
 
 # Process
 1. Exponentially increases upper bound until fragment m/z range is contained
@@ -48,17 +48,17 @@ function exponentialFragmentBinSearch(frag_index_bins::AbstractArray{FragIndexBi
                                         lower_bound_guess::UInt32,
                                         upper_bound_guess::UInt32,
                                         frag_mz_min::Float32,
-                                        frag_mz_max::Float32,
-                                        step_size::UInt32)
+                                        frag_mz_max::Float32)
     #return lower_bound_guess, upper_bound_guess
     initial_lower_bound_guess = lower_bound_guess
+    step_size = max(one(UInt32), upper_bound_guess - lower_bound_guess)
     n = zero(UInt8)
     step = one(UInt32)
-    #exponential search for new upper and lower bounds 
-    while (getHigh(frag_index_bins[upper_bound_guess]) < frag_mz_max) #Need a new upper and lower bound guess 
-        lower_bound_guess = upper_bound_guess 
-        step = step_size << n 
-        upper_bound_guess += step #Exponentially increasing guess 
+    #exponential search for new upper and lower bounds
+    while (getHigh(frag_index_bins[upper_bound_guess]) < frag_mz_max) #Need a new upper and lower bound guess
+        lower_bound_guess = upper_bound_guess
+        step = step_size << n
+        upper_bound_guess += step #Exponentially increasing guess
         if upper_bound_guess > frag_bin_max_idx #If guess exceeds limits
             upper_bound_guess = frag_bin_max_idx #then set to maximum 
             #This was a mistake 
@@ -237,7 +237,6 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
         upper_bound_guess,
         frag_mz_min,
         frag_mz_max,
-        UInt32(2048) #step size
     )
     #First frag_bin matching fragment tolerance
     frag_bin_idx = findFirstFragmentBin(

@@ -141,13 +141,12 @@ end
     frag_mz_max = 30000.0f0
     frag_mz_absolute_min = 10.0f0
     lower_idx, upper_idx = exponentialFragmentBinSearch(
-        test_frag_bins, 
+        test_frag_bins,
         frag_bin_max_idx, #frag_bin_max_idx
         UInt32(1), #lower_bound_guess
         UInt32(1), #upper_bound_guess
         frag_mz_max ,#frag_mz_max
         frag_mz_absolute_min,#frag_mz_abslute_min
-        UInt32(2048)#step_si´
     )
     @test lower_idx == UInt32(1)
     @test getHigh(test_frag_bins[lower_idx]) < frag_mz_absolute_min
@@ -156,13 +155,12 @@ end
     frag_mz_max = 30000.0f0
     frag_mz_absolute_min = 29000.0f0
     lower_idx, upper_idx = exponentialFragmentBinSearch(
-        test_frag_bins, 
+        test_frag_bins,
         frag_bin_max_idx, #frag_bin_max_idx
         UInt32(1), #lower_bound_guess
         UInt32(1), #upper_bound_guess
         frag_mz_absolute_min,#frag_mz_abslute_min
         frag_mz_max ,#frag_mz_max
-        UInt32(2048)#step_si´
     )
     @test lower_idx <= UInt32((upper_idx >> 1))
     @test getHigh(test_frag_bins[lower_idx]) < frag_mz_absolute_min
@@ -171,13 +169,12 @@ end
     frag_mz_max = Float32(Inf)
     frag_mz_absolute_min = 29000.0f0
     lower_idx, upper_idx = exponentialFragmentBinSearch(
-        test_frag_bins, 
+        test_frag_bins,
         frag_bin_max_idx, #frag_bin_max_idx
         UInt32(1), #lower_bound_guess
         UInt32(1), #upper_bound_guess
         frag_mz_absolute_min,#frag_mz_abslute_min
         frag_mz_max ,#frag_mz_max
-        UInt32(2048)#step_si´
     )
     @test upper_idx == frag_bin_max_idx
     @test lower_idx != upper_idx
@@ -188,13 +185,12 @@ end
     frag_mz_max = Float32(Inf)
     frag_mz_absolute_min = Float32(Inf)
     lower_idx, upper_idx = exponentialFragmentBinSearch(
-        test_frag_bins, 
+        test_frag_bins,
         frag_bin_max_idx, #frag_bin_max_idx
         UInt32(1), #lower_bound_guess
         UInt32(1), #upper_bound_guess
         frag_mz_absolute_min,#frag_mz_abslute_min
         frag_mz_max ,#frag_mz_max
-        UInt32(2048)#step_si´
     )
     @test upper_idx == frag_bin_max_idx
     #@test lower_idx == upper_idx

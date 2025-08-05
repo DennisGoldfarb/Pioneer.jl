@@ -76,7 +76,8 @@ weights = solve(Hs, observed_intensities)
 **Purpose**: Efficiently searches hierarchical fragment index for precursor identification
 
 **Key Algorithms**:
-- **Exponential Search**: `exponentialFragmentBinSearch()` for rapid bound expansion
+- **Exponential Search**: `exponentialFragmentBinSearch()` adapts its expansion step
+  based on the previous search distance for rapid bound refinement
 - **Branchless Binary Search**: `findFirstFragmentBin()` for optimal performance
 - **Hierarchical Indexing**: RT bins → Fragment bins → Individual fragments
 
