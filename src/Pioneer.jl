@@ -47,8 +47,6 @@ using Dates
 using InlineStrings
 using HTTP
 
-gr() # set GR as plotting backend
-
 """
 Type alias for m/z to eV interpolation functions.
 Uses GriddedInterpolation with linear interpolation and line extrapolation.
@@ -82,7 +80,6 @@ include(joinpath(@__DIR__, "Routines","BuildSpecLib.jl"))
 include(joinpath(@__DIR__, "Routines","ParseSpecLib.jl"))
 include(joinpath(@__DIR__, "Routines","GenerateParams.jl"))
 include(joinpath(@__DIR__, "Routines","mzmlConverter","convertMzML.jl"))
-include(joinpath(@__DIR__, "Routines","PioneerCLI.jl"))
 const CHARGE_ADJUSTMENT_FACTORS = Float64[1, 0.9, 0.85, 0.8, 0.75]
 
 # H2O, PROTON, NEUTRON constants are defined in get_mz.jl and available via importScripts()
@@ -124,7 +121,9 @@ const KOINA_URLS = Dict(
     "altimeter" => "http://127.0.0.1:8000/v2/models/Altimeter_2024_splines_index/infer",
 )
 
-
+function __init__()
+    gr() # set GR as plotting backend
+end
 
 export SearchDIA, BuildSpecLib, ParseSpecLib, GetSearchParams, GetBuildLibParams, GetParseSpecLibParams, convertMzML
 end

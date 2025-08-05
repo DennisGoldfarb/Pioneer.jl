@@ -85,19 +85,79 @@ jobs:
                 cpu_target="generic",
                 precompile_execution_file="src/build/snoop.jl");
 
-              cp("build/temp_$exe/bin/$exe",
-                 "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin/$exe",
-                 force=true)
+            # Copy the executable
+            cp("build/temp_$exe/bin/$exe",
+              "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin/$exe",
+              force=true)
 
-              rm("build/temp_$exe", recursive=true)
+            # Merge artifacts - copy any new artifacts that dont exist in main build
+            if isdir("build/temp_$exe/share/julia/artifacts")
+              main_artifacts_dir = "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/share/julia/artifacts"
+              mkpath(main_artifacts_dir)  # Ensure the directory exists
+              
+              for artifact in readdir("build/temp_$exe/share/julia/artifacts")
+                src_path = "build/temp_$exe/share/julia/artifacts/$artifact"
+                dst_path = joinpath(main_artifacts_dir, artifact)
+                
+                if isdir(src_path) && !isdir(dst_path)
+                  println("Copying missing artifact: $artifact")
+                  cp(src_path, dst_path, force=true)
+                elseif isdir(src_path) && isdir(dst_path)
+                  # Artifact directory exists, but might be missing files
+                  # Check if destination has content, if empty, replace it
+                  if isempty(readdir(dst_path))
+                    println("Replacing empty artifact directory: $artifact")
+                    rm(dst_path, recursive=true)
+                    cp(src_path, dst_path, force=true)
+                  else
+                    println("Artifact $artifact already exists and has content, skipping")
+                  end
+                end
+              end
             end
-            delete!(ENV, "PIONEER_CMD")
+
+            # Also merge any other shared directories that might be needed
+            for shared_dir in ["depot", "compiled"]
+              src_shared = "build/temp_$exe/share/julia/$shared_dir"
+              dst_shared = "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/share/julia/$shared_dir"
+              if isdir(src_shared) && !isdir(dst_shared)
+                println("Copying missing shared directory: $shared_dir")
+                cp(src_shared, dst_shared, force=true)
+              end
+            end
+
+            rm("build/temp_$exe", recursive=true)
+          end
+          delete!(ENV, "PIONEER_CMD")
           '
+
+      - name: Download PioneerConverter
+        shell: bash
+        run: |
+          mkdir -p converter
+          PATTERN="${{ matrix.identifier }}"
+          echo "Using PATTERN=$PATTERN"
+          ASSET=$(curl -sL https://api.github.com/repos/nwamsley1/PioneerConverter/releases/latest \
+            | jq -r --arg PATTERN "$PATTERN" '.assets[] | select(.name | test("PioneerConverter-" + $PATTERN + ".*\\.zip")) | .name' | head -n 1)
+          echo "Resolved ASSET=$ASSET"
+          if [ -z "$ASSET" ]; then
+            echo "Failed to find PioneerConverter asset for pattern $PATTERN" >&2
+            exit 1
+          fi
+          curl -L "https://github.com/nwamsley1/PioneerConverter/releases/latest/download/$ASSET" -o converter.zip
+          unzip -q converter.zip -d converter
+          echo "Contents of converter after unzip:"
+          find converter -maxdepth 3 -print
+          echo "Listing of converter/*/bin:"
+          ls converter/*/bin || true
+          cp -r "converter/PioneerConverter-${PATTERN}/bin/"* "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/bin/"
+          mkdir -p "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/lib"
+          cp -r "converter/PioneerConverter-${PATTERN}/lib/"* "build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/lib/"
 
       - name: Add wrapper scripts
         shell: bash
         run: |
-          cp src/build/scripts/pioneer build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/
+          cp src/build/CLI/pioneer build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/
           chmod +x build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/pioneer
 
       - name: Package Linux .deb
@@ -105,15 +165,12 @@ jobs:
           mkdir -p deb/usr/local/Pioneer
           cp -r build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/* deb/usr/local/Pioneer/
           mkdir -p deb/usr/local/Pioneer/data
-          cp -r data/IsotopeSplines deb/usr/local/Pioneer/data/
-          cp data/contaminants.fasta.gz deb/usr/local/Pioneer/data/
-          cp data/immonium.txt deb/usr/local/Pioneer/data/
-          cp data/ion_dictionary.txt deb/usr/local/Pioneer/data/
+          cp -r assets/* deb/usr/local/Pioneer/data/
 
           mkdir -p deb/usr/local/bin
           ln -sf ../Pioneer/pioneer deb/usr/local/bin/pioneer
 
-          chmod -R a+w deb/usr/local/Pioneer/share/julia
+          chmod -R a+rwx deb/usr/local/Pioneer/share/julia
 
           info=src/build/package_info.json
           PACKAGE=$(jq -r '.package' "$info")
@@ -128,16 +185,25 @@ jobs:
           Description: $DESCRIPTION
           EOF
 
-          dpkg-deb --build deb Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.deb
+          dpkg-deb --build --root-owner-group deb Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.deb
+
+      - name: Package zipped binaries
+        run: |
+          cd build/Pioneer_${{ matrix.identifier }}/Applications
+          zip -r ../../../Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.zip Pioneer
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Pioneer-${{ matrix.identifier }}
-          path: Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.deb
+          path: |
+            Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.deb
+            Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.zip
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.get_version.outputs.VERSION }}
-          files: Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.deb
+          files: |
+            Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.deb
+            Pioneer-${{ steps.get_version.outputs.VERSION }}-${{ matrix.identifier }}.zip

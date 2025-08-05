@@ -18,9 +18,18 @@
 # src/BuildSpecLib.jl
 
 # Entry point for PackageCompiler
-function main_BuildSpecLib()::Cint
+function main_BuildSpecLib(argv=ARGS)::Cint
+    
+    settings = ArgParseSettings(; autofix_names = true)
+    @add_arg_table! settings begin
+        "params_path"
+            help = "Path to BuildSpecLib parameters JSON file"
+            arg_type = String
+    end
+    parsed_args = parse_args(argv, settings; as_symbols = true)
+    
     try
-        BuildSpecLib(ARGS[1])
+        BuildSpecLib(parsed_args[:params_path])
     catch
         Base.invokelatest(Base.display_error, Base.catch_stack())
         return 1
