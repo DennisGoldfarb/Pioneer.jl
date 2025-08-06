@@ -73,8 +73,8 @@ struct ParameterTuningSearchResults <: SearchResults
     irt::Vector{Float32}
     rt::Vector{Float32}
     ppm_errs::Vector{Float32}
-    rt_plots::Vector{Plots.Plot}
-    mass_plots::Vector{Plots.Plot}
+    rt_plots::Vector{Any}
+    mass_plots::Vector{Any}
     qc_plots_folder_path::String
 end
 
@@ -202,8 +202,8 @@ function init_search_results(::ParameterTuningSearchParameters, search_context::
         Vector{Float32}(),
         Vector{Float32}(),
         Vector{Float32}(),
-        Plots.Plot[],
-        Plots.Plot[],
+        Any[],
+        Any[],
         qc_dir
     )
 end

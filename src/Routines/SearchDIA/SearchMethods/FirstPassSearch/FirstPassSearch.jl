@@ -75,7 +75,7 @@ struct FirstPassSearchResults <: SearchResults
     psms::Base.Ref{DataFrame}
     ms1_mass_err_model::Base.Ref{<:MassErrorModel}
     ms1_ppm_errs::Vector{Float32}
-    ms1_mass_plots::Vector{Plots.Plot}
+    ms1_mass_plots::Vector{Any}
     qc_plots_folder_path::String
 end
 
@@ -188,7 +188,7 @@ function init_search_results(
         Base.Ref{DataFrame}(),
         Base.Ref{MassErrorModel}(),
         Vector{Float32}(),
-        Plots.Plot[],
+        Any[],
         qc_dir
     )
 end

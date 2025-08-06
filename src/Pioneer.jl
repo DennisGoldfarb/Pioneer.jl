@@ -72,6 +72,7 @@ Random.seed!(1776);
 #Import Pioneer Files 
 include("importScripts.jl")
 files_loaded = importScripts()
+using .PlottingCompat
 
 #importScriptsSpecLib(files_loaded)
 #include(joinpath(@__DIR__, "Routines","LibrarySearch","method"s,"loadSpectralLibrary.jl"))
@@ -153,9 +154,9 @@ function ensure_plotting_loaded()
             ENV["GKSwstype"] = "100"  # Use non-interactive backend
             ENV["QT_QPA_PLATFORM"] = "offscreen"  # Prevent Qt GUI initialization
             
-            # Load plotting packages at module level
-            @eval using Plots
-            @eval using StatsPlots
+            # Load plotting packages at module level without importing symbols
+            @eval import Plots
+            @eval import StatsPlots
             
             # Ensure GR backend is set
             ENV["PLOTS_DEFAULT_BACKEND"] = "GR"

@@ -80,8 +80,8 @@ struct QuadTuningSearchResults <: SearchResults
     }}}
     quad_model::Base.Ref{QuadTransmissionModel}
     quad_plot_dir::String
-    quad_model_plots::Vector{Plots.Plot}
-    quad_data_plots::Vector{Plots.Plot}
+    quad_model_plots::Vector{Any}
+    quad_data_plots::Vector{Any}
 end
 
 """
@@ -213,8 +213,8 @@ function init_search_results(::QuadTuningSearchParameters, search_context::Searc
         temp_data,
         Ref{QuadTransmissionModel}(),
         qpp,
-        Plots.Plot[],
-        Plots.Plot[]
+        Any[],
+        Any[]
     )
 end
 

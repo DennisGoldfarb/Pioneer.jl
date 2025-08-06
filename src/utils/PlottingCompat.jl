@@ -23,8 +23,6 @@ Ensures backward compatibility while preventing Qt conflicts.
 """
 module PlottingCompat
 
-using ..Pioneer: ensure_plotting_loaded
-
 """
     @with_plots expr
 
@@ -41,7 +39,7 @@ end
 """
 macro with_plots(expr)
     quote
-        ensure_plotting_loaded()
+        Pioneer.ensure_plotting_loaded()
         $(esc(expr))
     end
 end

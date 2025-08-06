@@ -63,7 +63,7 @@ Holds NCE models and associated PSM data for each file.
 struct NceTuningSearchResults <: SearchResults
     nce_models::Dict{Int64, NceModel}
     nce_psms::DataFrame
-    nce_plots::Vector{Plots.Plot}
+    nce_plots::Vector{Any}
     nce_plot_dir::String
 end
 
@@ -149,7 +149,7 @@ function init_search_results(
     return NceTuningSearchResults(
         Dict{Int64, NceModel}(),
         DataFrame(),
-        Plots.Plot[],
+        Any[],
         nce_model_plots_path
     )
 end

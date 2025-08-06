@@ -728,6 +728,7 @@ function generate_mass_error_plot(
     results::ParameterTuningSearchResults,
     fname::String
 )
+    Pioneer.ensure_plotting_loaded()
     #p = histogram(results.ppm_errs)
     #savefig(p, plot_path)
     mem = results.mass_err_model[]

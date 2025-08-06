@@ -20,6 +20,7 @@ function plotRTAlign(RT::Vector{T},
                     rt_map::Any; 
                     out_fdir::String = "./",
                     out_fname::String = "rt_align_plot") where {T<:AbstractFloat}
+    Pioneer.ensure_plotting_loaded()
     n = length(RT)
 
     plot_title = ""
@@ -49,7 +50,7 @@ function plotRTAlign(RT::Vector{T},
             alpha = 0.1,
             dpi = 300)
     #=
-    Plots.plot!(p, (LinRange(minimum(RT), maximum(RT), 100)), 
+    Any!(p, (LinRange(minimum(RT), maximum(RT), 100)), 
             rt_map.(LinRange(minimum(RT), maximum(RT), 100)),
             lw = 6.0,
             label = "RT Spline")

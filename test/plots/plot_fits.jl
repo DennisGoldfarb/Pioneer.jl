@@ -62,7 +62,7 @@ Visualize mass spectrometry data in the traditional spectral plot style with ver
 - `max_annotations::Int=50`: Maximum number of annotations to show
 
 # Returns
-- `p::Plots.Plot`: The generated visualization
+- `p::Any`: The generated visualization
 """
 function visualize_precursor_fit_ms_style(
     A::Matrix{T},                      # Template matrix
@@ -300,7 +300,7 @@ Create a chromatogram visualization for the specified precursors.
 - `legend_position=:topright`: Position of the legend
 
 # Returns
-- `p::Plots.Plot`: The generated visualization
+- `p::Any`: The generated visualization
 """
 function visualize_chromatogram(
     matched_precursors,            # Dictionary with chromatogram data
