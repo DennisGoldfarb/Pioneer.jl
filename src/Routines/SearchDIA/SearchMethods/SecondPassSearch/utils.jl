@@ -191,6 +191,7 @@ function process_scans!(
                 getIsotopes(search_data),
                 params.n_frag_isotopes,
                 params.max_frag_rank,
+                params.frag_iso_cutoff,
                 rt_index,
                 irt_start,
                 irt_stop,

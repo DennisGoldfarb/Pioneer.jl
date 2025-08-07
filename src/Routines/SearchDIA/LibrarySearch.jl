@@ -140,8 +140,8 @@ function getPSMS(
     msms_counts = Dict{Int64, Int64}()
     last_val = 0
     Hs = SparseArray(UInt32(5000))
-    isotopes = zeros(Float32, 5)
-    precursor_transmission = zeros(Float32, 5)
+    isotopes = zeros(Float32, getNFragIsotopes(params))
+    precursor_transmission = zeros(Float32, getNFragIsotopes(params))
     for scan_idx in thread_task
         (scan_idx == 0 || scan_idx > length(spectra)) && continue
         ismissing(scan_to_prec_idx[scan_idx]) && continue
@@ -165,9 +165,9 @@ function getPSMS(
             getIsoSplines(search_data),
             getQuadTransmissionFunction(qtm, getCenterMz(spectra, scan_idx), getIsolationWidthMz(spectra, scan_idx)),
             precursor_transmission, isotopes, getNFragIsotopes(params),
-            getMaxFragRank(params),
+            getMaxFragRank(params), getFragIsoCutoff(params),
             Float32(rt_to_irt_spline(getRetentionTime(spectra, scan_idx))),
-            Float32(irt_tol), 
+            Float32(irt_tol),
             (getLowMz(spectra, scan_idx), getHighMz(spectra, scan_idx));
             isotope_err_bounds = getIsotopeErrBounds(params)
         )

@@ -73,6 +73,7 @@ struct HuberTuningSearchParameters{P<:PrecEstimation} <: FragmentIndexSearchPara
     isotope_err_bounds::Tuple{UInt8, UInt8}
     n_frag_isotopes::Int64
     max_frag_rank::UInt8
+    frag_iso_cutoff::Float32
     sample_rate::Float32
     spec_order::Set{Int64}
     
@@ -126,6 +127,7 @@ struct HuberTuningSearchParameters{P<:PrecEstimation} <: FragmentIndexSearchPara
             (UInt8(first(isotope_bounds)), UInt8(last(isotope_bounds))),
             Int64(frag_params.n_isotopes),  # Fixed n_frag_isotopes
             UInt8(frag_params.max_rank),  # Using max possible rank
+            Float32(get(global_params.isotope_settings, :isotope_percent_cutoff, 0.01)),
             1.0f0,  # Full sampling
             Set{Int64}([2]),
             

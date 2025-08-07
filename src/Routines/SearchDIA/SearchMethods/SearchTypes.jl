@@ -316,6 +316,7 @@ getMinPsms(fsp::SearchParameters)              = fsp.min_psms
 getMinSpectralContrast(fsp::SearchParameters)   = fsp.min_spectral_contrast
 getMinTopNofM(fsp::SearchParameters)            = fsp.min_topn_of_m
 getNFragIsotopes(fsp::SearchParameters)         = fsp.n_frag_isotopes
+getFragIsoCutoff(fsp::SearchParameters)         = :frag_iso_cutoff ∈ fieldnames(typeof(fsp)) ? getfield(fsp, :frag_iso_cutoff) : 0.01f0
 getOutlierThreshold(fsp::SearchParameters)     = fsp.spline_fit_outlier_sd
 getPrecEstimation(fsp::SearchParameters)       = fsp.prec_estimation
 getSampleRate(fsp::SearchParameters)           = fsp.sample_rate

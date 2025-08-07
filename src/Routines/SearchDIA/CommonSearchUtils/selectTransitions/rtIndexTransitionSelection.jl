@@ -42,6 +42,7 @@ function _select_transitions_impl!(
     isotopes::Vector{Float32},
     n_frag_isotopes::Int64,
     max_frag_rank::UInt8,
+    frag_iso_cutoff::Float32,
     rt_index::retentionTimeIndex{Float32, Float32},
     rt_start_idx::Int64,
     rt_stop_idx::Int64,
@@ -115,6 +116,7 @@ function _select_transitions_impl!(
                 isotopes,
                 n_frag_isotopes,
                 max_frag_rank,
+                frag_iso_cutoff,
                 iso_splines,
                 frag_mz_bounds,
                 block_size

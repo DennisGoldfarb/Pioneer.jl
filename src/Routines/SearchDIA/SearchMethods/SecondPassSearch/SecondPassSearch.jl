@@ -69,6 +69,7 @@ struct SecondPassSearchParameters{P<:PrecEstimation, I<:IsotopeTraceType} <: Fra
     min_fraction_transmitted::Float32
     n_frag_isotopes::Int64
     max_frag_rank::UInt8
+    frag_iso_cutoff::Float32
     sample_rate::Float32
     spec_order::Set{Int64}
     match_between_runs::Bool
@@ -135,6 +136,7 @@ struct SecondPassSearchParameters{P<:PrecEstimation, I<:IsotopeTraceType} <: Fra
             Float32(min_fraction_transmitted),
             Int64(frag_params.n_isotopes),
             UInt8(frag_params.max_rank),
+            Float32(get(global_params.isotope_settings, :isotope_percent_cutoff, 0.01)),
             1.0f0,  # Full sampling rate
             Set{Int64}([2]),
             Bool(global_params.match_between_runs),

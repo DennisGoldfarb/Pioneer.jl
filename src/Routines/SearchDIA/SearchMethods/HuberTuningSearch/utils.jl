@@ -321,6 +321,7 @@ function select_transitions_for_huber!(
         getIsotopes(search_data),
         params.n_frag_isotopes,
         params.max_frag_rank,
+        params.frag_iso_cutoff,
         rt_index,#getRtIndex(search_context),
         irt_start,
         irt_stop,
