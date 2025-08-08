@@ -2,23 +2,31 @@
 
 This document outlines the GitHub Actions workflows that power continuous integration and delivery for Pioneer.jl.
 
-## Overview
+## Workflows
 
-The repository leverages several workflows to test, build, and release the project across platforms. The table below summarizes which events trigger each workflow.
+The repository uses several workflows:
 
-| Workflow | Event Triggers | Purpose |
-| --- | --- | --- |
-| `tests.yml` | Push to any branch or tags matching `v*.*.*`; pull requests; manual dispatch | Run the test suite on Ubuntu with Julia 1.11 |
-| `docs.yml` | Push to `main`; tags matching `v*`; pull requests; manual dispatch | Build and deploy documentation |
-| `build_app_linux.yml` | Push to `main` or `develop`; tags matching `v*.*.*`; pull requests to `main` or `develop`; manual dispatch (optional `tag` input) | Build and package the Linux application |
-| `build_app_macos.yml` | Push to `main` or `develop`; tags matching `v*.*.*`; pull requests to `main` or `develop`; manual dispatch (optional `tag` input) | Build and package the macOS application |
-| `build_app_windows.yml` | Push to `main` or `develop`; tags matching `v*.*.*`; pull requests to `main` or `develop`; manual dispatch (optional `tag` input) | Build and package the Windows application |
-| `CompatHelper.yml` | Scheduled daily (`0 0 * * *`); manual dispatch | Update package compatibility constraints |
-| `TagBot.yml` | Tag pushes; creation of issue comments; manual dispatch | Tag new releases and interact with Julia's package registry |
+- `tests.yml` – run the test suite on Ubuntu with Julia 1.11
+- `docs.yml` – build and deploy documentation
+- `build_app_linux.yml`, `build_app_macos.yml`, `build_app_windows.yml` – build and package applications for Linux, macOS, and Windows
+- `CompatHelper.yml` – update package compatibility constraints (scheduled daily)
+- `TagBot.yml` – tag releases and interact with the Julia package registry
+
+## Event Matrix
+
+| Event | Ref / Condition | CI – test | CI – docs | Build & Package (Linux/macOS/Windows) | Publish Release (Linux/macOS/Windows) |
+| --- | --- | --- | --- | --- | --- |
+| push | branch == `main` | Yes | Yes | Yes | No |
+| push | branch == `develop` | Yes | No | Yes | No |
+| push | branch ∉ {`main`, `develop`} | No | No | No | No |
+| push (tag) | tag matches `v*.*.*` | Yes | No | Yes | Yes |
+| pull_request | base in {`main`, `develop`} | Yes | No | Yes | No |
+| pull_request | base ∉ {`main`, `develop`} | Yes | No | No | No |
+| workflow_dispatch | tag provided | Yes | Only if ref == `main` | Yes | Yes |
+| workflow_dispatch | no tag provided | Yes | Only if ref == `main` | Yes | No |
 
 ## Additional Notes
 
 - Most workflows support `workflow_dispatch` for manual invocation.
 - Build workflows use concurrency controls to cancel in-progress runs when new commits arrive on the same reference.
-- Tag-based releases (`v*.*.*`) trigger build and test workflows as well as documentation and tagging automation.
-
+- Tag-based releases (`v*.*.*`) trigger build and test workflows as well as tagging automation.
