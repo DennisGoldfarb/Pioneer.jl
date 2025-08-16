@@ -265,7 +265,13 @@ function summarize_results!(
                 perm = randperm(length(idx))
                 decoys = merged_df[idx, :]
                 decoys.MBR_best_irt_diff .= decoys.MBR_best_irt_diff[perm]
-                decoy_probs = predict_cv_models(models, decoys, features)
+
+                cv_models = Dictionaries.Dictionary{UInt8, EvoTrees.EvoTree}()
+                for (fold, fold_models) in pairs(models)
+                    Dictionaries.insert!(cv_models, fold, fold_models[end])
+                end
+
+                decoy_probs = predict_cv_models(cv_models, decoys, features)
                 clamp_mbr_probs!(decoys, decoy_probs)
                 decoys.target .= false
                 if :decoy in names(decoys)
