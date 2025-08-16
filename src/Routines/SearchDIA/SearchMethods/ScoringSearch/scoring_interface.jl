@@ -245,14 +245,14 @@ function apply_mbr_filter!(
     )
 
     # 4) one fused pass to clamp probs
-    merged_df._filtered_prob = ifelse.(
+    merged_df.prob = ifelse.(
         candidate_mask .& (merged_df.MBR_prob .< τ),
         0.0f0,
         merged_df.MBR_prob
     )
 
-    # if downstream code expects a Symbol for the prob-column
-    return :_filtered_prob
+    # downstream code uses the updated :prob column
+    return :prob
 end
 
 """
