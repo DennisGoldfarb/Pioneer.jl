@@ -65,26 +65,26 @@ function score_precursor_isotope_traces(
     if psms_count > max_psms_in_memory
         # Use out-of-memory algorithm
         best_psms = sample_psms_for_xgboost(second_pass_folder, psms_count, max_psms_in_memory)
-        models = score_precursor_isotope_traces_out_of_memory!(
+        models, features = score_precursor_isotope_traces_out_of_memory!(
             best_psms,
             file_paths,
             precursors,
             match_between_runs,
             max_q_value_xgboost_rescore,
             max_q_value_xgboost_mbr_rescore,
-            min_PEP_neg_threshold_xgboost_rescore
+            min_PEP_neg_threshold_xgboost_rescore,
         )
     else
         # Use in-memory algorithm
         best_psms = load_psms_for_xgboost(second_pass_folder)
-        models = score_precursor_isotope_traces_in_memory!(
+        models, features = score_precursor_isotope_traces_in_memory!(
             best_psms,
             file_paths,
             precursors,
             match_between_runs,
             max_q_value_xgboost_rescore,
             max_q_value_xgboost_mbr_rescore,
-            min_PEP_neg_threshold_xgboost_rescore
+            min_PEP_neg_threshold_xgboost_rescore,
         )
     end
     
@@ -92,7 +92,7 @@ function score_precursor_isotope_traces(
     best_psms = nothing
     GC.gc()
     
-    return models
+    return models, features
 end
 """
      get_psms_count(quant_psms_folder::String)::Integer
@@ -268,23 +268,23 @@ function score_precursor_isotope_traces_in_memory!(
         best_psms[!,:decoy] = best_psms[!,:target].==false;
 
         models = sort_of_percolator_in_memory!(
-                                best_psms, 
+                                best_psms,
                                 file_paths,
                                 features,
                                 match_between_runs;
                                 max_q_value_xgboost_rescore,
                                 max_q_value_xgboost_mbr_rescore,
                                 min_PEP_neg_threshold_xgboost_rescore,
-                                colsample_bytree = 0.5, 
+                                colsample_bytree = 0.5,
                                 colsample_bynode = 0.5,
-                                min_child_weight = 5, 
+                                min_child_weight = 5,
                                 gamma = 1,
-                                subsample = 0.25, 
+                                subsample = 0.25,
                                 max_depth = 10,
-                                eta = 0.05, 
+                                eta = 0.05,
                                 iter_scheme = [100, 200, 200],
                                 print_importance = false);
-        return models;#best_psms
+        return models, features;#best_psms
     else
         if size(best_psms, 1) > 1000
             @warn "Less than 100,000 psms. Training with simplified target-decoy discrimination model..."
@@ -322,23 +322,23 @@ function score_precursor_isotope_traces_in_memory!(
         #see src/utils/ML/percolatorSortOf.jl
         #Train EvoTrees/XGBoost model to score each precursor trace. Target-decoy descrimination
         models = sort_of_percolator_in_memory!(
-                                best_psms, 
+                                best_psms,
                                 file_paths,
                                 features,
                                 match_between_runs;
                                 max_q_value_xgboost_rescore,
                                 max_q_value_xgboost_mbr_rescore,
                                 min_PEP_neg_threshold_xgboost_rescore,
-                                colsample_bytree = 1.0, 
+                                colsample_bytree = 1.0,
                                 colsample_bynode = 1.0,
-                                min_child_weight = 1, 
+                                min_child_weight = 1,
                                 gamma = 0,
-                                subsample = 1.0, 
+                                subsample = 1.0,
                                 max_depth = 3,
                                 eta = 0.01,
                                 iter_scheme = [200],
                                 print_importance = false);
-        return models
+        return models, features
     end
 end
 
@@ -438,23 +438,23 @@ function score_precursor_isotope_traces_out_of_memory!(
         best_psms[!,:decoy] = best_psms[!,:target].==false;
 
         models = sort_of_percolator_out_of_memory!(
-                                best_psms, 
+                                best_psms,
                                 file_paths,
                                 features,
                                 match_between_runs;
                                 max_q_value_xgboost_rescore,
                                 max_q_value_xgboost_mbr_rescore,
                                 min_PEP_neg_threshold_xgboost_rescore,
-                                colsample_bytree = 0.5, 
+                                colsample_bytree = 0.5,
                                 colsample_bynode = 0.5,
-                                min_child_weight = 5, 
+                                min_child_weight = 5,
                                 gamma = 1,
-                                subsample = 0.25, 
+                                subsample = 0.25,
                                 max_depth = 10,
-                                eta = 0.05, 
+                                eta = 0.05,
                                 iter_scheme = [100, 200, 200],
                                 print_importance = false);
-        return models;#best_psms
+        return models, features;#best_psms
     else
         @warn "Less than 100,000 psms. Training with simplified target-decoy discrimination model..."
         file_paths = [fpath for fpath in file_paths if endswith(fpath,".arrow")]
@@ -480,22 +480,22 @@ function score_precursor_isotope_traces_out_of_memory!(
         #see src/utils/ML/percolatorSortOf.jl
         #Train EvoTrees/XGBoost model to score each precursor trace. Target-decoy descrimination
         models = sort_of_percolator_out_of_memory!(
-                                best_psms, 
+                                best_psms,
                                 file_paths,
                                 features,
                                 match_between_runs;
                                 max_q_value_xgboost_rescore,
                                 max_q_value_xgboost_mbr_rescore,
                                 min_PEP_neg_threshold_xgboost_rescore,
-                                colsample_bytree = 1.0, 
+                                colsample_bytree = 1.0,
                                 colsample_bynode = 1.0,
-                                min_child_weight = 100, 
+                                min_child_weight = 100,
                                 gamma = 0,
-                                subsample = 1.0, 
+                                subsample = 1.0,
                                 max_depth = 3,
-                                eta = 0.01, 
+                                eta = 0.01,
                                 iter_scheme = [200],
                                 print_importance = false);
-        return models;#best_psms
+        return models, features;#best_psms
     end
 end

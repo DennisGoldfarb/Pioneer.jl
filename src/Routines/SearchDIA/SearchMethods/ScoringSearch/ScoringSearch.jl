@@ -231,7 +231,7 @@ function summarize_results!(
         # Step 1: Train EvoTrees/XGBoost Models
         @info "Step 1: Training EvoTrees/XGBoost models..."
         step1_time = @elapsed begin
-            score_precursor_isotope_traces(
+            models, features = score_precursor_isotope_traces(
                 second_pass_folder,
                 getSecondPassPsms(getMSData(search_context)),
                 getPrecursors(getSpecLib(search_context)),
@@ -239,7 +239,7 @@ function summarize_results!(
                 params.max_q_value_xgboost_rescore,
                 params.max_q_value_xgboost_mbr_rescore,
                 params.min_PEP_neg_threshold_xgboost_rescore,
-                params.max_psms_in_memory
+                params.max_psms_in_memory,
             )
         end
         @info "Step 1 completed in $(round(step1_time, digits=2)) seconds"
@@ -258,6 +258,23 @@ function summarize_results!(
                                reverse=[true, true])
 
             merged_df = DataFrame(Arrow.Table(merged_scores_path))
+
+            if params.calibrate_ftr_with_decoys
+                merged_df[!, :MBR_synth_decoy] = falses(nrow(merged_df))
+                idx = findall(.!ismissing.(merged_df.MBR_is_best_decoy))
+                perm = randperm(length(idx))
+                decoys = merged_df[idx, :]
+                decoys.MBR_best_irt_diff .= decoys.MBR_best_irt_diff[perm]
+                decoy_probs = predict_cv_models(models, decoys, features)
+                clamp_mbr_probs!(decoys, decoy_probs)
+                decoys.target .= false
+                if :decoy in names(decoys)
+                    decoys.decoy .= true
+                end
+                decoys.MBR_synth_decoy .= true
+                append!(merged_df, decoys)
+            end
+
             sqrt_n_runs = floor(Int64, sqrt(length(getFilePaths(getMSData(search_context)))))
 
             if params.match_between_runs
@@ -286,6 +303,7 @@ function summarize_results!(
             end
         end
         @info "Step 2 completed in $(round(step2_time, digits=2)) seconds"
+        models = nothing; features = nothing; GC.gc()
 
         # Step 3: Find Best Isotope Traces
         @info "Step 3: Finding best isotope traces..."
