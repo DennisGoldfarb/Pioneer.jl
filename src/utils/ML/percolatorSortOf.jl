@@ -111,6 +111,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             0f0,
             max(psms.prob, coalesce(psms.MBR_max_pair_prob, psms.prob))
         )
+        psms[!, :prob] .= psms[!, :MBR_prob]
     end
     
     dropVectorColumns!(psms) # avoids writing issues
@@ -720,6 +721,7 @@ function clamp_mbr_probs!(df::AbstractDataFrame, probs::AbstractVector{Float32})
         0f0,
         max(df.prob, coalesce(df.MBR_max_pair_prob, df.prob)),
     )
+    df[!, :prob] .= df[!, :MBR_prob]
     return df
 end
 

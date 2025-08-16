@@ -256,23 +256,20 @@ function summarize_results!(
             sqrt_n_runs = floor(Int64, sqrt(length(getFilePaths(getMSData(search_context)))))
 
             if params.match_between_runs
-                prob_col = apply_mbr_filter!(
+                apply_mbr_filter!(
                     merged_df,
                     params,
                     getLibraryFdrScaleFactor(search_context))
-            else
-                prob_col = :prob
             end
 
             transform!(groupby(merged_df, [:precursor_idx, :ms_file_idx]),
-                       prob_col => (p -> begin
+                       :prob => (p -> begin
                            prob = 1.0f0 - 0.000001f0 - exp(sum(log1p.(-p)))
                            prob = clamp(prob, eps(Float32), 1.0f0 - eps(Float32))
                            Float32(prob)
                        end) => :prec_prob)
             transform!(groupby(merged_df, :precursor_idx),
                        :prec_prob => (p -> logodds(p, sqrt_n_runs)) => :global_prob)
-            prob_col == :_filtered_prob && select!(merged_df, Not(:_filtered_prob)) # drop temp trace prob TODO maybe we want this for getting best traces
 
             # Write updated data back to individual files
             for (idx, ref) in enumerate(second_pass_refs)
