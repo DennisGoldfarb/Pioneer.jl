@@ -60,6 +60,7 @@ struct ScoringSearchParameters{I<:IsotopeTraceType} <: SearchParameters
     max_q_value_xgboost_mbr_rescore::Float32
     min_PEP_neg_threshold_xgboost_rescore::Float32
     max_MBR_false_transfer_rate::Float32
+    calibrate_ftr_with_decoys::Bool
     q_value_threshold::Float32
     isotope_tracetype::I
 
@@ -76,6 +77,9 @@ struct ScoringSearchParameters{I<:IsotopeTraceType} <: SearchParameters
             SeperateTraces()
         end
         
+        calibrate = haskey(global_params.scoring, :calibrate_ftr_with_decoys) ?
+            Bool(global_params.scoring.calibrate_ftr_with_decoys) : false
+
         new{typeof(isotope_trace_type)}(
             Int64(ml_params.max_psms_in_memory),
             Float32(ml_params.min_trace_prob),
@@ -89,6 +93,7 @@ struct ScoringSearchParameters{I<:IsotopeTraceType} <: SearchParameters
             Float32(ml_params.max_q_value_xgboost_mbr_rescore),
             Float32(ml_params.min_PEP_neg_threshold_xgboost_rescore),
             Float32(global_params.scoring.q_value_threshold),
+            calibrate,
             Float32(global_params.scoring.q_value_threshold),
             isotope_trace_type
         )
