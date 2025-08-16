@@ -257,13 +257,13 @@ function summarize_results!(
             stream_sorted_merge(second_pass_refs, merged_scores_path, :prob, :target;
                                reverse=[true, true])
 
-            merged_df = DataFrame(Arrow.Table(merged_scores_path))
+            merged_df = DataFrame(Arrow.Table(merged_scores_path; convert=true), copycols=true)
 
             if params.calibrate_ftr_with_decoys
                 merged_df[!, :MBR_synth_decoy] = falses(nrow(merged_df))
                 idx = findall(.!ismissing.(merged_df.MBR_is_best_decoy))
                 perm = randperm(length(idx))
-                decoys = merged_df[idx, :]
+                decoys = copy(merged_df[idx, :])
                 decoys.MBR_best_irt_diff .= decoys.MBR_best_irt_diff[perm]
 
                 cv_models = Dictionaries.Dictionary{UInt8, EvoTrees.EvoTree}()
