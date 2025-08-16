@@ -108,12 +108,20 @@ end
     label_bad_transfers()
 
 Mark transfers that appear to come from the wrong class (target/decoy).
+
+Synthetic decoys are generated earlier in the pipeline and identified by
+the `:MBR_synth_decoy` flag, so this function only labels transfers.
 """
 function label_bad_transfers()
     op = function(df)
         mask = df.MBR_transfer_candidate
         df[!, :MBR_bad_transfer] = mask .& ((df.target .& coalesce.(df.MBR_is_best_decoy, false)) .|
                                            (df.decoy .& .!coalesce.(df.MBR_is_best_decoy, true)))
+
+        if :MBR_synth_decoy ∈ names(df)
+            df.MBR_bad_transfer .= df.MBR_bad_transfer .| df.MBR_synth_decoy
+        end
+
         return df
     end
     return "label_bad_transfers" => op
@@ -122,13 +130,25 @@ end
 """
     apply_ftr_threshold(max_ftr::Float32)
 
-Clamp `:MBR_prob` values based on the false transfer rate threshold.
+Clamp `:MBR_prob` values based on the false transfer rate threshold. If
+synthetic decoys are present they are included in the threshold
+calculation and removed afterward.
 """
 function apply_ftr_threshold(max_ftr::Float32)
     op = function(df)
-        τ = get_ftr_threshold(df.MBR_prob, df.target, df.MBR_bad_transfer, max_ftr; mask=df.MBR_transfer_candidate)
-        mask = df.MBR_transfer_candidate .& (df.MBR_prob .< τ)
-        df.MBR_prob[mask] .= 0.0f0
+        if :MBR_synth_decoy ∈ names(df)
+            mask_all = df.MBR_transfer_candidate .| df.MBR_synth_decoy
+            decoy_mask = df.MBR_bad_transfer .| df.MBR_synth_decoy
+            τ = get_ftr_threshold(df.MBR_prob, df.target, decoy_mask, max_ftr; mask=mask_all)
+            mask = df.MBR_transfer_candidate .& (df.MBR_prob .< τ)
+            df.MBR_prob[mask] .= 0.0f0
+            filter!(row -> !row.MBR_synth_decoy, df)
+            select!(df, Not(:MBR_synth_decoy))
+        else
+            τ = get_ftr_threshold(df.MBR_prob, df.target, df.MBR_bad_transfer, max_ftr; mask=df.MBR_transfer_candidate)
+            mask = df.MBR_transfer_candidate .& (df.MBR_prob .< τ)
+            df.MBR_prob[mask] .= 0.0f0
+        end
         return df
     end
     return "apply_ftr_threshold" => op
@@ -221,12 +241,12 @@ function apply_mbr_filter!(
         merged_df.prob,
         merged_df.target,
         trace_qval;
-        fdr_scale_factor = fdr_scale_factor
+        fdr_scale_factor = fdr_scale_factor,
     )
 
     # 2) build boolean masks locally
-    candidate_mask = 
-        (trace_qval .> params.q_value_threshold) .& 
+    candidate_mask =
+        (trace_qval .> params.q_value_threshold) .&
         .!ismissing.(merged_df.MBR_is_best_decoy)
 
     bad_mask =
@@ -235,21 +255,38 @@ function apply_mbr_filter!(
         (merged_df.decoy  .& .!coalesce.(merged_df.MBR_is_best_decoy, true))
         )
 
-    # 3) compute threshold using the local bad_mask
-    τ = get_ftr_threshold(
-        merged_df.MBR_prob,
-        merged_df.target,
-        bad_mask,
-        params.max_MBR_false_transfer_rate;
-        mask = candidate_mask
-    )
+    # 3) compute threshold using existing synthetic decoys if present
+    if params.calibrate_ftr_with_decoys && :MBR_synth_decoy ∈ names(merged_df)
+        mask_all = candidate_mask .| merged_df.MBR_synth_decoy
+        decoy_mask = bad_mask .| merged_df.MBR_synth_decoy
+        τ = get_ftr_threshold(
+            merged_df.MBR_prob,
+            merged_df.target,
+            decoy_mask,
+            params.max_MBR_false_transfer_rate;
+            mask = mask_all,
+        )
+    else
+        τ = get_ftr_threshold(
+            merged_df.MBR_prob,
+            merged_df.target,
+            bad_mask,
+            params.max_MBR_false_transfer_rate;
+            mask = candidate_mask,
+        )
+    end
 
     # 4) one fused pass to clamp probs
     merged_df._filtered_prob = ifelse.(
         candidate_mask .& (merged_df.MBR_prob .< τ),
         0.0f0,
-        merged_df.MBR_prob
+        merged_df.MBR_prob,
     )
+
+    if params.calibrate_ftr_with_decoys && :MBR_synth_decoy ∈ names(merged_df)
+        filter!(row -> !row.MBR_synth_decoy, merged_df)
+        select!(merged_df, Not(:MBR_synth_decoy))
+    end
 
     # if downstream code expects a Symbol for the prob-column
     return :_filtered_prob

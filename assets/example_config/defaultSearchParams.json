@@ -8,7 +8,8 @@
             "min_fraction_transmitted" : 0.25
         },
         "scoring": {
-            "q_value_threshold": 0.01
+            "q_value_threshold": 0.01,
+            "calibrate_ftr_with_decoys": false
         },
         "normalization": {
             "n_rt_bins": 100,
