@@ -150,7 +150,7 @@ function BuildSpecLib(params_path::String)
             # Validate prediction model
             model_timing = @timed begin
                 prediction_model = params["library_params"]["prediction_model"]
-                PREDICTION_MODELS = collect(keys(KOINA_URLS))
+                PREDICTION_MODELS = collect(keys(MODEL_CONFIGS))
                 if !(prediction_model ∈ PREDICTION_MODELS)
                     error("Invalid prediction model: $prediction_model. Valid options: $(join(PREDICTION_MODELS, ", "))")
                 end
@@ -201,7 +201,8 @@ function BuildSpecLib(params_path::String)
 
             dual_println("Predicting retention times...")
             rt_timing = @timed begin
-                predict_retention_times(chronologer_in_path, chronologer_out_path)
+                rt_model = get(params["library_params"], "rt_model", "chronologer")
+                predict_retention_times(chronologer_in_path, chronologer_out_path; rt_model=rt_model)
                 nothing
             end
             timings["Retention Time Prediction"] = rt_timing

@@ -83,6 +83,9 @@ function parse_chronologer_output(
         :rt => :irt,
         :upid => :proteome_identifiers
     ))
+    if :coefficients ∈ names(precursors_df)
+        rename!(precursors_df, Dict(:coefficients => :rt_coefficients))
+    end
 
     # Add sequence length column
     precursors_df[!, :length] = zeros(UInt8, nrow(precursors_df))

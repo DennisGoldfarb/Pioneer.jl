@@ -219,6 +219,7 @@ Most parameters should not be changed, but the following may need adjustement.
 | `include_neutral_diff` | Boolean | Include neutral loss annotations (default: true) |
 | `instrument_type` | String | Instrument type for predictions (default: "NONE") |
 | `prediction_model` | String | Model for fragment predictions (default: "altimeter") |
+| `rt_model` | String | Model for retention time predictions (default: "chronologer") |
 
 ### Modification Parameters
 | Parameter | Type | Description |

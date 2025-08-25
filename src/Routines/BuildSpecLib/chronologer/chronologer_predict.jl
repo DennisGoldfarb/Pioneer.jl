@@ -18,66 +18,76 @@
 # src/chronologer/chronologer_predict.jl
 
 """
-    predict_retention_times(chronologer_out_path::String)
+    predict_retention_times(chronologer_in_path::String, chronologer_out_path::String;
+                            rt_model::String="chronologer")
 
-Predict retention times for peptides using either Koina's Chronologer service
-or local Chronologer installation as fallback.
+Predict retention times for peptides using Koina models. Supports models
+that return a single RT value (Chronologer) or coefficient-based outputs
+(Sundial).
 
 Parameters:
-- chronologer_out_path::String: Path to Arrow file containing peptide data.
-                               Must have 'chronologer_sequence' column.
-                               Will be updated in-place with predictions.
+- chronologer_in_path::String: Path to Arrow file containing peptide data.
+- chronologer_out_path::String: Path to write predictions.
+- rt_model::String: Retention time model name (default: "chronologer").
 
 Notes:
 - First attempts prediction through Koina API
-- Falls back to local Chronologer if Koina fails
-- Handles UniMod code conversion for local Chronologer
-- Updates the input file in place with RT predictions
+- Handles different output formats depending on model
 """
-function predict_retention_times(chronologer_in_path::String, chronologer_out_path::String)
-    # Try Koina service first
+function predict_retention_times(chronologer_in_path::String, chronologer_out_path::String;
+                                 rt_model::String="chronologer")
     try
         chronologer_table = DataFrame(Tables.columntable(Arrow.Table(chronologer_in_path)))
-        predictions = predict_rt_koina(chronologer_table)
-        chronologer_table[!, :rt] = predictions
+        predictions = predict_rt_koina(chronologer_table, rt_model)
+        if rt_model == "sundial"
+            chronologer_table[!, :rt] = predictions.bias
+            chronologer_table[!, :coefficients] = predictions.coefficients
+        else
+            chronologer_table[!, :rt] = predictions
+        end
         Arrow.write(chronologer_out_path, chronologer_table)
         return
     catch e
         @warn "Chronologer failed through Koina. Falling back to local installation..." exception=e
         rethrow(e)
     end
-    # Fall back to local Chronologer
-    # no longer included. See commits before 
     #predict_rt_local(chronologer_out_path)
 end
 
 """
 Helper function to predict RTs using Koina service.
 """
-function predict_rt_koina(chronologer_table::DataFrame)::Vector{Float32}
-    model = RetentionTimeModel("chronologer")
-    
-    # Prepare batches
+function predict_rt_koina(chronologer_table::DataFrame, rt_model::String)
+    model = RetentionTimeModel(rt_model)
+
     batches = prepare_koina_batch(
         model,
         chronologer_table,
         batch_size=1000
     )
-    
-    # Make requests
+
     results = make_koina_batch_requests(
         batches,
-        KOINA_URLS["chronologer"]
+        KOINA_URLS[rt_model]
     )
-    
-    # Parse results
-    rt_predictions = Float32[]
-    for result in results
-        batch_result = parse_koina_batch(model, result)
-        append!(rt_predictions, batch_result.fragments.rt)
+
+    if rt_model == "sundial"
+        coef_predictions = Vector{NTuple{4,Float32}}()
+        bias_predictions = Float32[]
+        for result in results
+            batch_result = parse_koina_batch(model, result)
+            append!(coef_predictions, batch_result.fragments.coefficients)
+            append!(bias_predictions, batch_result.fragments.bias)
+        end
+        return (coefficients=coef_predictions, bias=bias_predictions)
+    else
+        rt_predictions = Float32[]
+        for result in results
+            batch_result = parse_koina_batch(model, result)
+            append!(rt_predictions, batch_result.fragments.rt)
+        end
+        return rt_predictions
     end
-    
-    return rt_predictions
 end
 
 """
