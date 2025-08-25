@@ -280,17 +280,22 @@ function process_file!(
         rt_model::RtConversionModel,
         ms_file_idx::Int64
     )
+        precursors = getPrecursors(getSpecLib(search_context))
+        rt_coeffs = hasRtCoefficients(precursors) ? getRtCoefficients(precursors) : nothing
+        rt_weights = haskey(getRtWeights(search_context), ms_file_idx) ? getRtWeights(search_context, ms_file_idx) : nothing
         add_main_search_columns!(
             psms,
             getModel(rt_model),
-            getStructuralMods(getPrecursors(getSpecLib(search_context))),
-            getMissedCleavages(getPrecursors(getSpecLib(search_context))),
-            getIsDecoy(getPrecursors(getSpecLib(search_context))),
-            getIrt(getPrecursors(getSpecLib(search_context))),
-            getCharge(getPrecursors(getSpecLib(search_context))),
+            getStructuralMods(precursors),
+            getMissedCleavages(precursors),
+            getIsDecoy(precursors),
+            getIrt(precursors),
+            getCharge(precursors),
             getRetentionTimes(spectra),
             getTICs(spectra),
-            getMzArrays(spectra)
+            getMzArrays(spectra),
+            rt_coeffs,
+            rt_weights
         )
         # Calculate RT values
         psms[!, :irt_observed] = rt_model.(psms[!, :rt])

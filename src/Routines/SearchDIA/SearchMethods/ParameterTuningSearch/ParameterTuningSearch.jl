@@ -167,7 +167,7 @@ function set_rt_to_irt_model!(
     search_context::SearchContext,
     params::P,
     ms_file_idx::Int64,
-    model::Tuple{SplineRtConversionModel, Vector{Float32}, Vector{Float32}, Float32}
+    model::Tuple{Vararg{Any}}
 ) where {P<:ParameterTuningSearchParameters}
     
     ptsr.rt_to_irt_model[] = model[1]
@@ -175,9 +175,11 @@ function set_rt_to_irt_model!(
     resize!(ptsr.rt, 0)
     append!(ptsr.rt, model[2])
     append!(ptsr.irt, model[3])
-    
-    #parsed_fname = getParsedFileName(search_context, ms_file_idx)
+
     getIrtErrors(search_context)[ms_file_idx] = model[4] * params.irt_tol_sd
+    if length(model) > 4 && model[5] !== nothing
+        setRtWeights!(search_context, ms_file_idx, model[5])
+    end
 end
 
 #==========================================================
@@ -287,7 +289,7 @@ function process_file!(
             
             # Fit RT alignment model
             set_rt_to_irt_model!(results, search_context, params, ms_file_idx, 
-                                fit_irt_model(params, psms))
+                                fit_irt_model(params, psms, getPrecursors(getSpecLib(search_context))))
 
             # Get fragments and fit mass error model
             fragments = get_matched_fragments(spectra, psms, results,search_context, params, ms_file_idx)
