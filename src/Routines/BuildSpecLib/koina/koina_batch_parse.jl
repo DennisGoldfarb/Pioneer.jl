@@ -88,13 +88,26 @@ Parse results for retention time prediction models.
 function parse_koina_batch(model::RetentionTimeModel,
                           response::Dict{String,Any})::KoinaBatchResult{Nothing}
     df = DataFrame()
-    
+
     for col in response["outputs"]
         col_name = Symbol(col["name"])
         if col_name == :rt
             df[!, col_name] = Float32.(col["data"])
+        elseif col_name == :coefficients
+            n_precs, n_coef_plus_bias = col["shape"]
+            flat = Float32.(col["data"])
+            coef_count = n_coef_plus_bias - 1
+            coefs = Vector{NTuple{coef_count, Float32}}(undef, n_precs)
+            bias = Vector{Float32}(undef, n_precs)
+            for i in 1:n_precs
+                start = (i-1)*n_coef_plus_bias + 1
+                coefs[i] = ntuple(j -> flat[start + j - 1], coef_count)
+                bias[i] = flat[start + coef_count]
+            end
+            df[!, :coefficients] = coefs
+            df[!, :bias] = bias
         end
     end
-    
+
     return KoinaBatchResult(df, 1, nothing)
 end

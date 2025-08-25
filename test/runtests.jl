@@ -101,7 +101,9 @@ const KOINA_URLS = Dict(
     "unispec" => "https://koina.wilhelmlab.org:443/v2/models/UniSpec/infer",
     "prosit_2020_hcd" => "https://koina.wilhelmlab.org:443/v2/models/Prosit_2020_intensity_HCD/infer",
     "AlphaPeptDeep" => "https://koina.wilhelmlab.org:443/v2/models/AlphaPeptDeep_ms2_generic/infer",
-    "chronologer" => "https://koina.wilhelmlab.org:443/v2/models/Chronologer_RT/infer"
+    "chronologer" => "https://koina.wilhelmlab.org:443/v2/models/Chronologer_RT/infer",
+    "altimeter" => "https://koina.wilhelmlab.org:443/v2/models/Altimeter_2024_splines_index/infer",
+    "sundial" => "http://127.0.0.1:8000/v2/models/Sundial_coeff/infer",
 )
 
 export SearchDIA, BuildSpecLib
@@ -133,6 +135,7 @@ end
     include("./UnitTests/uniformBassisCubicSpline.jl")
     include("./UnitTests/test_protein_inference.jl")
     include("./UnitTests/ChronologerPrepTests.jl")
+    include("./UnitTests/SundialParseTests.jl")
     include("./UnitTests/FastaDigestTests.jl")
     include("./UnitTests/BuildPionLibTest.jl")
     include("./utils/FileOperations/test_file_operations_suite.jl")

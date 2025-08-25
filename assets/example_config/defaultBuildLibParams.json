@@ -43,7 +43,8 @@
     "include_immonium": false,
     "include_neutral_diff": true,
     "instrument_type": "NONE",
-    "prediction_model": "altimeter"
+    "prediction_model": "altimeter",
+    "rt_model": "chronologer"
     },
     "variable_mods": 
     {

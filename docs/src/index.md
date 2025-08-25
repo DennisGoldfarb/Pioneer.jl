@@ -17,7 +17,7 @@ Pioneer and its companion tool Altimeter are an open-source and performant solut
 ## Features
 Pioneer and Altimeter build on previous search engines and introduce several new concepts:
 
-* **Spectral Library Prediction with Koina**: Using [Koina](https://koina.wilhelmlab.org/) Pioneer can construct fully predicted spectral libraries given an internet connection and a FASTA file with protein sequences. Pioneer uses Chronologer to predict peptide retention times and is optimized to use Altimeter for fragment ion intensity predictions.
+* **Spectral Library Prediction with Koina**: Using [Koina](https://koina.wilhelmlab.org/) Pioneer can construct fully predicted spectral libraries given an internet connection and a FASTA file with protein sequences. Pioneer uses Chronologer or Sundial to predict peptide retention times and is optimized to use Altimeter for fragment ion intensity predictions.
 
 * **Collision Energy Independent Spectral Libraries**: Rather than predicting a single intensity value for each fragment ion, Altimeter predicts 4 B-spline coefficients. Evaluating the fragment splines at a given collision energy gives a fragment ion intensity. Pioneer calibrates the library to find the optimal collision energy value to use for each MS data file in an experiment. In this way, it is possible to use a single spectral library for different instruments and scan settings. 
 

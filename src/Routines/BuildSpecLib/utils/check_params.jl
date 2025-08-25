@@ -83,6 +83,11 @@ function check_params_bsp(json_string::String)
     check_param(library_params, "include_neutral_diff", Bool)
     check_param(library_params, "instrument_type", String)
     check_param(library_params, "prediction_model", String)
+    if haskey(library_params, "rt_model")
+        check_param(library_params, "rt_model", String)
+    else
+        library_params["rt_model"] = "chronologer"
+    end
 
     # Check variable_mods and fixed_mods
     for mod_type in ["variable_mods", "fixed_mods"]
