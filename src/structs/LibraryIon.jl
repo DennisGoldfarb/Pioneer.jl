@@ -809,4 +809,7 @@ end
 getPairIdx(lp::LibraryPrecursors) = lp.data[:pair_id]
 getPlex(lp::PlexedLibraryPrecursors)::Arrow.Primitive{I, Vector{I}} where {I<:Integer} = lp.data[:plex]
 
+hasRtCoefficients(lp::LibraryPrecursors) = (:rt_coefficients in Tables.schema(lp.data).names)
+getRtCoefficients(lp::LibraryPrecursors) = lp.data[:rt_coefficients]
+
 

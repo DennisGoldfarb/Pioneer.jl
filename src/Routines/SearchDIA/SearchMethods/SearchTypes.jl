@@ -205,6 +205,7 @@ mutable struct SearchContext{N,L<:SpectralLibrary,M<:MassSpecDataReference}
     # Results and paths
     irt_rt_map::Dict{Int64, RtConversionModel}
     rt_irt_map::Dict{Int64, RtConversionModel}
+    rt_weights::Dict{Int64, Vector{Float32}}
     precursor_dict::Base.Ref{Dictionary}
     rt_index_paths::Base.Ref{Vector{String}}
     irt_errors::Dict{Int64, Float32}
@@ -243,9 +244,10 @@ mutable struct SearchContext{N,L<:SpectralLibrary,M<:MassSpecDataReference}
             Dict{Int64, MassErrorModel}(),
             Dict{Int64, MassErrorModel}(),
             Dict{Int64, NceModel}(), Ref(100000.0f0), 10.0f0,
-            Dict{Int64, RtConversionModel}(), 
-            Dict{Int64, RtConversionModel}(), 
-            Ref{Dictionary}(), 
+            Dict{Int64, RtConversionModel}(),
+            Dict{Int64, RtConversionModel}(),
+            Dict{Int64, Vector{Float32}}(),
+            Ref{Dictionary}(),
             Ref{Vector{String}}(),
             Dict{Int64, Float32}(),
             Dict{UInt32, Float32}(),
@@ -459,6 +461,10 @@ Get RT to iRT conversion model for MS file index. Returns identity model if not 
 function getRtIrtModel(s::SearchContext)
    return s.rt_irt_map
 end
+
+getRtWeights(s::SearchContext) = s.rt_weights
+getRtWeights(s::SearchContext, index::I) where {I<:Integer} = s.rt_weights[index]
+setRtWeights!(s::SearchContext, index::I, weights::Vector{Float32}) where {I<:Integer} = (s.rt_weights[index] = weights)
 
 """
    getNceModelModel(s::SearchContext, index::Integer)

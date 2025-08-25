@@ -25,7 +25,9 @@
                            prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
                            scan_retention_time::AbstractVector{Float32},
                            tic::AbstractVector{Float32},
-                           masses::AbstractArray) where {T<:AbstractFloat}
+                           masses::AbstractArray,
+                           rt_coefficients::Union{Nothing, AbstractVector}=nothing,
+                           rt_weights::Union{Nothing, AbstractVector{<:AbstractFloat}}=nothing) where {T<:AbstractFloat}
 
 Adds essential columns to PSM DataFrame for scoring and analysis.
 
@@ -47,7 +49,7 @@ Adds essential columns to PSM DataFrame for scoring and analysis.
 - Scoring columns: score, q_value
 - Analysis columns: target, spectrum_peak_count, err_norm
 """
-function add_main_search_columns!(psms::DataFrame, 
+function add_main_search_columns!(psms::DataFrame,
                                 rt_irt::UniformSpline,
                                 structural_mods::AbstractVector{Union{Missing, String}},
                                 prec_missed_cleavages::Arrow.Primitive{UInt8, Vector{UInt8}},
@@ -56,8 +58,10 @@ function add_main_search_columns!(psms::DataFrame,
                                 prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
                                 scan_retention_time::AbstractVector{Float32},
                                 tic::AbstractVector{Float32},
-                                masses::AbstractArray;
-) where {T<:AbstractFloat}
+                                masses::AbstractArray,
+                                rt_coefficients::Union{Nothing, AbstractVector}=nothing,
+                                rt_weights::Union{Nothing, AbstractVector{<:AbstractFloat}}=nothing
+                                ) where {T<:AbstractFloat}
     
     ###########################
     #Allocate new columns
@@ -93,7 +97,11 @@ function add_main_search_columns!(psms::DataFrame,
                 targets[i] = prec_is_decoy[prec_idx] == false;
                 missed_cleavage[i] = prec_missed_cleavages[prec_idx]
                 Mox[i] = countMOX(coalesce(structural_mods[prec_idx], ""))::UInt8 #UInt8(length(collect(eachmatch(r"ox",  precursors[precursor_idx[i]].sequence))))
-                irt_pred[i] = Float32(prec_irt[prec_idx]);
+                base_irt = Float32(prec_irt[prec_idx])
+                if rt_coefficients !== nothing && rt_weights !== nothing
+                    base_irt += dot(Float32.(rt_weights), Float32.(rt_coefficients[prec_idx]))
+                end
+                irt_pred[i] = base_irt;
                 rt[i] = Float32(scan_retention_time[scan_idx[i]]);
                 irt[i] = rt_irt(rt[i])
                 TIC[i] = Float16(log2(tic[scan_idx[i]]));

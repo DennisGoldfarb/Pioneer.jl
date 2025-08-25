@@ -195,7 +195,7 @@ end
 RT modeling
 ==========================================================#
 """
-    fit_irt_model(params::P, psms::DataFrame) where {P<:ParameterTuningSearchParameters}
+    fit_irt_model(params::P, psms::DataFrame, precursors::LibraryPrecursors) where {P<:ParameterTuningSearchParameters}
 
 Fits retention time alignment model between library and empirical retention times.
 
@@ -218,7 +218,8 @@ Tuple containing:
 """
 function fit_irt_model(
     params::P,
-    psms::DataFrame
+    psms::DataFrame,
+    precursors::LibraryPrecursors
 ) where {P<:ParameterTuningSearchParameters}
     
     # Initial spline fit
@@ -243,8 +244,28 @@ function fit_irt_model(
         getSplineDegree(params),
         getSplineNKnots(params)
     ))
-    
-    return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad)
+
+    rt_weights = nothing
+    if hasRtCoefficients(precursors)
+        coef_vec = getRtCoefficients(precursors)
+        pid = valid_psms[!, :precursor_idx]
+        n = length(pid)
+        A = zeros(Float32, n, length(coef_vec[1]))
+        for (i, p) in enumerate(pid)
+            A[i, :] = Float32.(coef_vec[p])
+        end
+        rt_to_irt_spline = UniformSpline(
+            valid_psms[!,:rt],
+            valid_psms[!,:irt_predicted],
+            getSplineDegree(params),
+            getSplineNKnots(params)
+        )
+        obs_irt = rt_to_irt_spline.(valid_psms[!,:rt])
+        y = obs_irt .- valid_psms[!,:irt_predicted]
+        rt_weights = A \ y
+    end
+
+    return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad, rt_weights)
 end
 
 """
