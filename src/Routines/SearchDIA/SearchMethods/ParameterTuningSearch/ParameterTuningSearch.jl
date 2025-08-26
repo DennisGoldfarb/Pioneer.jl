@@ -185,20 +185,7 @@ function set_rt_to_irt_model!(
 
     weights = model[7]
     if weights !== nothing
-        precs = getPrecursors(getSpecLib(search_context))
-        base = getIrt(precs)
-        if hasRtCoefficients(precs)
-            coefs = getRtCoefficients(precs)
-            for pid in 1:length(base)
-                c = coefs[pid]
-                rs = base[pid] + c[1]*weights[1] + c[2]*weights[2] + c[3]*weights[3] + c[4]*weights[4]
-                setPredIrt!(search_context, UInt32(pid), rs)
-            end
-        else
-            for pid in 1:length(base)
-                setPredIrt!(search_context, UInt32(pid), base[pid])
-            end
-        end
+        setRtRunSpecificWeights!(search_context, ms_file_idx, weights)
     end
 end
 
@@ -359,7 +346,8 @@ function process_search_results!(
         # Update models in search context
         setMassErrorModel!(search_context, ms_file_idx, getMassErrorModel(results))
         
-        setRtIrtMap!(search_context, getRtToIrtModel(results), ms_file_idx)
+        setRtIrtMap!(search_context, getRtToIrtModelOriginal(results), ms_file_idx)
+        setRtIrtMapRunSpecific!(search_context, getRtToIrtModel(results), ms_file_idx)
     catch
         setFailedIndicator!(getMSData(search_context), ms_file_idx, true)
         nothing

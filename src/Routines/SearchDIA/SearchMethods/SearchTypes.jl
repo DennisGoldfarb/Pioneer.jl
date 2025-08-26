@@ -205,6 +205,8 @@ mutable struct SearchContext{N,L<:SpectralLibrary,M<:MassSpecDataReference}
     # Results and paths
     irt_rt_map::Dict{Int64, RtConversionModel}
     rt_irt_map::Dict{Int64, RtConversionModel}
+    rt_irt_map_run_specific::Dict{Int64, RtConversionModel}
+    rt_run_specific_weights::Dict{Int64, Vector{Float32}}
     precursor_dict::Base.Ref{Dictionary}
     rt_index_paths::Base.Ref{Vector{String}}
     irt_errors::Dict{Int64, Float32}
@@ -243,9 +245,11 @@ mutable struct SearchContext{N,L<:SpectralLibrary,M<:MassSpecDataReference}
             Dict{Int64, MassErrorModel}(),
             Dict{Int64, MassErrorModel}(),
             Dict{Int64, NceModel}(), Ref(100000.0f0), 10.0f0,
-            Dict{Int64, RtConversionModel}(), 
-            Dict{Int64, RtConversionModel}(), 
-            Ref{Dictionary}(), 
+            Dict{Int64, RtConversionModel}(),
+            Dict{Int64, RtConversionModel}(),
+            Dict{Int64, RtConversionModel}(),
+            Dict{Int64, Vector{Float32}}(),
+            Ref{Dictionary}(),
             Ref{Vector{String}}(),
             Dict{Int64, Float32}(),
             Dict{UInt32, Float32}(),
@@ -377,6 +381,7 @@ getMs1MassErrPlotFolder(s::SearchContext) = s.ms1_mass_err_plot_folder[]
 getParsedFileName(s::SearchContext, ms_file_idx::Int64) = getParsedFileName(s.mass_spec_data_reference, ms_file_idx)
 getIrtRtMap(s::SearchContext) = s.irt_rt_map
 getRtIrtMap(s::SearchContext) = s.rt_irt_map
+getRtIrtMapRunSpecific(s::SearchContext) = s.rt_irt_map_run_specific
 getPrecursorDict(s::SearchContext) = s.precursor_dict[]
 getRtIndexPaths(s::SearchContext) = s.rt_index_paths[]
 getIrtErrors(s::SearchContext) = s.irt_errors
@@ -386,6 +391,16 @@ getPredIrt(s::SearchContext, prec_idx::UInt32) = s.irt_obs[prec_idx]
 getHuberDelta(s::SearchContext) = s.huber_delta[]
 setPredIrt!(s::SearchContext, prec_idx::Int64, irt::Float32) = s.irt_obs[prec_idx] = irt
 setPredIrt!(s::SearchContext, prec_idx::UInt32, irt::Float32) = s.irt_obs[prec_idx] = irt
+function getRtIrtModelRunSpecific(s::SearchContext, index::I) where {I<:Integer}
+   if haskey(s.rt_irt_map_run_specific, index)
+       return s.rt_irt_map_run_specific[index]
+   else
+       return IdentityModel()
+   end
+end
+function getRtRunSpecificWeights(s::SearchContext, index::I) where {I<:Integer}
+    return get(s.rt_run_specific_weights, index, nothing)
+end
 getLibraryTargetCount(s::SearchContext) = s.n_library_targets
 getLibraryDecoyCount(s::SearchContext) = s.n_library_decoys
 getLibraryFdrScaleFactor(s::SearchContext) = s.library_fdr_scale_factor
@@ -480,6 +495,12 @@ function setIrtRtMap!(s::SearchContext, rcm::RtConversionModel, index::I) where 
 end
 function setRtIrtMap!(s::SearchContext, rcm::RtConversionModel, index::I) where {I<:Integer}
     s.rt_irt_map[index] = rcm
+end
+function setRtIrtMapRunSpecific!(s::SearchContext, rcm::RtConversionModel, index::I) where {I<:Integer}
+    s.rt_irt_map_run_specific[index] = rcm
+end
+function setRtRunSpecificWeights!(s::SearchContext, index::I, w::Vector{Float32}) where {I<:Integer}
+    s.rt_run_specific_weights[index] = w
 end
 function setPrecursorDict!(s::SearchContext, dict::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_irt::Float32, mean_irt::Union{Missing, Float32}, var_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}})
     s.precursor_dict[] = dict

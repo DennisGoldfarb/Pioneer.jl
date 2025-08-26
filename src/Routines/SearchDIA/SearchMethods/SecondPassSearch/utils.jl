@@ -789,6 +789,9 @@ function add_features!(psms::DataFrame,
     structural_mods = getStructuralMods(getPrecursors(getSpecLib(search_context)))#[:structural_mods],
     prec_mz = getMz(getPrecursors(getSpecLib(search_context)))#[:mz],
     prec_irt = getIrt(getPrecursors(getSpecLib(search_context)))#[:irt],
+    rt_coefs = hasRtCoefficients(getPrecursors(getSpecLib(search_context))) ?
+        getRtCoefficients(getPrecursors(getSpecLib(search_context))) : nothing,
+    weights = getRtRunSpecificWeights(search_context, ms_file_idx),
     prec_charge = getCharge(getPrecursors(getSpecLib(search_context)))#[:prec_charge],
     entrap_group_ids = getEntrapmentGroupId(getPrecursors(getSpecLib(search_context)))
     precursor_missed_cleavage = getMissedCleavages(getPrecursors(getSpecLib(search_context)))#[:missed_cleavages],
@@ -852,15 +855,20 @@ function add_features!(psms::DataFrame,
                 prec_idx = precursor_idx[i]
                 entrap_group_id[i] = entrap_group_ids[prec_idx]
                 irt_obs[i] = rt_to_irt_interp(rt[i])
-                irt_pred[i] = getPredIrt(search_context, prec_idx)#prec_irt[prec_idx]
+                pred = prec_irt[Int(prec_idx)]
+                if (weights !== nothing) && (rt_coefs !== nothing)
+                    c = rt_coefs[Int(prec_idx)]
+                    pred += c[1]*weights[1] + c[2]*weights[2] + c[3]*weights[3] + c[4]*weights[4]
+                end
+                irt_pred[i] = pred
                 #irt_diff[i] = abs(irt_obs[i] - first(prec_id_to_irt[prec_idx]))
                 irt_diff[i] = abs(irt_obs[i] - prec_id_to_irt[prec_idx].best_irt)
                 if !ms1_missing[i]
-                    ms1_irt_diff[i] = abs(rt_to_irt_interp(ms1_rt[i]) - getPredIrt(search_context, prec_idx))
+                    ms1_irt_diff[i] = abs(rt_to_irt_interp(ms1_rt[i]) - pred)
                 else
                     ms1_irt_diff[i] = 0f0
                 end
-                irt_error[i] = abs(irt_obs[i] - irt_pred[i])
+                irt_error[i] = abs(irt_obs[i] - pred)
 
                 missed_cleavage[i] = precursor_missed_cleavage[prec_idx]
                 #sequence[i] = precursor_sequence[prec_idx]
