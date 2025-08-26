@@ -21,13 +21,11 @@
                            structural_mods::AbstractVector{Union{Missing, String}},
                            prec_missed_cleavages::Arrow.Primitive{UInt8, Vector{UInt8}},
                            prec_is_decoy::Arrow.BoolVector{Bool},
-                           prec_irt::Arrow.Primitive{T, Vector{T}},
+                           prec_irt,
                            prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
                            scan_retention_time::AbstractVector{Float32},
                            tic::AbstractVector{Float32},
-                           masses::AbstractArray,
-                           rt_coefficients::Union{Nothing, AbstractVector}=nothing,
-                           rt_weights::Union{Nothing, AbstractVector{<:AbstractFloat}}=nothing) where {T<:AbstractFloat}
+                           masses::AbstractArray)
 
 Adds essential columns to PSM DataFrame for scoring and analysis.
 
@@ -37,7 +35,7 @@ Adds essential columns to PSM DataFrame for scoring and analysis.
 - `structural_mods`: Vector of structural modifications
 - `prec_missed_cleavages`: Vector of missed cleavage counts
 - `prec_is_decoy`: Vector indicating decoy status
-- `prec_irt`: Vector of iRT values
+- `prec_irt`: Collection of iRT values
 - `prec_charge`: Vector of precursor charges
 - `scan_retention_time`: Vector of scan retention times
 - `tic`: Vector of total ion currents
@@ -54,14 +52,11 @@ function add_main_search_columns!(psms::DataFrame,
                                 structural_mods::AbstractVector{Union{Missing, String}},
                                 prec_missed_cleavages::Arrow.Primitive{UInt8, Vector{UInt8}},
                                 prec_is_decoy::Arrow.BoolVector{Bool},
-                                prec_irt::Arrow.Primitive{T, Vector{T}},
+                                prec_irt,
                                 prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
                                 scan_retention_time::AbstractVector{Float32},
                                 tic::AbstractVector{Float32},
-                                masses::AbstractArray,
-                                rt_coefficients::Union{Nothing, AbstractVector}=nothing,
-                                rt_weights::Union{Nothing, AbstractVector{<:AbstractFloat}}=nothing
-                                ) where {T<:AbstractFloat}
+                                masses::AbstractArray)
     
     ###########################
     #Allocate new columns
@@ -97,11 +92,7 @@ function add_main_search_columns!(psms::DataFrame,
                 targets[i] = prec_is_decoy[prec_idx] == false;
                 missed_cleavage[i] = prec_missed_cleavages[prec_idx]
                 Mox[i] = countMOX(coalesce(structural_mods[prec_idx], ""))::UInt8 #UInt8(length(collect(eachmatch(r"ox",  precursors[precursor_idx[i]].sequence))))
-                base_irt = Float32(prec_irt[prec_idx])
-                if rt_coefficients !== nothing && rt_weights !== nothing
-                    base_irt += dot(Float32.(rt_weights), Float32.(rt_coefficients[prec_idx]))
-                end
-                irt_pred[i] = base_irt;
+                irt_pred[i] = Float32(prec_irt[prec_idx]);
                 rt[i] = Float32(scan_retention_time[scan_idx[i]]);
                 irt[i] = rt_irt(rt[i])
                 TIC[i] = Float16(log2(tic[scan_idx[i]]));
