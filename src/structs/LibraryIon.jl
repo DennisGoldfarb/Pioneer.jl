@@ -785,6 +785,42 @@ getIrt(lp::LibraryPrecursors)::Arrow.Primitive{Float32, Vector{Float32}} = lp.da
 getSulfurCount(lp::LibraryPrecursors)::Arrow.Primitive{UInt8, Vector{UInt8}} = lp.data[:sulfur_count]
 getIsotopicMods(lp::LibraryPrecursors)::Arrow.List{Union{Missing, String}, Int32, Vector{UInt8}} = lp.data[:isotopic_mods]
 getPartnerPrecursorIdx(lp::LibraryPrecursors)::Arrow.Primitive{Union{Missing, I}, Vector{I}} where {I<:Integer} = lp.data[:partner_precursor_idx]
+
+#= -------------------------------------------------------------------------
+Retention time coefficient utilities
+
+Some spectral libraries store additional retention time model coefficients
+for each precursor (e.g. Sundial coefficient model).  These coefficients
+are used to compute run-specific iRT predictions during DIA searching.
+
+To maintain backwards compatibility with libraries that do not contain
+these coefficients, we provide helper functions to detect and retrieve
+them when available.  In precursor tables that support this feature, the
+coefficients are stored in a column named `:coefficients`.
+=#
+
+"""
+    hasRtCoefficients(lp::LibraryPrecursors)
+
+Return `true` if the precursor table contains retention time coefficients
+that can be used for run-specific iRT predictions.
+"""
+hasRtCoefficients(lp::LibraryPrecursors) =
+    :coefficients in Tables.columnnames(lp.data)
+
+"""
+    getRtCoefficients(lp::LibraryPrecursors)
+
+Retrieve the retention time coefficients for each precursor.  Throws an
+error if the library does not contain such coefficients.
+"""
+function getRtCoefficients(lp::LibraryPrecursors)
+    cols = Tables.columnnames(lp.data)
+    if :coefficients in cols
+        return lp.data[:coefficients]
+    end
+    throw(ArgumentError("Retention time coefficients not found in precursor table"))
+end
 # Define two different versions of the function
 function extract_pair_idx(pair_idx_column::Arrow.Primitive{Union{Missing, UInt32}, Array{UInt32,1}}, idx)
     value = pair_idx_column[idx]

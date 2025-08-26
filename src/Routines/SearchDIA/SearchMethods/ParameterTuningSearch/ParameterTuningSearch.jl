@@ -67,10 +67,12 @@ Type Definitions
 Results container for parameter tuning search.
 Holds mass error models, RT alignment models, and associated data.
 """
-struct ParameterTuningSearchResults <: SearchResults 
+struct ParameterTuningSearchResults <: SearchResults
     mass_err_model::Base.Ref{<:MassErrorModel}
     rt_to_irt_model::Base.Ref{<:RtConversionModel}
+    rt_to_irt_model_orig::Base.Ref{<:RtConversionModel}
     irt::Vector{Float32}
+    irt_orig::Vector{Float32}
     rt::Vector{Float32}
     ppm_errs::Vector{Float32}
     rt_plots::Vector{Plots.Plot}
@@ -158,26 +160,46 @@ end
 Results Access Methods
 ==========================================================#
 getMassErrorModel(ptsr::ParameterTuningSearchResults) = ptsr.mass_err_model[]
-getMs1MassErrorModel(ptsr::ParameterTuningSearchResults) = ptsr.ms1_mass_err_model[]
 getRtToIrtModel(ptsr::ParameterTuningSearchResults) = ptsr.rt_to_irt_model[]
+getRtToIrtModelOriginal(ptsr::ParameterTuningSearchResults) = ptsr.rt_to_irt_model_orig[]
 getQcPlotsFolder(ptsr::ParameterTuningSearchResults) = ptsr.qc_plots_folder_path
 
 function set_rt_to_irt_model!(
-    ptsr::ParameterTuningSearchResults, 
+    ptsr::ParameterTuningSearchResults,
     search_context::SearchContext,
     params::P,
     ms_file_idx::Int64,
-    model::Tuple{SplineRtConversionModel, Vector{Float32}, Vector{Float32}, Float32}
+    model::Tuple{SplineRtConversionModel, Vector{Float32}, Vector{Float32}, Float32, SplineRtConversionModel, Vector{Float32}, Union{Nothing, Vector{Float32}}}
 ) where {P<:ParameterTuningSearchParameters}
-    
+
     ptsr.rt_to_irt_model[] = model[1]
+    ptsr.rt_to_irt_model_orig[] = model[5]
     resize!(ptsr.irt, 0)
+    resize!(ptsr.irt_orig, 0)
     resize!(ptsr.rt, 0)
     append!(ptsr.rt, model[2])
     append!(ptsr.irt, model[3])
-    
-    #parsed_fname = getParsedFileName(search_context, ms_file_idx)
+    append!(ptsr.irt_orig, model[6])
+
     getIrtErrors(search_context)[ms_file_idx] = model[4] * params.irt_tol_sd
+
+    weights = model[7]
+    if weights !== nothing
+        precs = getPrecursors(getSpecLib(search_context))
+        base = getIrt(precs)
+        if hasRtCoefficients(precs)
+            coefs = getRtCoefficients(precs)
+            for pid in 1:length(base)
+                c = coefs[pid]
+                rs = base[pid] + c[1]*weights[1] + c[2]*weights[2] + c[3]*weights[3] + c[4]*weights[4]
+                setPredIrt!(search_context, UInt32(pid), rs)
+            end
+        else
+            for pid in 1:length(base)
+                setPredIrt!(search_context, UInt32(pid), base[pid])
+            end
+        end
+    end
 end
 
 #==========================================================
@@ -198,6 +220,7 @@ function init_search_results(::ParameterTuningSearchParameters, search_context::
     !isdir(ms1_mass_error_plots ) && mkdir(ms1_mass_error_plots )
     return ParameterTuningSearchResults(
         Base.Ref{MassErrorModel}(),
+        Ref{SplineRtConversionModel}(),
         Ref{SplineRtConversionModel}(),
         Vector{Float32}(),
         Vector{Float32}(),
@@ -247,7 +270,8 @@ function process_file!(
                     getIrt(precursors),#[:irt],
                     getCharge(precursors),#[:prec_charge],
                     getRetentionTimes(spectra),
-                    getTICs(spectra)
+                    getTICs(spectra),
+                    hasRtCoefficients(precursors) ? getRtCoefficients(precursors) : nothing
                 )
                 
                 if new_psms !== nothing

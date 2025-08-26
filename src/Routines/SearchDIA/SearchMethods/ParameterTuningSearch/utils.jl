@@ -21,7 +21,8 @@
                              prec_irt::Arrow.Primitive{T, Vector{T}},
                              prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
                              scan_retention_time::AbstractVector{Float32},
-                             tic::AbstractVector{Float32}) where {T<:AbstractFloat}
+                             tic::AbstractVector{Float32},
+                             prec_rt_coefs::Union{Nothing, AbstractVector}=nothing) where {T<:AbstractFloat}
 
 Adds essential columns to PSM DataFrame for parameter tuning analysis.
 
@@ -61,20 +62,25 @@ function add_tuning_search_columns!(psms::DataFrame,
     precursor_idx::Vector{UInt32} = psms[!,:precursor_idx]
     matched_ratio::Vector{Float16} = psms[!,:matched_ratio]
     
+    rt_coefs = prec_rt_coefs === nothing ? nothing : Vector{eltype(prec_rt_coefs)}(undef, N)
+
     tasks_per_thread = 10
     chunk_size = max(1, size(psms, 1) ÷ (tasks_per_thread * Threads.nthreads()))
-    data_chunks = partition(1:size(psms, 1), chunk_size) # partition your data into chunks that
+    data_chunks = partition(1:size(psms, 1), chunk_size)
 
     tasks = map(data_chunks) do chunk
         Threads.@spawn begin
             for i in chunk
-            decoys[i] = prec_is_decoy[precursor_idx[i]];
-            targets[i] = decoys[i] == false
-            irt_pred[i] = Float32(prec_irt[precursor_idx[i]]);
-            rt[i] = Float32(scan_retention_time[scan_idx[i]]);
-            TIC[i] = Float16(log2(tic[scan_idx[i]]));
-            charge[i] = UInt8(prec_charge[precursor_idx[i]]);
-            matched_ratio[i] = Float16(min(matched_ratio[i], 6e4))
+                decoys[i] = prec_is_decoy[precursor_idx[i]];
+                targets[i] = decoys[i] == false
+                irt_pred[i] = Float32(prec_irt[precursor_idx[i]]);
+                rt[i] = Float32(scan_retention_time[scan_idx[i]]);
+                TIC[i] = Float16(log2(tic[scan_idx[i]]));
+                charge[i] = UInt8(prec_charge[precursor_idx[i]]);
+                matched_ratio[i] = Float16(min(matched_ratio[i], 6e4))
+                if rt_coefs !== nothing
+                    rt_coefs[i] = prec_rt_coefs[precursor_idx[i]]
+                end
             end
         end
     end
@@ -90,6 +96,9 @@ function add_tuning_search_columns!(psms::DataFrame,
     psms[!,:intercept] = ones(Float16, size(psms, 1))
     psms[!,:q_value] = zeros(Float16, N);
     psms[!,:prob] = zeros(Float16, N);
+    if rt_coefs !== nothing
+        psms[!,:irt_coefficients] = rt_coefs
+    end
 end
 
 
@@ -197,54 +206,116 @@ RT modeling
 """
     fit_irt_model(params::P, psms::DataFrame) where {P<:ParameterTuningSearchParameters}
 
-Fits retention time alignment model between library and empirical retention times.
-
-# Arguments
-- `params`: Parameter tuning search parameters
-- `psms`: DataFrame containing PSMs with RT information
-
-# Process
-1. Performs initial spline fit between predicted and observed RTs
-2. Calculates residuals and median absolute deviation
-3. Removes outliers based on MAD threshold
-4. Refits spline model on cleaned data
+Fit retention time alignment models between library and empirical retention
+times.  If the spectral library contains run-specific retention time
+coefficients (`:irt_coefficients` column), an additional optimization is
+performed to determine the optimal run-specific weights.  The resulting
+run-specific predictions are stored in the `:irt_predicted_run_specific`
+column of `psms`.
 
 # Returns
 Tuple containing:
-- Final RT conversion model
-- Valid RT values
-- Valid iRT values
-- iRT median absolute deviation
+1. Final RT conversion model using run-specific predictions (if available)
+2. Valid RT values
+3. Valid run-specific iRT predictions (or original predictions if no
+   coefficients were present)
+4. iRT median absolute deviation
+5. Original unweighted RT conversion model
+6. Original iRT predictions for the valid PSMs
+7. Vector of optimized run-specific weights (or `nothing`)
 """
 function fit_irt_model(
     params::P,
     psms::DataFrame
 ) where {P<:ParameterTuningSearchParameters}
-    
-    # Initial spline fit
-    rt_to_irt_map = UniformSpline(
-        psms[!,:irt_predicted],
-        psms[!,:rt],
-        getSplineDegree(params),
-        getSplineNKnots(params)
-    )
-    
+
+    degree = getSplineDegree(params)
+    n_knots = getSplineNKnots(params)
+
+    # Initial spline fit using library predictions
+    rt_to_irt_map = UniformSpline(psms[!,:irt_predicted], psms[!,:rt], degree, n_knots)
+
     # Calculate residuals
     psms[!,:irt_observed] = rt_to_irt_map.(psms.rt::Vector{Float32})
     residuals = psms[!,:irt_observed] .- psms[!,:irt_predicted]
     irt_mad = mad(residuals, normalize=false)::Float32
-    
-    # Remove outliers and refit
+
+    # Remove outliers
     valid_psms = psms[abs.(residuals) .< (irt_mad * getOutlierThreshold(params)), :]
-    
-    final_model = SplineRtConversionModel(UniformSpline(
+
+    # Model using original predictions
+    original_model = SplineRtConversionModel(UniformSpline(
         valid_psms[!,:irt_predicted],
         valid_psms[!,:rt],
-        getSplineDegree(params),
-        getSplineNKnots(params)
+        degree,
+        n_knots
     ))
-    
-    return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad)
+
+    weights = nothing
+
+    if :irt_coefficients in names(psms)
+        weights = optimize_rt_weights(valid_psms[!,:rt], valid_psms[!,:irt_predicted], valid_psms[!,:irt_coefficients])
+        println("Optimized RT weights: ", weights)
+
+        # Apply weights to all PSMs
+        psms[!,:irt_predicted_run_specific] = psms[!,:irt_predicted] .+
+            map(c -> dot(c, weights), psms[!,:irt_coefficients])
+        valid_psms[!,:irt_predicted_run_specific] = valid_psms[!,:irt_predicted] .+
+            map(c -> dot(c, weights), valid_psms[!,:irt_coefficients])
+
+        final_model = SplineRtConversionModel(UniformSpline(
+            valid_psms[!,:irt_predicted_run_specific],
+            valid_psms[!,:rt],
+            degree,
+            n_knots
+        ))
+
+        return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted_run_specific], irt_mad, original_model, valid_psms[!,:irt_predicted], weights)
+    else
+        psms[!,:irt_predicted_run_specific] = psms[!,:irt_predicted]
+        return (original_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad, original_model, valid_psms[!,:irt_predicted], weights)
+    end
+end
+
+"""
+    optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}})
+
+Determine run-specific weights that minimize the average coefficient of
+variation of predicted iRT values across 20 RT bins.
+"""
+function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}})
+    n_bins = 20
+    min_rt, max_rt = minimum(rt), maximum(rt)
+    edges = collect(LinRange(min_rt, max_rt, n_bins + 1))
+    groups = [Int[] for _ in 1:n_bins]
+    for (i, r) in enumerate(rt)
+        b = clamp(searchsortedlast(edges, r), 1, n_bins)
+        push!(groups[b], i)
+    end
+
+    temp = similar(irt)
+    function objective(w)
+        @inbounds for i in eachindex(irt)
+            c = coefs[i]
+            temp[i] = irt[i] + c[1]*w[1] + c[2]*w[2] + c[3]*w[3] + c[4]*w[4]
+        end
+        cv_sum = 0.0
+        count = 0
+        for grp in groups
+            if length(grp) > 1
+                vals = @view temp[grp]
+                m = mean(vals)
+                if m != 0
+                    cv_sum += std(vals) / m
+                    count += 1
+                end
+            end
+        end
+        return cv_sum / max(count, 1)
+    end
+
+    result = Optim.optimize(objective, zeros(4), Optim.NelderMead())
+    return Float32.(Optim.minimizer(result))
 end
 
 """
@@ -696,18 +767,21 @@ function generate_rt_plot(
     n = length(results.rt)
     p = plot(
         results.rt,
-        results.irt,
+        results.irt_orig,
         seriestype=:scatter,
         title = title*"\n n = $n",
         xlabel = "Retention Time RT (min)",
         ylabel = "Indexed Retention Time iRT (min)",
-        label = nothing,
+        label = "Original",
         alpha = 0.1,
         size = 100*[13.3, 7.5]
     )
-    
+
+    scatter!(p, results.rt, results.irt, label="Run-specific", alpha=0.1)
+
     pbins = LinRange(minimum(results.rt), maximum(results.rt), 100)
-    plot!(pbins, getRtToIrtModel(results).(pbins), lw=3, label=nothing)
+    plot!(p, pbins, results.rt_to_irt_model_orig[].(pbins), lw=3, label="Original spline")
+    plot!(p, pbins, getRtToIrtModel(results).(pbins), lw=3, label="Run-specific spline")
     return p
 end
 

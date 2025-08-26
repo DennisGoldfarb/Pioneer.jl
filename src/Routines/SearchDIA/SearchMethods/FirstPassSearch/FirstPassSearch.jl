@@ -506,7 +506,9 @@ function summarize_results!(
         i = 1
         for (pid, val) in pairs(precursor_dict)
             i += 1
-            setPredIrt!(search_context, pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
+            if !haskey(getPredIrt(search_context), pid)
+                setPredIrt!(search_context, pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
+            end
             partner_pid = getPartnerPrecursorIdx(precursors)[pid]
             if ismissing(partner_pid)
                 continue
@@ -516,15 +518,21 @@ function summarize_results!(
             # Otherwise if the partner was ID'ed, it should keep its original predicted iRT
             if !haskey(precursor_dict, partner_pid)
                 insert!(precursor_dict, partner_pid, val)
-                setPredIrt!(search_context, partner_pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
+                if !haskey(getPredIrt(search_context), partner_pid)
+                    setPredIrt!(search_context, partner_pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
+                end
             else
-                setPredIrt!(search_context, partner_pid, getIrt(getPrecursors(getSpecLib(search_context)))[partner_pid])
+                if !haskey(getPredIrt(search_context), partner_pid)
+                    setPredIrt!(search_context, partner_pid, getIrt(getPrecursors(getSpecLib(search_context)))[partner_pid])
+                end
             end
-            
+
         end
     else
         for (pid, val) in pairs(precursor_dict)
-            setPredIrt!(search_context, pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
+            if !haskey(getPredIrt(search_context), pid)
+                setPredIrt!(search_context, pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
+            end
         end
     end
 
