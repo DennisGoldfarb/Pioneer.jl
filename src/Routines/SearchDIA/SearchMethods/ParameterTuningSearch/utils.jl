@@ -293,15 +293,20 @@ end
 """
     optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}}; λ)
 
-Determine run-specific weights that minimize squared differences between
-consecutive run-specific iRT predictions after sorting by retention time.
-An L2 penalty discourages large weights.
+Determine run-specific weights that minimize Gaussian-weighted squared
+differences of run-specific iRT predictions for PSM pairs within a limited
+retention-time window.  An L2 penalty discourages large weights.
 """
 function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}}; λ::Float64 = 0.1)
     order = sortperm(rt)
+    rt_sorted = rt[order]
     irt_sorted = irt[order]
     coefs_sorted = coefs[order]
     temp = similar(irt_sorted)
+
+    rt_range = maximum(rt_sorted) - minimum(rt_sorted)
+    sigma = max(rt_range / 10, eps(Float32))
+    window = 3sigma
 
     function objective(w)
         @inbounds for i in eachindex(irt_sorted)
@@ -309,11 +314,20 @@ function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::V
             temp[i] = irt_sorted[i] + c[1]*w[1] + c[2]*w[2] + c[3]*w[3] + c[4]*w[4]
         end
         diff_sum = 0.0
-        for i in 1:length(temp)-1
-            d = temp[i+1] - temp[i]
-            diff_sum += d*d
+        pair_cnt = 0
+        @inbounds for i in 1:length(temp)-1
+            ri = rt_sorted[i]
+            pi = temp[i]
+            for j in i+1:length(temp)
+                delta = rt_sorted[j] - ri
+                delta > window && break
+                wgt = exp(- (delta*delta) / (2sigma*sigma))
+                d = temp[j] - pi
+                diff_sum += wgt * d*d
+                pair_cnt += 1
+            end
         end
-        return diff_sum / max(length(temp)-1, 1) + λ * sum(abs2, w)
+        return diff_sum / max(pair_cnt, 1) + λ * sum(abs2, w)
     end
 
     result = Optim.optimize(objective, zeros(4), Optim.NelderMead())
