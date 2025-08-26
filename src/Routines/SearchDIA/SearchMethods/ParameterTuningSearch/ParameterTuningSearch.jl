@@ -67,11 +67,12 @@ Type Definitions
 Results container for parameter tuning search.
 Holds mass error models, RT alignment models, and associated data.
 """
-struct ParameterTuningSearchResults <: SearchResults 
+struct ParameterTuningSearchResults <: SearchResults
     mass_err_model::Base.Ref{<:MassErrorModel}
     rt_to_irt_model::Base.Ref{<:RtConversionModel}
     irt::Vector{Float32}
     rt::Vector{Float32}
+    irt_sundial::Vector{Float32}
     ppm_errs::Vector{Float32}
     rt_plots::Vector{Plots.Plot}
     mass_plots::Vector{Plots.Plot}
@@ -163,18 +164,20 @@ getRtToIrtModel(ptsr::ParameterTuningSearchResults) = ptsr.rt_to_irt_model[]
 getQcPlotsFolder(ptsr::ParameterTuningSearchResults) = ptsr.qc_plots_folder_path
 
 function set_rt_to_irt_model!(
-    ptsr::ParameterTuningSearchResults, 
+    ptsr::ParameterTuningSearchResults,
     search_context::SearchContext,
     params::P,
     ms_file_idx::Int64,
     model::Tuple{Vararg{Any}}
 ) where {P<:ParameterTuningSearchParameters}
-    
+
     ptsr.rt_to_irt_model[] = model[1]
     resize!(ptsr.irt, 0)
     resize!(ptsr.rt, 0)
+    resize!(ptsr.irt_sundial, 0)
     append!(ptsr.rt, model[2])
     append!(ptsr.irt, model[3])
+    append!(ptsr.irt_sundial, model[6])
 
     getIrtErrors(search_context)[ms_file_idx] = model[4] * params.irt_tol_sd
     if length(model) > 4 && model[5] !== nothing
@@ -201,6 +204,7 @@ function init_search_results(::ParameterTuningSearchParameters, search_context::
     return ParameterTuningSearchResults(
         Base.Ref{MassErrorModel}(),
         Ref{SplineRtConversionModel}(),
+        Vector{Float32}(),
         Vector{Float32}(),
         Vector{Float32}(),
         Vector{Float32}(),
@@ -346,6 +350,7 @@ end
 function reset_results!(ptsr::ParameterTuningSearchResults)
     resize!(ptsr.irt, 0)
     resize!(ptsr.rt, 0)
+    resize!(ptsr.irt_sundial, 0)
     resize!(ptsr.ppm_errs, 0)
 end
 

@@ -197,24 +197,30 @@ RT modeling
 """
     fit_irt_model(params::P, psms::DataFrame, precursors::LibraryPrecursors) where {P<:ParameterTuningSearchParameters}
 
-Fits retention time alignment model between library and empirical retention times.
+Fits retention time alignment model between library and empirical retention times and
+derives run-specific iRT predictions using Sundial RT coefficients when available.
 
 # Arguments
 - `params`: Parameter tuning search parameters
 - `psms`: DataFrame containing PSMs with RT information
+- `precursors`: Library precursors containing optional Sundial RT coefficients
 
 # Process
 1. Performs initial spline fit between predicted and observed RTs
 2. Calculates residuals and median absolute deviation
 3. Removes outliers based on MAD threshold
 4. Refits spline model on cleaned data
+5. If Sundial RT coefficients are present, solves for run-specific weights and
+   produces updated iRT predictions
 
 # Returns
 Tuple containing:
 - Final RT conversion model
 - Valid RT values
-- Valid iRT values
+- Original library iRT predictions
 - iRT median absolute deviation
+- Run-specific weights (or `nothing`)
+- iRT predictions updated with Sundial RT coefficients
 """
 function fit_irt_model(
     params::P,
@@ -222,14 +228,14 @@ function fit_irt_model(
     precursors::LibraryPrecursors
 ) where {P<:ParameterTuningSearchParameters}
     
-    # Initial spline fit
+    # Initial spline fit mapping library iRT to observed RT
     rt_to_irt_map = UniformSpline(
         psms[!,:irt_predicted],
         psms[!,:rt],
         getSplineDegree(params),
         getSplineNKnots(params)
     )
-    
+
     # Calculate residuals
     psms[!,:irt_observed] = rt_to_irt_map.(psms.rt::Vector{Float32})
     residuals = psms[!,:irt_observed] .- psms[!,:irt_predicted]
@@ -237,7 +243,7 @@ function fit_irt_model(
     
     # Remove outliers and refit
     valid_psms = psms[abs.(residuals) .< (irt_mad * getOutlierThreshold(params)), :]
-    
+
     final_model = SplineRtConversionModel(UniformSpline(
         valid_psms[!,:irt_predicted],
         valid_psms[!,:rt],
@@ -246,26 +252,33 @@ function fit_irt_model(
     ))
 
     rt_weights = nothing
+    irt_sundial = valid_psms[!,:irt_predicted]
     if hasRtCoefficients(precursors)
         coef_vec = getRtCoefficients(precursors)
         pid = valid_psms[!, :precursor_idx]
         n = length(pid)
         A = zeros(Float32, n, length(coef_vec[1]))
         for (i, p) in enumerate(pid)
-            A[i, :] = Float32.(coef_vec[p])
+            A[i, :] .= Float32.(coef_vec[p])
         end
-        rt_to_irt_spline = UniformSpline(
-            valid_psms[!,:rt],
-            valid_psms[!,:irt_predicted],
-            getSplineDegree(params),
-            getSplineNKnots(params)
-        )
-        obs_irt = rt_to_irt_spline.(valid_psms[!,:rt])
-        y = obs_irt .- valid_psms[!,:irt_predicted]
+
+        aligned_irt = rt_to_irt_map.(valid_psms[!,:rt])
+
+        # Solve for weights minimizing difference between aligned iRT and adjusted prediction
+        y = aligned_irt .- valid_psms[!,:irt_predicted]
         rt_weights = A \ y
+        irt_sundial = valid_psms[!,:irt_predicted] + A * rt_weights
+
+        residuals = valid_psms[!,:irt_observed] .- (valid_psms[!,:irt_predicted] + A * rt_weights)
+        irt_mad_new = mad(residuals, normalize=false)::Float32
+
+        residuals_old = valid_psms[!,:irt_observed] .- valid_psms[!,:irt_predicted]
+        irt_mad_old = mad(residuals_old, normalize=false)::Float32
+        println("RT Weights: ", rt_weights, " ", irt_mad_old, " ", irt_mad_new, "\n\n")
+
     end
 
-    return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad, rt_weights)
+    return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad, rt_weights, irt_sundial)
 end
 
 """
@@ -699,37 +712,53 @@ Plotting Helpers
 ==========================================================#
 
 """
-    generate_rt_plot(results::ParameterTuningSearchResults, plot_path::String, title::String)
+    generate_rt_plot(results::ParameterTuningSearchResults, title::String)
 
-Generates retention time alignment visualization plot.
+Visualizes retention time alignment by plotting original library iRTs and
+run-specific iRT predictions updated with Sundial RT coefficients.
 
 # Arguments
 - `results`: Parameter tuning results containing RT data
-- `plot_path`: Path to save plot
 - `title`: Plot title
 
-Creates scatter plot of RT vs iRT with fitted spline curve.
+Creates side-by-side scatter plots with the fitted spline overlaid.
 """
 function generate_rt_plot(
     results::ParameterTuningSearchResults,
     title::String
 )
     n = length(results.rt)
-    p = plot(
+    rt_model = getRtToIrtModel(results)
+    pbins = LinRange(minimum(results.rt), maximum(results.rt), 100)
+    plot_title = title*"\n n = $n"
+
+    p_orig = plot(
         results.rt,
         results.irt,
         seriestype=:scatter,
-        title = title*"\n n = $n",
+        title = plot_title*" (original)",
         xlabel = "Retention Time RT (min)",
         ylabel = "Indexed Retention Time iRT (min)",
         label = nothing,
         alpha = 0.1,
         size = 100*[13.3, 7.5]
     )
-    
-    pbins = LinRange(minimum(results.rt), maximum(results.rt), 100)
-    plot!(pbins, getRtToIrtModel(results).(pbins), lw=3, label=nothing)
-    return p
+    plot!(p_orig, pbins, rt_model.(pbins), lw=3, label=nothing)
+
+    p_sundial = plot(
+        results.rt,
+        results.irt_sundial,
+        seriestype=:scatter,
+        title = plot_title*" (sundial)",
+        xlabel = "Retention Time RT (min)",
+        ylabel = "Indexed Retention Time iRT (min)",
+        label = nothing,
+        alpha = 0.1,
+        size = 100*[13.3, 7.5]
+    )
+    plot!(p_sundial, pbins, rt_model.(pbins), lw=3, label=nothing)
+
+    return plot(p_orig, p_sundial, layout=(1,2), size=100*[13.3*2, 7.5])
 end
 
 
