@@ -253,9 +253,13 @@ function fit_irt_model(
         n_knots
     ))
 
+    irt_observed_valid = original_model.(valid_psms.rt::Vector{Float32})
+    residuals_valid = irt_observed_valid .- valid_psms[!,:irt_predicted]
+    irt_mad_orig = mad(residuals_valid, normalize=false)::Float32
+
     weights = nothing
 
-    if :irt_coefficients in names(psms)
+    if "irt_coefficients" in String.(names(psms))
         weights = optimize_rt_weights(valid_psms[!,:rt], valid_psms[!,:irt_predicted], valid_psms[!,:irt_coefficients])
         println("Optimized RT weights: ", weights)
 
@@ -272,10 +276,17 @@ function fit_irt_model(
             n_knots
         ))
 
-        return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted_run_specific], irt_mad, original_model, valid_psms[!,:irt_predicted], weights)
+        irt_observed_rs = final_model.(valid_psms.rt::Vector{Float32})
+        residuals_rs = irt_observed_rs .- valid_psms[!,:irt_predicted_run_specific]
+        irt_mad_rs = mad(residuals_rs, normalize=false)::Float32
+        println("Original spline MAD: ", irt_mad_orig)
+        println("Run-specific spline MAD: ", irt_mad_rs)
+
+        return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted_run_specific], irt_mad_rs, original_model, valid_psms[!,:irt_predicted], weights)
     else
         psms[!,:irt_predicted_run_specific] = psms[!,:irt_predicted]
-        return (original_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad, original_model, valid_psms[!,:irt_predicted], weights)
+        println("Original spline MAD: ", irt_mad_orig)
+        return (original_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad_orig, original_model, valid_psms[!,:irt_predicted], weights)
     end
 end
 
@@ -767,24 +778,33 @@ function generate_rt_plot(
     title::String
 )
     n = length(results.rt)
-    p = plot(
+    pbins = LinRange(minimum(results.rt), maximum(results.rt), 100)
+
+    p_orig = plot(
         results.rt,
         results.irt_orig,
-        seriestype=:scatter,
-        title = title*"\n n = $n",
+        seriestype = :scatter,
+        title = string(title, "\nOriginal (n = $n)"),
         xlabel = "Retention Time RT (min)",
         ylabel = "Indexed Retention Time iRT (min)",
-        label = "Original",
+        label = nothing,
         alpha = 0.1,
-        size = 100*[13.3, 7.5]
     )
+    plot!(p_orig, pbins, results.rt_to_irt_model_orig[].(pbins), lw=3, label="Original spline")
 
-    scatter!(p, results.rt, results.irt, label="Run-specific", alpha=0.1)
+    p_rs = plot(
+        results.rt,
+        results.irt,
+        seriestype = :scatter,
+        title = string(title, "\nRun-specific (n = $n)"),
+        xlabel = "Retention Time RT (min)",
+        ylabel = "Indexed Retention Time iRT (min)",
+        label = nothing,
+        alpha = 0.1,
+    )
+    plot!(p_rs, pbins, getRtToIrtModel(results).(pbins), lw=3, label="Run-specific spline")
 
-    pbins = LinRange(minimum(results.rt), maximum(results.rt), 100)
-    plot!(p, pbins, results.rt_to_irt_model_orig[].(pbins), lw=3, label="Original spline")
-    plot!(p, pbins, getRtToIrtModel(results).(pbins), lw=3, label="Run-specific spline")
-    return p
+    return plot(p_orig, p_rs, layout = (1,2), size = 100*[13.3*2, 7.5])
 end
 
 
