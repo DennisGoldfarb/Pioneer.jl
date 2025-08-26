@@ -220,31 +220,65 @@ function fit_irt_model(
     params::P,
     psms::DataFrame
 ) where {P<:ParameterTuningSearchParameters}
-    
-    # Initial spline fit
+
+    rt_vals = psms[!,:rt]
+    irt_pred_vals = psms[!,:irt_predicted]
+
+    # Initial spline fit mapping RT → iRT
     rt_to_irt_map = UniformSpline(
-        psms[!,:irt_predicted],
-        psms[!,:rt],
+        irt_pred_vals,
+        rt_vals,
         getSplineDegree(params),
         getSplineNKnots(params)
     )
-    
+
     # Calculate residuals
-    psms[!,:irt_observed] = rt_to_irt_map.(psms.rt::Vector{Float32})
-    residuals = psms[!,:irt_observed] .- psms[!,:irt_predicted]
+    obs_irt = rt_to_irt_map.(rt_vals)
+    residuals = obs_irt .- irt_pred_vals
     irt_mad = mad(residuals, normalize=false)::Float32
-    
+
     # Remove outliers and refit
-    valid_psms = psms[abs.(residuals) .< (irt_mad * getOutlierThreshold(params)), :]
-    
+    valid_mask = abs.(residuals) .< (irt_mad * getOutlierThreshold(params))
+    rt_vals = rt_vals[valid_mask]
+    irt_pred_vals = irt_pred_vals[valid_mask]
+
     final_model = SplineRtConversionModel(UniformSpline(
-        valid_psms[!,:irt_predicted],
-        valid_psms[!,:rt],
+        irt_pred_vals,
+        rt_vals,
         getSplineDegree(params),
         getSplineNKnots(params)
     ))
-    
-    return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad)
+
+    # Recompute observed iRT using correctly oriented spline
+    obs_irt = final_model.(rt_vals)
+
+    # Build spline design matrix for weight estimation
+    model = getModel(final_model)
+    degree = model.degree
+    n_knots = length(model.coeffs) ÷ (degree + 1)
+    knots = collect(LinRange(model.first, model.last, n_knots))
+    spline_basis = NTuple{4, Polynomial}([
+        Polynomial([0, 0, 0, 1]) / 6,
+        Polynomial([1, 3, 3, -3]) / 6,
+        Polynomial([4, 0, -6, 3]) / 6,
+        Polynomial([1, -3, 3, -1]) / 6,
+    ])
+
+    A = zeros(Float32, (length(rt_vals), length(knots) + 3))
+    for (row, t) in enumerate(rt_vals)
+        knot_idx = min(floor(Int32, (t - first(knots)) / model.bin_width) + 1, length(knots))
+        u = (t - knots[knot_idx]) / model.bin_width
+        i = length(spline_basis)
+        for col in knot_idx:(knot_idx + length(spline_basis) - 1)
+            A[row, col] = spline_basis[i](u)
+            i -= 1
+        end
+    end
+
+    rt_weights = A \ (obs_irt .- irt_pred_vals)
+    @info "rt_weights" max_abs = maximum(abs.(rt_weights))
+
+    return (final_model, rt_vals, irt_pred_vals, irt_mad)
 end
 
 """
