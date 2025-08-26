@@ -228,22 +228,22 @@ function fit_irt_model(
     precursors::LibraryPrecursors
 ) where {P<:ParameterTuningSearchParameters}
     
-    # Initial spline fit
-    rt_to_irt_map = UniformSpline(
+    # Initial spline fit mapping library iRT to observed RT
+    irt_to_rt_spline = UniformSpline(
         psms[!,:irt_predicted],
         psms[!,:rt],
         getSplineDegree(params),
         getSplineNKnots(params)
     )
-    
-    # Calculate residuals
-    psms[!,:irt_observed] = rt_to_irt_map.(psms.rt::Vector{Float32})
-    residuals = psms[!,:irt_observed] .- psms[!,:irt_predicted]
-    irt_mad = mad(residuals, normalize=false)::Float32
-    
-    # Remove outliers and refit
-    valid_psms = psms[abs.(residuals) .< (irt_mad * getOutlierThreshold(params)), :]
-    
+
+    # Calculate residuals in RT space
+    pred_rt = irt_to_rt_spline.(psms[!,:irt_predicted])
+    residuals = pred_rt .- psms[!,:rt]
+    rt_mad = mad(residuals, normalize=false)::Float32
+
+    # Remove outliers and refit with filtered data
+    valid_psms = psms[abs.(residuals) .< (rt_mad * getOutlierThreshold(params)), :]
+
     final_model = SplineRtConversionModel(UniformSpline(
         valid_psms[!,:irt_predicted],
         valid_psms[!,:rt],
@@ -261,19 +261,22 @@ function fit_irt_model(
         for (i, p) in enumerate(pid)
             A[i, :] = Float32.(coef_vec[p])
         end
+        # Convert observed RTs to aligned iRTs using the fitted spline
         rt_to_irt_spline = UniformSpline(
             valid_psms[!,:rt],
             valid_psms[!,:irt_predicted],
             getSplineDegree(params),
             getSplineNKnots(params)
         )
-        obs_irt = rt_to_irt_spline.(valid_psms[!,:rt])
-        y = obs_irt .- valid_psms[!,:irt_predicted]
+        aligned_irt = rt_to_irt_spline.(valid_psms[!,:rt])
+
+        # Solve for weights minimizing difference between aligned iRT and adjusted prediction
+        y = aligned_irt .- valid_psms[!,:irt_predicted]
         rt_weights = A \ y
         irt_sundial = valid_psms[!,:irt_predicted] + A * rt_weights
     end
 
-    return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad, rt_weights, irt_sundial)
+    return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], rt_mad, rt_weights, irt_sundial)
 end
 
 """
