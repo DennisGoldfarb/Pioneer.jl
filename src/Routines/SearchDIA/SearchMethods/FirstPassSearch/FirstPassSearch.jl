@@ -254,7 +254,7 @@ function process_file!(
             )
         end
 
-        rt_model = getRtIrtModel(search_context, ms_file_idx)
+        rt_model = getRtIrtModelRunSpecific(search_context, ms_file_idx)
         # Add columns
         add_psm_columns!(psms, spectra, search_context, rt_model, ms_file_idx)
         
@@ -292,9 +292,20 @@ function process_file!(
             getTICs(spectra),
             getMzArrays(spectra)
         )
-        # Calculate RT values
+        # Calculate RT values using run-specific model and weights
         psms[!, :irt_observed] = rt_model.(psms[!, :rt])
-        psms[!, :irt_error] = Float16.(abs.(psms[!, :irt_observed] .- psms[!, :irt_predicted]))
+        weights = getRtRunSpecificWeights(search_context, ms_file_idx)
+        if (weights !== nothing) && hasRtCoefficients(getPrecursors(getSpecLib(search_context)))
+            coefs = getRtCoefficients(getPrecursors(getSpecLib(search_context)))
+            psms[!, :irt_predicted_run_specific] = psms[!, :irt_predicted] .+
+                map(idx -> begin
+                    c = coefs[Int(idx)]
+                    c[1]*weights[1] + c[2]*weights[2] + c[3]*weights[3] + c[4]*weights[4]
+                end, psms[!, :precursor_idx])
+        else
+            psms[!, :irt_predicted_run_specific] = psms[!, :irt_predicted]
+        end
+        psms[!, :irt_error] = Float16.(abs.(psms[!, :irt_observed] .- psms[!, :irt_predicted_run_specific]))
         psms[!, :charge2] = UInt8.(psms[!, :charge] .== 2)
         psms[!, :ms_file_idx] .= UInt32(ms_file_idx)
     end

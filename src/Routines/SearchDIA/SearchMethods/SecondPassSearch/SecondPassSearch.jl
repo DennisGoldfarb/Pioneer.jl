@@ -386,13 +386,13 @@ function process_search_results!(
         
         psms[!, :ms1_features_missing] = miss_mask
         #Add additional features for final analysis
-        add_features!(
+            add_features!(
             psms,
             search_context,
             getTICs(spectra),
             getMzArrays(spectra),
             ms_file_idx,
-            getRtIrtModel(search_context, ms_file_idx),
+            getRtIrtModelRunSpecific(search_context, ms_file_idx),
             getPrecursorDict(search_context)
         )
 
