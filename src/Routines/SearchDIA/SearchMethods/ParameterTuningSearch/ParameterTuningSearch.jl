@@ -180,8 +180,25 @@ function set_rt_to_irt_model!(
     append!(ptsr.irt_sundial, model[6])
 
     getIrtErrors(search_context)[ms_file_idx] = model[4] * params.irt_tol_sd
+    precursors = getPrecursors(getSpecLib(search_context))
+    base_irt = getIrt(precursors)
     if length(model) > 4 && model[5] !== nothing
         setRtWeights!(search_context, ms_file_idx, model[5])
+        if hasRtCoefficients(precursors)
+            coeffs = getRtCoefficients(precursors)
+            for pid in eachindex(base_irt)
+                pred = base_irt[pid] + dot(Float32.(model[5]), Float32.(coeffs[pid]))
+                setPredIrt!(search_context, UInt32(pid), Float32(pred))
+            end
+        else
+            for pid in eachindex(base_irt)
+                setPredIrt!(search_context, UInt32(pid), Float32(base_irt[pid]))
+            end
+        end
+    else
+        for pid in eachindex(base_irt)
+            setPredIrt!(search_context, UInt32(pid), Float32(base_irt[pid]))
+        end
     end
 end
 

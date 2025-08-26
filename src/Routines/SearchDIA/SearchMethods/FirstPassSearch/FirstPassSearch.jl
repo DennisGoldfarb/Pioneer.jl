@@ -281,21 +281,17 @@ function process_file!(
         ms_file_idx::Int64
     )
         precursors = getPrecursors(getSpecLib(search_context))
-        rt_coeffs = hasRtCoefficients(precursors) ? getRtCoefficients(precursors) : nothing
-        rt_weights = haskey(getRtWeights(search_context), ms_file_idx) ? getRtWeights(search_context, ms_file_idx) : nothing
         add_main_search_columns!(
             psms,
             getModel(rt_model),
             getStructuralMods(precursors),
             getMissedCleavages(precursors),
             getIsDecoy(precursors),
-            getIrt(precursors),
+            getPredIrt(search_context),
             getCharge(precursors),
             getRetentionTimes(spectra),
             getTICs(spectra),
-            getMzArrays(spectra),
-            rt_coeffs,
-            rt_weights
+            getMzArrays(spectra)
         )
         # Calculate RT values
         psms[!, :irt_observed] = rt_model.(psms[!, :rt])
