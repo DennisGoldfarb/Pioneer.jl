@@ -225,6 +225,7 @@ function init_search_results(::ParameterTuningSearchParameters, search_context::
         Vector{Float32}(),
         Vector{Float32}(),
         Vector{Float32}(),
+        Vector{Float32}(),
         Plots.Plot[],
         Plots.Plot[],
         qc_dir
