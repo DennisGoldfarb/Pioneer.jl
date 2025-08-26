@@ -794,19 +794,17 @@ function add_features!(psms::DataFrame,
                         rt_to_irt_interp::RtConversionModel,
                         prec_id_to_irt::PrecToIrtType)
 
-    precursor_sequence = getSequence(getPrecursors(getSpecLib(search_context)))#[:sequence],
-    structural_mods = getStructuralMods(getPrecursors(getSpecLib(search_context)))#[:structural_mods],
-    prec_mz = getMz(getPrecursors(getSpecLib(search_context)))#[:mz],
-    prec_irt = getIrt(getPrecursors(getSpecLib(search_context)))#[:irt],
+    precursor_sequence = getSequence(getPrecursors(getSpecLib(search_context))) # [:sequence]
+    structural_mods = getStructuralMods(getPrecursors(getSpecLib(search_context))) # [:structural_mods]
+    prec_mz = getMz(getPrecursors(getSpecLib(search_context))) # [:mz]
+    prec_irt = getIrt(getPrecursors(getSpecLib(search_context))) # [:irt]
     rt_coefs = hasRtCoefficients(getPrecursors(getSpecLib(search_context))) ?
-        getRtCoefficients(getPrecursors(getSpecLib(search_context))) : nothing,
-    weights = getRtRunSpecificWeights(search_context, ms_file_idx),
-    irt_to_rt_rs = get(
-        getIrtRtMapRunSpecific(search_context), ms_file_idx, IdentityModel()
-    ),
-    prec_charge = getCharge(getPrecursors(getSpecLib(search_context)))#[:prec_charge],
+        getRtCoefficients(getPrecursors(getSpecLib(search_context))) : nothing
+    weights = getRtRunSpecificWeights(search_context, ms_file_idx)
+    irt_to_rt_rs = getIrtRtModelRunSpecific(search_context, ms_file_idx)
+    prec_charge = getCharge(getPrecursors(getSpecLib(search_context))) # [:prec_charge]
     entrap_group_ids = getEntrapmentGroupId(getPrecursors(getSpecLib(search_context)))
-    precursor_missed_cleavage = getMissedCleavages(getPrecursors(getSpecLib(search_context)))#[:missed_cleavages],
+    precursor_missed_cleavage = getMissedCleavages(getPrecursors(getSpecLib(search_context))) # [:missed_cleavages]
     precursor_pair_idxs = getPairIdx(getPrecursors(getSpecLib(search_context)))
     #filter!(x -> x.best_scan, psms);
     filter!(x->x.weight>0, psms);

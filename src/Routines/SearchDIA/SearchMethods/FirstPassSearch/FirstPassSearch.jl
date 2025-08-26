@@ -304,9 +304,7 @@ function process_file!(
             end, psms[!, :precursor_idx])
         end
         # Map weighted predictions through run-specific spline
-        irt_to_rt_rs = get(
-            getIrtRtMapRunSpecific(search_context), ms_file_idx, IdentityModel()
-        )
+        irt_to_rt_rs = getIrtRtModelRunSpecific(search_context, ms_file_idx)
         psms[!, :irt_predicted_run_specific] = rt_model.(
             irt_to_rt_rs.(psms[!, :irt_predicted_run_specific])
         )
