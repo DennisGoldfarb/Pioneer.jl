@@ -197,24 +197,30 @@ RT modeling
 """
     fit_irt_model(params::P, psms::DataFrame, precursors::LibraryPrecursors) where {P<:ParameterTuningSearchParameters}
 
-Fits retention time alignment model between library and empirical retention times.
+Fits retention time alignment model between library and empirical retention times and
+derives run-specific iRT predictions using Sundial RT coefficients when available.
 
 # Arguments
 - `params`: Parameter tuning search parameters
 - `psms`: DataFrame containing PSMs with RT information
+- `precursors`: Library precursors containing optional Sundial RT coefficients
 
 # Process
 1. Performs initial spline fit between predicted and observed RTs
 2. Calculates residuals and median absolute deviation
 3. Removes outliers based on MAD threshold
 4. Refits spline model on cleaned data
+5. If Sundial RT coefficients are present, solves for run-specific weights and
+   produces updated iRT predictions
 
 # Returns
 Tuple containing:
 - Final RT conversion model
 - Valid RT values
-- Valid iRT values
+- Original library iRT predictions
 - iRT median absolute deviation
+- Run-specific weights (or `nothing`)
+- iRT predictions updated with Sundial RT coefficients
 """
 function fit_irt_model(
     params::P,
@@ -246,6 +252,7 @@ function fit_irt_model(
     ))
 
     rt_weights = nothing
+    irt_sundial = valid_psms[!,:irt_predicted]
     if hasRtCoefficients(precursors)
         coef_vec = getRtCoefficients(precursors)
         pid = valid_psms[!, :precursor_idx]
@@ -263,9 +270,10 @@ function fit_irt_model(
         obs_irt = rt_to_irt_spline.(valid_psms[!,:rt])
         y = obs_irt .- valid_psms[!,:irt_predicted]
         rt_weights = A \ y
+        irt_sundial = valid_psms[!,:irt_predicted] + A * rt_weights
     end
 
-    return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad, rt_weights)
+    return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted], irt_mad, rt_weights, irt_sundial)
 end
 
 """
@@ -699,16 +707,16 @@ Plotting Helpers
 ==========================================================#
 
 """
-    generate_rt_plot(results::ParameterTuningSearchResults, plot_path::String, title::String)
+    generate_rt_plot(results::ParameterTuningSearchResults, title::String)
 
-Generates retention time alignment visualization plot.
+Visualizes retention time alignment by plotting original library iRTs and
+run-specific iRT predictions updated with Sundial RT coefficients.
 
 # Arguments
 - `results`: Parameter tuning results containing RT data
-- `plot_path`: Path to save plot
 - `title`: Plot title
 
-Creates scatter plot of RT vs iRT with fitted spline curve.
+Creates side-by-side scatter plots with the fitted spline overlaid.
 """
 function generate_rt_plot(
     results::ParameterTuningSearchResults,
@@ -716,7 +724,6 @@ function generate_rt_plot(
 )
     n = length(results.rt)
     rt_model = getRtToIrtModel(results)
-    aligned_irt = rt_model.(results.rt)
     pbins = LinRange(minimum(results.rt), maximum(results.rt), 100)
     plot_title = title*"\n n = $n"
 
@@ -733,20 +740,20 @@ function generate_rt_plot(
     )
     plot!(p_orig, pbins, rt_model.(pbins), lw=3, label=nothing)
 
-    p_aligned = plot(
+    p_sundial = plot(
         results.rt,
-        aligned_irt,
+        results.irt_sundial,
         seriestype=:scatter,
-        title = plot_title*" (aligned)",
+        title = plot_title*" (sundial)",
         xlabel = "Retention Time RT (min)",
         ylabel = "Indexed Retention Time iRT (min)",
         label = nothing,
         alpha = 0.1,
         size = 100*[13.3, 7.5]
     )
-    plot!(p_aligned, pbins, rt_model.(pbins), lw=3, label=nothing)
+    plot!(p_sundial, pbins, rt_model.(pbins), lw=3, label=nothing)
 
-    return plot(p_orig, p_aligned, layout=(1,2), size=100*[13.3*2, 7.5])
+    return plot(p_orig, p_sundial, layout=(1,2), size=100*[13.3*2, 7.5])
 end
 
 
