@@ -293,40 +293,27 @@ end
 """
     optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}}; λ)
 
-Determine run-specific weights that minimize the PSM-count-weighted average
-coefficient of variation of predicted iRT values across 20 RT bins while
-penalizing large weights via an L2 regularization term.
+Determine run-specific weights that minimize squared differences between
+consecutive run-specific iRT predictions after sorting by retention time.
+An L2 penalty discourages large weights.
 """
 function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}}; λ::Float64 = 0.1)
-    n_bins = 20
-    min_rt, max_rt = minimum(rt), maximum(rt)
-    edges = collect(LinRange(min_rt, max_rt, n_bins + 1))
-    groups = [Int[] for _ in 1:n_bins]
-    for (i, r) in enumerate(rt)
-        b = clamp(searchsortedlast(edges, r), 1, n_bins)
-        push!(groups[b], i)
-    end
+    order = sortperm(rt)
+    irt_sorted = irt[order]
+    coefs_sorted = coefs[order]
+    temp = similar(irt_sorted)
 
-    temp = similar(irt)
     function objective(w)
-        @inbounds for i in eachindex(irt)
-            c = coefs[i]
-            temp[i] = irt[i] + c[1]*w[1] + c[2]*w[2] + c[3]*w[3] + c[4]*w[4]
+        @inbounds for i in eachindex(irt_sorted)
+            c = coefs_sorted[i]
+            temp[i] = irt_sorted[i] + c[1]*w[1] + c[2]*w[2] + c[3]*w[3] + c[4]*w[4]
         end
-        cv_sum = 0.0
-        total = 0
-        for grp in groups
-            n = length(grp)
-            if n > 1
-                vals = @view temp[grp]
-                m = mean(vals)
-                if m != 0
-                    cv_sum += (std(vals) / m) * n
-                    total += n
-                end
-            end
+        diff_sum = 0.0
+        for i in 1:length(temp)-1
+            d = temp[i+1] - temp[i]
+            diff_sum += d*d
         end
-        return cv_sum / max(total, 1) + λ * sum(abs2, w)
+        return diff_sum / max(length(temp)-1, 1) + λ * sum(abs2, w)
     end
 
     result = Optim.optimize(objective, zeros(4), Optim.NelderMead())
