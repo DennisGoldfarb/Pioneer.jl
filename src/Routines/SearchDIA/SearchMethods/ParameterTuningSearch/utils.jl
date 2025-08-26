@@ -293,8 +293,8 @@ end
 """
     optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}})
 
-Determine run-specific weights that minimize the average coefficient of
-variation of predicted iRT values across 20 RT bins.
+Determine run-specific weights that minimize the PSM-count-weighted average
+coefficient of variation of predicted iRT values across 20 RT bins.
 """
 function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}})
     n_bins = 20
@@ -313,18 +313,19 @@ function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::V
             temp[i] = irt[i] + c[1]*w[1] + c[2]*w[2] + c[3]*w[3] + c[4]*w[4]
         end
         cv_sum = 0.0
-        count = 0
+        total = 0
         for grp in groups
-            if length(grp) > 1
+            n = length(grp)
+            if n > 1
                 vals = @view temp[grp]
                 m = mean(vals)
                 if m != 0
-                    cv_sum += std(vals) / m
-                    count += 1
+                    cv_sum += (std(vals) / m) * n
+                    total += n
                 end
             end
         end
-        return cv_sum / max(count, 1)
+        return cv_sum / max(total, 1)
     end
 
     result = Optim.optimize(objective, zeros(4), Optim.NelderMead())
