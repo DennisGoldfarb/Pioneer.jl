@@ -765,6 +765,16 @@ function get_isotopes_captured!(chroms::DataFrame,
 end
 
 
+PrecToIrtType = Dictionary{UInt32,
+    NamedTuple{
+        (:best_prob, :best_ms_file_idx, :best_scan_idx, :best_irt,
+         :mean_irt, :var_irt, :n, :mz),
+        Tuple{Float32, UInt32, UInt32, Float32,
+              Union{Missing, Float32}, Union{Missing, Float32},
+              Union{Missing, UInt16}, Float32}
+    }
+}
+
 """
     add_features!(psms::DataFrame, search_context::SearchContext, ...)
 
@@ -776,14 +786,13 @@ Add feature columns to PSMs for scoring and analysis.
 - Intensity metrics
 - Spectrum characteristics
 """
-function add_features!(psms::DataFrame, 
+function add_features!(psms::DataFrame,
                         search_context::SearchContext,
-                                    tic::AbstractVector{Float32},
-                                    masses::AbstractArray,
-                                    ms_file_idx::Integer,
-                                    rt_to_irt_interp::RtConversionModel,
-                                    prec_id_to_irt::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_irt::Float32, mean_irt::Union{Missing, Float32}, var_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}}
-                                    )
+                        tic::AbstractVector{Float32},
+                        masses::AbstractArray,
+                        ms_file_idx::Integer,
+                        rt_to_irt_interp::RtConversionModel,
+                        prec_id_to_irt::PrecToIrtType)
 
     precursor_sequence = getSequence(getPrecursors(getSpecLib(search_context)))#[:sequence],
     structural_mods = getStructuralMods(getPrecursors(getSpecLib(search_context)))#[:structural_mods],
