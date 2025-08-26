@@ -280,7 +280,7 @@ function fit_irt_model(
         residuals_rs = irt_observed_rs .- valid_psms[!,:irt_predicted_run_specific]
         irt_mad_rs = mad(residuals_rs, normalize=false)::Float32
         println("Original spline MAD: ", irt_mad_orig)
-        println("Run-specific spline MAD: ", irt_mad_rs)
+        println("Run-specific spline MAD: ", irt_mad_rs, "\n\n")
 
         return (final_model, valid_psms[!,:rt], valid_psms[!,:irt_predicted_run_specific], irt_mad_rs, original_model, valid_psms[!,:irt_predicted], weights)
     else
@@ -297,7 +297,7 @@ Determine run-specific weights that minimize Gaussian-weighted squared
 differences of run-specific iRT predictions for PSM pairs within a limited
 retention-time window.  An L2 penalty discourages large weights.
 """
-function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}}; λ::Float64 = 0.1)
+function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}}; λ::Float64 = 0.0)
     order = sortperm(rt)
     rt_sorted = rt[order]
     irt_sorted = irt[order]
@@ -305,8 +305,8 @@ function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::V
     temp = similar(irt_sorted)
 
     rt_range = maximum(rt_sorted) - minimum(rt_sorted)
-    sigma = max(rt_range / 10, eps(Float32))
-    window = 3sigma
+    sigma = max(rt_range / 1000, eps(Float32))
+    window = 1sigma
 
     function objective(w)
         @inbounds for i in eachindex(irt_sorted)
