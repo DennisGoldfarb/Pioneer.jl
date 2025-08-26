@@ -291,12 +291,13 @@ function fit_irt_model(
 end
 
 """
-    optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}})
+    optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}}; λ)
 
 Determine run-specific weights that minimize the PSM-count-weighted average
-coefficient of variation of predicted iRT values across 20 RT bins.
+coefficient of variation of predicted iRT values across 20 RT bins while
+penalizing large weights via an L2 regularization term.
 """
-function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}})
+function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::Vector{NTuple{4,Float32}}; λ::Float64 = 0.1)
     n_bins = 20
     min_rt, max_rt = minimum(rt), maximum(rt)
     edges = collect(LinRange(min_rt, max_rt, n_bins + 1))
@@ -325,7 +326,7 @@ function optimize_rt_weights(rt::Vector{Float32}, irt::Vector{Float32}, coefs::V
                 end
             end
         end
-        return cv_sum / max(total, 1)
+        return cv_sum / max(total, 1) + λ * sum(abs2, w)
     end
 
     result = Optim.optimize(objective, zeros(4), Optim.NelderMead())
