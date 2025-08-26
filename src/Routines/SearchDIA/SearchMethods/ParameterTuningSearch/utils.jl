@@ -715,21 +715,38 @@ function generate_rt_plot(
     title::String
 )
     n = length(results.rt)
-    p = plot(
+    rt_model = getRtToIrtModel(results)
+    aligned_irt = rt_model.(results.rt)
+    pbins = LinRange(minimum(results.rt), maximum(results.rt), 100)
+    plot_title = title*"\n n = $n"
+
+    p_orig = plot(
         results.rt,
         results.irt,
         seriestype=:scatter,
-        title = title*"\n n = $n",
+        title = plot_title*" (original)",
         xlabel = "Retention Time RT (min)",
         ylabel = "Indexed Retention Time iRT (min)",
         label = nothing,
         alpha = 0.1,
         size = 100*[13.3, 7.5]
     )
-    
-    pbins = LinRange(minimum(results.rt), maximum(results.rt), 100)
-    plot!(pbins, getRtToIrtModel(results).(pbins), lw=3, label=nothing)
-    return p
+    plot!(p_orig, pbins, rt_model.(pbins), lw=3, label=nothing)
+
+    p_aligned = plot(
+        results.rt,
+        aligned_irt,
+        seriestype=:scatter,
+        title = plot_title*" (aligned)",
+        xlabel = "Retention Time RT (min)",
+        ylabel = "Indexed Retention Time iRT (min)",
+        label = nothing,
+        alpha = 0.1,
+        size = 100*[13.3, 7.5]
+    )
+    plot!(p_aligned, pbins, rt_model.(pbins), lw=3, label=nothing)
+
+    return plot(p_orig, p_aligned, layout=(1,2), size=100*[13.3*2, 7.5])
 end
 
 
