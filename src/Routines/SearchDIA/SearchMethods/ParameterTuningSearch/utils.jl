@@ -16,13 +16,13 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """
-    add_tuning_search_columns!(psms::DataFrame, MS_TABLE::Arrow.Table,
+    add_tuning_search_columns!(psms::DataFrame, MS_TABLE::MassSpecData,
                              prec_is_decoy::Arrow.BoolVector{Bool},
                              prec_irt::Arrow.Primitive{T, Vector{T}},
                              prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
-                             scan_retention_time::AbstractVector{Float32},
-                             tic::AbstractVector{Float32},
-                             prec_rt_coefs::Union{Nothing, AbstractVector}=nothing) where {T<:AbstractFloat}
+                             scan_retention_time,
+                             tic,
+                             prec_rt_coefs=nothing) where {T<:AbstractFloat}
 
 Adds essential columns to PSM DataFrame for parameter tuning analysis.
 
@@ -32,8 +32,9 @@ Adds essential columns to PSM DataFrame for parameter tuning analysis.
 - `prec_is_decoy`: Boolean vector indicating decoy status
 - `prec_irt`: Vector of iRT values
 - `prec_charge`: Vector of precursor charges
-- `scan_retention_time`: Vector of scan retention times
-- `tic`: Vector of total ion currents
+ - `scan_retention_time`: Vector of scan retention times
+ - `tic`: Vector of total ion currents
+ - `prec_rt_coefs`: Optional vector of run-specific RT coefficients
 
 # Added Columns
 - Basic metrics: RT, iRT predicted, charge, TIC
@@ -42,13 +43,14 @@ Adds essential columns to PSM DataFrame for parameter tuning analysis.
 
 Uses parallel processing for efficiency through data chunking.
 """
-function add_tuning_search_columns!(psms::DataFrame, 
-                                MS_TABLE::MassSpecData, 
-                                prec_is_decoy::Arrow.BoolVector{Bool},
-                                prec_irt::Arrow.Primitive{T, Vector{T}},
-                                prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
-                                scan_retention_time::AbstractVector{Float32},
-                                tic::AbstractVector{Float32}) where {T<:AbstractFloat}
+function add_tuning_search_columns!(psms::DataFrame,
+                                    MS_TABLE::MassSpecData,
+                                    prec_is_decoy::Arrow.BoolVector{Bool},
+                                    prec_irt::Arrow.Primitive{T, Vector{T}},
+                                    prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
+                                    scan_retention_time,
+                                    tic,
+                                    prec_rt_coefs=nothing) where {T<:AbstractFloat}
     
     N = size(psms, 1)
     decoys = zeros(Bool, N);
