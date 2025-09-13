@@ -776,13 +776,13 @@ Add feature columns to PSMs for scoring and analysis.
 - Intensity metrics
 - Spectrum characteristics
 """
-function add_features!(psms::DataFrame, 
+function add_features!(psms::DataFrame,
                         search_context::SearchContext,
                                     tic::AbstractVector{Float32},
                                     masses::AbstractArray,
                                     ms_file_idx::Integer,
                                     rt_to_irt_interp::RtConversionModel,
-                                    prec_id_to_irt::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_irt::Float32, mean_irt::Union{Missing, Float32}, var_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}}
+                                    prec_id_to_irt::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_irt::Float32, mean_irt::Union{Missing, Float32}, var_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32, passed_first_search::Bool}}
                                     )
 
     precursor_sequence = getSequence(getPrecursors(getSpecLib(search_context)))#[:sequence],
@@ -820,6 +820,7 @@ function add_features!(psms::DataFrame,
     prec_mzs = zeros(Float32, size(psms, 1));
     Mox = zeros(UInt8, N);
     TIC = zeros(Float16, N);
+    passed_first_search = falses(N);
 
     #tic = MS_TABLE[:TIC]::Arrow.Primitive{Union{Missing, Float32}, Vector{Float32}}
     precursor_idx::Vector{UInt32} = psms[!,:precursor_idx] 
@@ -866,6 +867,7 @@ function add_features!(psms::DataFrame,
                 #sequence[i] = precursor_sequence[prec_idx]
                 sequence_length[i] = length(replace(precursor_sequence[prec_idx], r"\(.*?\)" => ""))#replace.(sequence[i], "M(ox)" => "M");
                 Mox[i] = countMOX(structural_mods[prec_idx])::UInt8
+                passed_first_search[i] = prec_id_to_irt[prec_idx].passed_first_search
                 #sequence_length[i] = length(stripped_sequence[i])
                 TIC[i] = Float16(log2(tic[scan_idx[i]]))
                 adjusted_intensity_explained[i] = Float16(log2(TIC[i]) + log2_intensity_explained[i]);
@@ -888,6 +890,7 @@ function add_features!(psms::DataFrame,
     #psms[!,:sequence] = sequence
     #psms[!,:stripped_sequence] = stripped_sequence
     psms[!,:Mox] = Mox
+    psms[!,:passed_first_search] = passed_first_search
     psms[!,:sequence_length] = sequence_length
 
     psms[!,:tic] = TIC

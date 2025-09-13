@@ -632,11 +632,14 @@ function get_training_data_for_iteration!(
 )
    
     if itr == 1
-        # Train on all precursors during first iteration. 
-        return copy(psms_train)
+        # Train only on precursors that passed the first search.
+        return copy(psms_train[psms_train.passed_first_search .== true, :])
     else
         # Do a shallow copy to avoid overwriting target/decoy labels
         psms_train_itr = copy(psms_train)
+        if !(match_between_runs && last_iter)
+            psms_train_itr = psms_train_itr[psms_train_itr.passed_first_search .== true, :]
+        end
 
         # Convert the worst-scoring targets to negatives using PEP estimate
         order = sortperm(psms_train_itr.prob, rev=true)
