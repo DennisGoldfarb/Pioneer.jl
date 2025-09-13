@@ -630,13 +630,19 @@ function get_training_data_for_iteration!(
     min_PEP_neg_threshold_xgboost_rescore::Float32,
     last_iter::Bool
 )
-   
+
+    psms_train_filtered = if match_between_runs && !last_iter && hasproperty(psms_train, :MBR_is_paired)
+        psms_train[.!psms_train.MBR_is_paired, :]
+    else
+        psms_train
+    end
+
     if itr == 1
-        # Train on all precursors during first iteration. 
-        return copy(psms_train)
+        # Train on all precursors during first iteration.
+        return copy(psms_train_filtered)
     else
         # Do a shallow copy to avoid overwriting target/decoy labels
-        psms_train_itr = copy(psms_train)
+        psms_train_itr = copy(psms_train_filtered)
 
         # Convert the worst-scoring targets to negatives using PEP estimate
         order = sortperm(psms_train_itr.prob, rev=true)

@@ -822,7 +822,9 @@ function add_features!(psms::DataFrame,
     TIC = zeros(Float16, N);
 
     #tic = MS_TABLE[:TIC]::Arrow.Primitive{Union{Missing, Float32}, Vector{Float32}}
-    precursor_idx::Vector{UInt32} = psms[!,:precursor_idx] 
+    precursor_idx::Vector{UInt32} = psms[!,:precursor_idx]
+    first_pass_set = getFirstPassPrecursors(search_context)
+    psms[!, :MBR_is_paired] = .!in.(precursor_idx, Ref(first_pass_set))
     scan_idx::Vector{UInt32} = psms[!,:scan_idx]
     #masses = MS_TABLE[:mz_array]::Arrow.List{Union{Missing, SubArray{Union{Missing, Float32}, 1, Arrow.Primitive{Union{Missing, Float32}, Vector{Float32}}, Tuple{UnitRange{Int64}}, true}}, Int64, Arrow.Primitive{Union{Missing, Float32}, Vector{Float32}}}
     #longest_y::Vector{UInt8} = psms[!,:longest_y]
