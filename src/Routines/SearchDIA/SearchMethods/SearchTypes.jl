@@ -222,6 +222,7 @@ mutable struct SearchContext{N,L<:SpectralLibrary,M<:MassSpecDataReference}
     irt_rt_map::Dict{Int64, RtConversionModel}
     rt_irt_map::Dict{Int64, RtConversionModel}
     precursor_dict::Base.Ref{Dictionary}
+    first_pass_precursors::Base.Ref{Set{UInt32}}
     rt_index_paths::Base.Ref{Vector{String}}
     irt_errors::Dict{Int64, Float32}
     irt_obs::Dict{UInt32, Float32}
@@ -259,9 +260,10 @@ mutable struct SearchContext{N,L<:SpectralLibrary,M<:MassSpecDataReference}
             Dict{Int64, MassErrorModel}(),
             Dict{Int64, MassErrorModel}(),
             Dict{Int64, NceModel}(), Ref(100000.0f0), 10.0f0,
-            Dict{Int64, RtConversionModel}(), 
-            Dict{Int64, RtConversionModel}(), 
-            Ref{Dictionary}(), 
+            Dict{Int64, RtConversionModel}(),
+            Dict{Int64, RtConversionModel}(),
+            Ref{Dictionary}(),
+            Ref(Set{UInt32}()),
             Ref{Vector{String}}(),
             Dict{Int64, Float32}(),
             Dict{UInt32, Float32}(),
@@ -393,6 +395,7 @@ getParsedFileName(s::SearchContext, ms_file_idx::Int64) = getParsedFileName(s.ma
 getIrtRtMap(s::SearchContext) = s.irt_rt_map
 getRtIrtMap(s::SearchContext) = s.rt_irt_map
 getPrecursorDict(s::SearchContext) = s.precursor_dict[]
+getFirstPassPrecursors(s::SearchContext) = s.first_pass_precursors[]
 getRtIndexPaths(s::SearchContext) = s.rt_index_paths[]
 getIrtErrors(s::SearchContext) = s.irt_errors
 getPredIrt(s::SearchContext) = s.irt_obs
@@ -499,6 +502,7 @@ end
 function setPrecursorDict!(s::SearchContext, dict::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_irt::Float32, mean_irt::Union{Missing, Float32}, var_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}})
     s.precursor_dict[] = dict
 end
+setFirstPassPrecursors!(s::SearchContext, ids::Set{UInt32}) = (s.first_pass_precursors[] = ids)
 setRtIndexPaths!(s::SearchContext, paths::Vector{String}) = (s.rt_index_paths[] = paths)
 setHuberDelta!(s::SearchContext, delta::Float32) = (s.huber_delta[] = delta)
 function setIrtErrors!(s::SearchContext, errs::Dictionary{Int64, Float32})

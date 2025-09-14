@@ -496,6 +496,7 @@ function summarize_results!(
     map_retention_times!(search_context, results, params)
     # Process precursors
     precursor_dict = get_best_precursors_accross_runs!(search_context, results, params)
+    passing_precursors = Set{UInt32}(keys(precursor_dict))
 
     if params.match_between_runs==true
         #######
@@ -532,6 +533,7 @@ function summarize_results!(
     end
 
     setPrecursorDict!(search_context, precursor_dict)
+    setFirstPassPrecursors!(search_context, passing_precursors)
     # Calculate RT indices
     create_rt_indices!(search_context, results, precursor_dict, params)
     

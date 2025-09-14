@@ -171,5 +171,6 @@ end
     include("./utils/FileOperations/io/test_arrow_operations_basic.jl")
     include("./utils/FileOperations/core/test_core_references_basic.jl")
     include("./utils/FileOperations/streaming/test_stream_sorted_merge_basic.jl")
-    
+    include("./utils/test_percolator_sort_of.jl")
+
 end
