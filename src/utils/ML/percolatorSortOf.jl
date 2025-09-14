@@ -53,8 +53,10 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     prob_test   = zeros(Float32, nrow(psms))  # final CV predictions
     prob_train  = zeros(Float32, nrow(psms))  # temporary, used during training
     MBR_estimates = zeros(Float32, nrow(psms)) # optional MBR layer
-    prob_iter2 = zeros(Float32, nrow(psms))
-    prob_iter3 = zeros(Float32, nrow(psms))
+    prob_iter2_train = zeros(Float32, nrow(psms))
+    prob_iter2_test  = zeros(Float32, nrow(psms))
+    prob_iter3_train = zeros(Float32, nrow(psms))
+    prob_iter3_test  = zeros(Float32, nrow(psms))
 
     unique_cv_folds = unique(psms[!, :cv_fold])
     models = Dict{UInt8, Vector{EvoTrees.EvoTree}}()
@@ -140,11 +142,11 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             psms_test[!,:prob] = prob_test[test_idx]
 
             if itr == 2
-                prob_iter2[train_idx] = prob_train[train_idx]
-                prob_iter2[test_idx] = prob_test[test_idx]
+                prob_iter2_train[train_idx] = prob_train[train_idx]
+                prob_iter2_test[test_idx] = prob_test[test_idx]
             elseif itr == 3
-                prob_iter3[train_idx] = prob_train[train_idx]
-                prob_iter3[test_idx] = prob_test[test_idx]
+                prob_iter3_train[train_idx] = prob_train[train_idx]
+                prob_iter3_test[test_idx] = prob_test[test_idx]
             end
 
             if match_between_runs
@@ -187,7 +189,8 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     end
 
     if debug_cv_dir !== nothing
-        write_cv_debug_files(psms, prob_iter2, prob_iter3,
+        write_cv_debug_files(psms, prob_iter2_train, prob_iter2_test,
+                             prob_iter3_train, prob_iter3_test,
                              fold_indices, train_indices, debug_cv_dir)
     end
 
@@ -195,8 +198,10 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
 end
 
 function write_cv_debug_files(psms::DataFrame,
-                              prob_iter2::AbstractVector,
-                              prob_iter3::AbstractVector,
+                              prob_iter2_train::AbstractVector,
+                              prob_iter2_test::AbstractVector,
+                              prob_iter3_train::AbstractVector,
+                              prob_iter3_test::AbstractVector,
                               fold_indices::Dict{UInt8, Vector{Int}},
                               train_indices::Dict{UInt8, Vector{Int}},
                               out_dir::AbstractString)
@@ -231,8 +236,8 @@ function write_cv_debug_files(psms::DataFrame,
             :run => psms.run[train_idx],
             :charge => psms.charge[train_idx],
             :target => psms.target[train_idx],
-            :prob_2nd_iteration => prob_iter2[train_idx],
-            :prob_3rd_iteration => prob_iter3[train_idx],
+            :prob_2nd_iteration => prob_iter2_train[train_idx],
+            :prob_3rd_iteration => prob_iter3_train[train_idx],
             :MBR_candidate => psms.MBR_transfer_candidate[train_idx],
         )
         if seq_col !== nothing
@@ -250,8 +255,8 @@ function write_cv_debug_files(psms::DataFrame,
             :run => psms.run[test_idx],
             :charge => psms.charge[test_idx],
             :target => psms.target[test_idx],
-            :prob_2nd_iteration => prob_iter2[test_idx],
-            :prob_3rd_iteration => prob_iter3[test_idx],
+            :prob_2nd_iteration => prob_iter2_test[test_idx],
+            :prob_3rd_iteration => prob_iter3_test[test_idx],
             :MBR_candidate => psms.MBR_transfer_candidate[test_idx],
         )
         if seq_col !== nothing
