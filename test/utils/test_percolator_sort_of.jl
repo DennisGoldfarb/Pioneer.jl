@@ -25,7 +25,12 @@ using Pioneer: get_training_data_for_iteration!, write_cv_debug_files
 end
 
 @testset "write cv fold debug files" begin
-    psms = DataFrame(
+    prob2 = Float32[0.1, 0.2]
+    prob3 = Float32[0.3, 0.4]
+    fold_indices = Dict(UInt8(1) => [1], UInt8(2) => [2])
+    train_indices = Dict(UInt8(1) => [2], UInt8(2) => [1])
+
+    psms1 = DataFrame(
         precursor_idx = UInt32[1, 2],
         sequence = ["PEPTIDE", "PEPTIDER"],
         mods = ["", ""],
@@ -34,19 +39,26 @@ end
         target = Bool[true, false],
         MBR_transfer_candidate = Bool[false, true],
     )
-    prob2 = Float32[0.1, 0.2]
-    prob3 = Float32[0.3, 0.4]
-    fold_indices = Dict(UInt8(1) => [1], UInt8(2) => [2])
-    train_indices = Dict(UInt8(1) => [2], UInt8(2) => [1])
     mktempdir() do dir
-        write_cv_debug_files(psms, prob2, prob3, fold_indices, train_indices, dir)
-        train_path = joinpath(dir, "cv_fold_1_train.tsv")
-        test_path = joinpath(dir, "cv_fold_1_test.tsv")
-        @test isfile(train_path)
-        @test isfile(test_path)
-        train_df = DataFrame(CSV.File(train_path; delim='\t'))
-        test_df = DataFrame(CSV.File(test_path; delim='\t'))
-        @test :target in names(train_df)
-        @test :target in names(test_df)
+        write_cv_debug_files(psms1, prob2, prob3, fold_indices, train_indices, dir)
+        df = DataFrame(CSV.File(joinpath(dir, "cv_fold_1_train.tsv"); delim='\t'))
+        @test :sequence in names(df)
+        @test :mods in names(df)
+    end
+
+    psms2 = DataFrame(
+        precursor_idx = UInt32[1, 2],
+        structural_mods = ["", "(Oxidation[M])"],
+        isotopic_mods = ["", ""],
+        run = ["run1", "run2"],
+        charge = [2, 3],
+        target = Bool[true, false],
+        MBR_transfer_candidate = Bool[false, true],
+    )
+    mktempdir() do dir
+        write_cv_debug_files(psms2, prob2, prob3, fold_indices, train_indices, dir)
+        df = DataFrame(CSV.File(joinpath(dir, "cv_fold_1_train.tsv"); delim='\t'))
+        @test :sequence ∉ names(df)
+        @test :mods in names(df)
     end
 end

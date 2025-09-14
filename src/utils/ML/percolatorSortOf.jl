@@ -201,34 +201,66 @@ function write_cv_debug_files(psms::DataFrame,
                               train_indices::Dict{UInt8, Vector{Int}},
                               out_dir::AbstractString)
     isdir(out_dir) || mkpath(out_dir)
+    seq_col = if hasproperty(psms, :sequence)
+        :sequence
+    elseif hasproperty(psms, :modified_sequence)
+        :modified_sequence
+    elseif hasproperty(psms, :peptide)
+        :peptide
+    else
+        nothing
+    end
+
+    mods_data = if hasproperty(psms, :mods)
+        psms.mods
+    elseif hasproperty(psms, :structural_mods) && hasproperty(psms, :isotopic_mods)
+        string.(coalesce.(psms.structural_mods, ""), coalesce.(psms.isotopic_mods, ""))
+    elseif hasproperty(psms, :structural_mods)
+        psms.structural_mods
+    elseif hasproperty(psms, :isotopic_mods)
+        psms.isotopic_mods
+    else
+        nothing
+    end
+
     for (fold, test_idx) in pairs(fold_indices)
         train_idx = train_indices[fold]
-        train_df = DataFrame(
-            train_or_test = fill("train", length(train_idx)),
-            precursor_id = psms.precursor_idx[train_idx],
-            sequence = psms.sequence[train_idx],
-            mods = psms.mods[train_idx],
-            run = psms.run[train_idx],
-            charge = psms.charge[train_idx],
-            target = psms.target[train_idx],
-            prob_2nd_iteration = prob_iter2[train_idx],
-            prob_3rd_iteration = prob_iter3[train_idx],
-            MBR_candidate = psms.MBR_transfer_candidate[train_idx],
+        train_cols = Dict(
+            :train_or_test => fill("train", length(train_idx)),
+            :precursor_id => psms.precursor_idx[train_idx],
+            :run => psms.run[train_idx],
+            :charge => psms.charge[train_idx],
+            :target => psms.target[train_idx],
+            :prob_2nd_iteration => prob_iter2[train_idx],
+            :prob_3rd_iteration => prob_iter3[train_idx],
+            :MBR_candidate => psms.MBR_transfer_candidate[train_idx],
         )
+        if seq_col !== nothing
+            train_cols[:sequence] = psms[train_idx, seq_col]
+        end
+        if mods_data !== nothing
+            train_cols[:mods] = mods_data[train_idx]
+        end
+        train_df = DataFrame(train_cols)
         CSV.write(joinpath(out_dir, "cv_fold_$(fold)_train.tsv"), train_df; delim='\t')
 
-        test_df = DataFrame(
-            train_or_test = fill("test", length(test_idx)),
-            precursor_id = psms.precursor_idx[test_idx],
-            sequence = psms.sequence[test_idx],
-            mods = psms.mods[test_idx],
-            run = psms.run[test_idx],
-            charge = psms.charge[test_idx],
-            target = psms.target[test_idx],
-            prob_2nd_iteration = prob_iter2[test_idx],
-            prob_3rd_iteration = prob_iter3[test_idx],
-            MBR_candidate = psms.MBR_transfer_candidate[test_idx],
+        test_cols = Dict(
+            :train_or_test => fill("test", length(test_idx)),
+            :precursor_id => psms.precursor_idx[test_idx],
+            :run => psms.run[test_idx],
+            :charge => psms.charge[test_idx],
+            :target => psms.target[test_idx],
+            :prob_2nd_iteration => prob_iter2[test_idx],
+            :prob_3rd_iteration => prob_iter3[test_idx],
+            :MBR_candidate => psms.MBR_transfer_candidate[test_idx],
         )
+        if seq_col !== nothing
+            test_cols[:sequence] = psms[test_idx, seq_col]
+        end
+        if mods_data !== nothing
+            test_cols[:mods] = mods_data[test_idx]
+        end
+        test_df = DataFrame(test_cols)
         CSV.write(joinpath(out_dir, "cv_fold_$(fold)_test.tsv"), test_df; delim='\t')
     end
 end
