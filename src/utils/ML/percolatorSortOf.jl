@@ -30,7 +30,8 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
                   iter_scheme::Vector{Int} = [100, 200, 200],
                   print_importance::Bool = false,
                   show_progress::Bool = true,
-                  verbose_logging::Bool = false)
+                  verbose_logging::Bool = false,
+                  debug_cv_dir::Union{Nothing, AbstractString} = nothing)
 
     
     #Faster if sorted first
@@ -52,6 +53,10 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     prob_test   = zeros(Float32, nrow(psms))  # final CV predictions
     prob_train  = zeros(Float32, nrow(psms))  # temporary, used during training
     MBR_estimates = zeros(Float32, nrow(psms)) # optional MBR layer
+    prob_iter2_train = zeros(Float32, nrow(psms))
+    prob_iter2_test  = zeros(Float32, nrow(psms))
+    prob_iter3_train = zeros(Float32, nrow(psms))
+    prob_iter3_test  = zeros(Float32, nrow(psms))
 
     unique_cv_folds = unique(psms[!, :cv_fold])
     models = Dict{UInt8, Vector{EvoTrees.EvoTree}}()
@@ -136,6 +141,14 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             prob_test[test_idx] = predict(bst, psms_test)
             psms_test[!,:prob] = prob_test[test_idx]
 
+            if itr == 2
+                prob_iter2_train[train_idx] = prob_train[train_idx]
+                prob_iter2_test[test_idx] = prob_test[test_idx]
+            elseif itr == 3
+                prob_iter3_train[train_idx] = prob_train[train_idx]
+                prob_iter3_test[test_idx] = prob_test[test_idx]
+            end
+
             if match_between_runs
                 update_mbr_features!(psms_train, psms_test, prob_test,
                                      test_idx, itr, mbr_start_iter,
@@ -174,14 +187,93 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     else
         psms[!, :prob] = prob_test
     end
-    
+
+    if debug_cv_dir !== nothing
+        write_cv_debug_files(psms, prob_iter2_train, prob_iter2_test,
+                             prob_iter3_train, prob_iter3_test,
+                             fold_indices, train_indices, debug_cv_dir)
+    end
+
     return models
 end
 
-function sort_of_percolator_out_of_memory!(psms::DataFrame, 
+function write_cv_debug_files(psms::DataFrame,
+                              prob_iter2_train::AbstractVector,
+                              prob_iter2_test::AbstractVector,
+                              prob_iter3_train::AbstractVector,
+                              prob_iter3_test::AbstractVector,
+                              fold_indices::Dict{UInt8, Vector{Int}},
+                              train_indices::Dict{UInt8, Vector{Int}},
+                              out_dir::AbstractString)
+    isdir(out_dir) || mkpath(out_dir)
+    seq_col = if hasproperty(psms, :sequence)
+        :sequence
+    elseif hasproperty(psms, :modified_sequence)
+        :modified_sequence
+    elseif hasproperty(psms, :peptide)
+        :peptide
+    else
+        nothing
+    end
+
+    mods_data = if hasproperty(psms, :mods)
+        psms.mods
+    elseif hasproperty(psms, :structural_mods) && hasproperty(psms, :isotopic_mods)
+        string.(coalesce.(psms.structural_mods, ""), coalesce.(psms.isotopic_mods, ""))
+    elseif hasproperty(psms, :structural_mods)
+        psms.structural_mods
+    elseif hasproperty(psms, :isotopic_mods)
+        psms.isotopic_mods
+    else
+        nothing
+    end
+
+    for (fold, test_idx) in pairs(fold_indices)
+        train_idx = train_indices[fold]
+        train_cols = Dict(
+            :train_or_test => fill("train", length(train_idx)),
+            :precursor_id => psms.precursor_idx[train_idx],
+            :run => psms.run[train_idx],
+            :charge => psms.charge[train_idx],
+            :target => psms.target[train_idx],
+            :prob_2nd_iteration => prob_iter2_train[train_idx],
+            :prob_3rd_iteration => prob_iter3_train[train_idx],
+            :MBR_candidate => psms.MBR_transfer_candidate[train_idx],
+        )
+        if seq_col !== nothing
+            train_cols[:sequence] = psms[train_idx, seq_col]
+        end
+        if mods_data !== nothing
+            train_cols[:mods] = mods_data[train_idx]
+        end
+        train_df = DataFrame(train_cols)
+        CSV.write(joinpath(out_dir, "cv_fold_$(fold)_train.tsv"), train_df; delim='\t')
+
+        test_cols = Dict(
+            :train_or_test => fill("test", length(test_idx)),
+            :precursor_id => psms.precursor_idx[test_idx],
+            :run => psms.run[test_idx],
+            :charge => psms.charge[test_idx],
+            :target => psms.target[test_idx],
+            :prob_2nd_iteration => prob_iter2_test[test_idx],
+            :prob_3rd_iteration => prob_iter3_test[test_idx],
+            :MBR_candidate => psms.MBR_transfer_candidate[test_idx],
+        )
+        if seq_col !== nothing
+            test_cols[:sequence] = psms[test_idx, seq_col]
+        end
+        if mods_data !== nothing
+            test_cols[:mods] = mods_data[test_idx]
+        end
+        test_df = DataFrame(test_cols)
+        CSV.write(joinpath(out_dir, "cv_fold_$(fold)_test.tsv"), test_df; delim='\t')
+    end
+end
+
+function sort_of_percolator_out_of_memory!(psms::DataFrame,
                     file_paths::Vector{String},
                     features::Vector{Symbol},
-                    match_between_runs::Bool = true; 
+                    match_between_runs::Bool = true;
                     max_q_value_xgboost_rescore::Float32 = 0.01f0,
                     max_q_value_xgboost_mbr_rescore::Float32 = 0.20f0,
                     min_PEP_neg_threshold_xgboost_rescore::Float32 = 0.90f0,
@@ -630,13 +722,19 @@ function get_training_data_for_iteration!(
     min_PEP_neg_threshold_xgboost_rescore::Float32,
     last_iter::Bool
 )
-   
+
+    psms_train_filtered = if match_between_runs && !last_iter && hasproperty(psms_train, :MBR_is_paired)
+        psms_train[.!psms_train.MBR_is_paired, :]
+    else
+        psms_train
+    end
+
     if itr == 1
-        # Train on all precursors during first iteration. 
-        return copy(psms_train)
+        # Train on all precursors during first iteration.
+        return copy(psms_train_filtered)
     else
         # Do a shallow copy to avoid overwriting target/decoy labels
-        psms_train_itr = copy(psms_train)
+        psms_train_itr = copy(psms_train_filtered)
 
         # Convert the worst-scoring targets to negatives using PEP estimate
         order = sortperm(psms_train_itr.prob, rev=true)
