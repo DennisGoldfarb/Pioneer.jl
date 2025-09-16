@@ -36,7 +36,7 @@ SimpleUnscoredPSM{Float32}() = SimpleUnscoredPSM(UInt8(255), zero(UInt8), zero(U
 struct ComplexUnscoredPSM{T<:AbstractFloat} <: UnscoredPSM{T}
     best_rank::UInt8 #Highest ranking predicted framgent that was observed
     best_rank_iso::UInt8
-    topn::UInt8 #How many of the topN predicted fragments were observed. 
+    topn::UInt8 #How many of the topN predicted fragments were observed.
     topn_iso::UInt8
     longest_y::UInt8
     longest_b::UInt8
@@ -50,9 +50,32 @@ struct ComplexUnscoredPSM{T<:AbstractFloat} <: UnscoredPSM{T}
     error::T
     precursor_idx::UInt32
     ms_file_idx::UInt32
+    b_series_mask::NTuple{4, UInt64}
+    y_series_mask::NTuple{4, UInt64}
 end
 
-ComplexUnscoredPSM{Float32}() = ComplexUnscoredPSM(UInt8(255), UInt8(255), zero(UInt8), zero(UInt8), zero(UInt8), zero(UInt8), zero(UInt8), zero(UInt8), Float32(0), zero(UInt8), Float32(0), zero(UInt8), zero(UInt8), Float32(0), UInt32(0), UInt32(0))
+const EMPTY_CLEAVAGE_MASK = (UInt64(0), UInt64(0), UInt64(0), UInt64(0))
+
+ComplexUnscoredPSM{Float32}() = ComplexUnscoredPSM(
+    UInt8(255),
+    UInt8(255),
+    zero(UInt8),
+    zero(UInt8),
+    zero(UInt8),
+    zero(UInt8),
+    zero(UInt8),
+    zero(UInt8),
+    Float32(0),
+    zero(UInt8),
+    Float32(0),
+    zero(UInt8),
+    zero(UInt8),
+    Float32(0),
+    UInt32(0),
+    UInt32(0),
+    EMPTY_CLEAVAGE_MASK,
+    EMPTY_CLEAVAGE_MASK,
+)
 
 struct Ms1UnscoredPSM{T<:AbstractFloat} <: UnscoredPSM{T}
     m0::Bool #Highest ranking predicted framgent that was observed
@@ -138,8 +161,17 @@ function ModifyFeatures!(score::SimpleUnscoredPSM{T}, prec_id::UInt32, match::Fr
     )
 end
 
+@inline function set_cleavage_mask(mask::NTuple{4, UInt64}, index::UInt8)
+    index == 0 && return mask
+    idx = Int(index)
+    block = (idx - 1) ÷ 64 + 1
+    block > 4 && return mask
+    bit = UInt64(1) << ((idx - 1) % 64)
+    return Base.setindex(mask, mask[block] | bit, block)
+end
+
 function ModifyFeatures!(score::ComplexUnscoredPSM{T},  prec_id::UInt32, match::FragmentMatch{T}, errdist::MassErrorModel, m_rank::Int64) where {T<:Real}
-    
+
     best_rank = score.best_rank
     best_rank_iso = score.best_rank_iso
     topn = score.topn
@@ -155,6 +187,8 @@ function ModifyFeatures!(score::ComplexUnscoredPSM{T},  prec_id::UInt32, match::
     non_cannonical_count = score.non_cannonical_count
     error = score.error
     precursor_idx = prec_id
+    b_series_mask = score.b_series_mask
+    y_series_mask = score.y_series_mask
 
     if isIsotope(match)
         isotope_count += 1
@@ -179,12 +213,14 @@ function ModifyFeatures!(score::ComplexUnscoredPSM{T},  prec_id::UInt32, match::
             if getFragInd(match) > longest_b
                 longest_b = getFragInd(match)
             end
+            b_series_mask = set_cleavage_mask(b_series_mask, getFragInd(match))
         elseif getIonType(match) == UInt8(2)
             y_count += 1
             y_int +=  getIntensity(match)
             if getFragInd(match) > longest_y
                 longest_y = getFragInd(match)
             end
+            y_series_mask = set_cleavage_mask(y_series_mask, getFragInd(match))
         elseif getIonType(match) == UInt8(3)
             p_count += 1
         else
@@ -213,7 +249,10 @@ function ModifyFeatures!(score::ComplexUnscoredPSM{T},  prec_id::UInt32, match::
         non_cannonical_count,
         error,
         precursor_idx,
-        score.ms_file_idx)
+        score.ms_file_idx,
+        b_series_mask,
+        y_series_mask,
+    )
 end
 
 function ModifyFeatures!(score::Ms1UnscoredPSM{T},  prec_id::UInt32, match::PrecursorMatch{T}, errdist::MassErrorModel, m_rank::Int64) where {T<:Real}
