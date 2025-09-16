@@ -77,6 +77,7 @@ const ADVANCED_FEATURE_SET = [
     :tic,
     :num_scans,
     :smoothness,
+    :predicted_signal_overlap,
     :rt_diff,
     :ms1_irt_diff,
     :weight_ms1,
@@ -108,7 +109,7 @@ const REDUCED_FEATURE_SET = [
     :max_matched_residual, :max_unmatched_residual, :max_gof,
     :fitted_spectral_contrast, :spectral_contrast, :max_matched_ratio,
     :err_norm, :poisson, :weight, :log2_intensity_explained, :tic, :num_scans,
-    :smoothness, :percent_theoretical_ignored, :scribe, :max_scribe,
+    :smoothness, :predicted_signal_overlap, :percent_theoretical_ignored, :scribe, :max_scribe,
     # MS1 features
     :weight_ms1, :gof_ms1, :max_matched_residual_ms1, :max_unmatched_residual_ms1,
     :fitted_spectral_contrast_ms1, :error_ms1, :m0_error_ms1, :n_iso_ms1,

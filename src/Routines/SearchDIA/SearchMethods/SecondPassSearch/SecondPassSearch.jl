@@ -330,6 +330,8 @@ function process_search_results!(
         filter!(row -> row.precursor_fraction_transmitted >= params.min_fraction_transmitted, psms)
         #filter!(row -> first(row.isotopes_captured) > 2, psms)
 
+        compute_signal_overlap_fraction!(psms)
+
         # Initialize columns for best scan selection and summary statistics
         psms[!,:best_scan] = zeros(Bool, size(psms, 1));
         init_summary_columns!(psms);
