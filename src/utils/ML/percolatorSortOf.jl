@@ -209,7 +209,9 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
     
         # Reset counts for new scores
         reset_precursor_scores!(prec_to_best_score_new)
-            
+
+        pair_to_passing_runs = Dictionary{UInt32, Set{UInt32}}()
+
         for file_path in file_paths
             psms_subset = DataFrame(Arrow.Table(file_path))
             
@@ -222,14 +224,24 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
 
                 for (i, pair_id) in enumerate(psms_subset[!,:pair_id])
                     prob = probs[i]
+                    run_idx = UInt32(psms_subset.ms_file_idx[i])
+                    pair_runs = get!(pair_to_passing_runs, pair_id) do
+                        Set{UInt32}()
+                    end
+                    add_run = qvals[i] <= max_q_value_xgboost_rescore
                     key = (pair_id = pair_id, isotopes = psms_subset[i,:isotopes_captured])
                     if haskey(prec_to_best_score_new, key)
                         scores = prec_to_best_score_new[key]
-    
+
+                        if scores.unique_passing_runs !== pair_runs
+                            scores = merge(scores, (unique_passing_runs = pair_runs,))
+                            prec_to_best_score_new[key] = scores
+                        end
+
                         if prob > scores.best_prob_1
                            new_scores = merge(scores, (
                                 # replace best_prob_2 with best_prob_1
-                                best_prob_2                     = scores.best_prob_1,   
+                                best_prob_2                     = scores.best_prob_1,
                                 best_log2_weights_2             = scores.best_log2_weights_1,
                                 best_irts_2                     = scores.best_irts_1,
                                 best_weight_2                   = scores.best_weight_1,
@@ -237,7 +249,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                                 best_ms_file_idx_2              = scores.best_ms_file_idx_1,
                                 is_best_decoy_2                 = scores.is_best_decoy_1,
                                 # overwrite best_prob_1
-                                best_prob_1                     = prob,                
+                                best_prob_1                     = prob,
                                 best_log2_weights_1             = log2.(psms_subset.weights[i]),
                                 best_irts_1                     = psms_subset.irts[i],
                                 best_weight_1                   = psms_subset.weight[i],
@@ -261,11 +273,14 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                             prec_to_best_score_new[key] = new_scores
                         end
 
-                        if qvals[i] <= max_q_value_xgboost_rescore
-                            push!(scores.unique_passing_runs, psms_subset.ms_file_idx[i])
+                        if add_run
+                            push!(pair_runs, run_idx)
                         end
 
                     else
+                        if add_run
+                            push!(pair_runs, run_idx)
+                        end
                         insert!(prec_to_best_score_new, key, (
                                 best_prob_1                     = prob,
                                 best_prob_2                     = zero(Float32),
@@ -281,9 +296,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                                 best_ms_file_idx_2              = zero(UInt32),
                                 is_best_decoy_1                 = psms_subset.decoy[i],
                                 is_best_decoy_2                 = false,
-                                unique_passing_runs             = ( qvals[i] <= max_q_value_xgboost_rescore ?
-                                                                    Set{UInt16}([psms_subset.ms_file_idx[i]]) :
-                                                                    Set{UInt16}() )
+                                unique_passing_runs             = pair_runs
                             ))
                     end
                 end
@@ -315,7 +328,11 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                     if haskey(prec_to_best_score_new, key)
                         scores = prec_to_best_score_new[key]
 
-                        psms_subset.MBR_num_runs[i] = length(scores.unique_passing_runs)
+                        pair_runs = scores.unique_passing_runs
+                        run_idx = UInt32(psms_subset.ms_file_idx[i])
+                        run_count = length(pair_runs)
+                        other_runs = run_count - (run_idx in pair_runs ? 1 : 0)
+                        psms_subset.MBR_num_runs[i] = Int32(max(other_runs, 0))
 
                         best_log2_weights = Float32[]
                         best_irts = Float32[]
@@ -456,7 +473,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                                                 best_ms_file_idx_2::UInt32,
                                                 is_best_decoy_1::Bool,
                                                 is_best_decoy_2::Bool,
-                                                unique_passing_runs::Set{UInt16}}}()
+                                                unique_passing_runs::Set{UInt32}}}()
 
     for (train_iter, num_round) in enumerate(iter_scheme)
         models_for_iter = Dictionary{UInt8,EvoTrees.EvoTree}()
@@ -525,11 +542,25 @@ end
 
 function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01f0)
     # Compute pair specific features that rely on decoys and chromatograms
+    pair_to_passing_runs = Dictionary{UInt32, Set{UInt32}}()
+    pair_ids = psms[!, :pair_id]
+    ms_file_idxs = psms[!, :ms_file_idx]
+    q_values = psms[!, :q_value]
+    for idx in eachindex(pair_ids)
+        if q_values[idx] <= q_cutoff
+            runs = get!(pair_to_passing_runs, pair_ids[idx]) do
+                Set{UInt32}()
+            end
+            push!(runs, UInt32(ms_file_idxs[idx]))
+        end
+    end
+
     pair_groups = collect(pairs(groupby(psms, [:pair_id, :isotopes_captured])))
     Threads.@threads for idx in eachindex(pair_groups)
-        _, sub_psms = pair_groups[idx]
-        
-        # Efficient way to find the top 2 precursors so we can do MBR on the 
+        key, sub_psms = pair_groups[idx]
+        pair_runs = get(pair_to_passing_runs, key.pair_id, Set{UInt32}())
+
+        # Efficient way to find the top 2 precursors so we can do MBR on the
         # best precursor match that isn't itself. It's always one of the top 2.
 
         # single pass: record the best PSM index & prob per run
@@ -570,9 +601,11 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
         end
 
         # Compute MBR features
-        num_runs_passing = length(sub_psms.ms_file_idx[sub_psms.q_value .<= q_cutoff])
+        num_runs_passing = length(pair_runs)
         for i in 1:nrow(sub_psms)
-            sub_psms.MBR_num_runs[i] = num_runs_passing - (sub_psms.q_value[i] .<= q_cutoff)
+            run_idx = UInt32(sub_psms.ms_file_idx[i])
+            other_runs = num_runs_passing - (run_idx in pair_runs ? 1 : 0)
+            sub_psms.MBR_num_runs[i] = Int32(max(other_runs, 0))
 
             idx = Int(sub_psms.ms_file_idx[i]) - offset + 1
             best_idx = run_best_indices[idx]
@@ -735,7 +768,7 @@ function reset_precursor_scores!(dict)
             best_ms_file_idx_2 = zero(UInt32),
             is_best_decoy_1 = false,
             is_best_decoy_2 = false,
-            unique_passing_runs = Set{UInt16}(),
+            unique_passing_runs = Set{UInt32}(),
         )
     end
     return dict
