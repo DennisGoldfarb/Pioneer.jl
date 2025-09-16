@@ -327,11 +327,12 @@ function train_xgboost_model_in_memory(
     features = [f for f in model_config.features if hasproperty(best_psms, f)]
     if match_between_runs
         append!(features, [
-            :MBR_num_runs, 
+            :MBR_num_runs,
             :MBR_max_pair_prob,
-            :MBR_log2_weight_ratio, 
+            :MBR_isotope_max_pair_prob,
+            :MBR_log2_weight_ratio,
             :MBR_log2_explained_ratio,
-            :MBR_rv_coefficient, 
+            :MBR_rv_coefficient,
             :MBR_best_irt_diff,
             :MBR_is_missing
         ])
@@ -670,6 +671,7 @@ function score_precursor_isotope_traces_out_of_memory!(
             :MBR_best_irt_diff,
             :MBR_num_runs,
             :MBR_max_pair_prob,
+            :MBR_isotope_max_pair_prob,
             :MBR_log2_weight_ratio,
             :MBR_log2_explained_ratio,
             :MBR_is_missing

@@ -200,14 +200,16 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                     print_importance::Bool = false)
 
     function getBestScorePerPrec!(
+        pair_to_best_score_new::Dictionary,
         prec_to_best_score_new::Dictionary,
         file_paths::Vector{String},
         models::Dictionary{UInt8,EvoTrees.EvoTree},
         features::Vector{Symbol},
         match_between_runs::Bool;
         is_last_iteration::Bool = false)
-    
+
         # Reset counts for new scores
+        reset_precursor_scores!(pair_to_best_score_new)
         reset_precursor_scores!(prec_to_best_score_new)
             
         for file_path in file_paths
@@ -222,6 +224,67 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
 
                 for (i, pair_id) in enumerate(psms_subset[!,:pair_id])
                     prob = probs[i]
+
+                    pair_key = pair_id
+                    if haskey(pair_to_best_score_new, pair_key)
+                        pair_scores = pair_to_best_score_new[pair_key]
+
+                        if prob > pair_scores.best_prob_1
+                            new_pair_scores = merge(pair_scores, (
+                                best_prob_2                     = pair_scores.best_prob_1,
+                                best_log2_weights_2             = pair_scores.best_log2_weights_1,
+                                best_irts_2                     = pair_scores.best_irts_1,
+                                best_weight_2                   = pair_scores.best_weight_1,
+                                best_log2_intensity_explained_2 = pair_scores.best_log2_intensity_explained_1,
+                                best_ms_file_idx_2              = pair_scores.best_ms_file_idx_1,
+                                is_best_decoy_2                 = pair_scores.is_best_decoy_1,
+                                best_prob_1                     = prob,
+                                best_log2_weights_1             = log2.(psms_subset.weights[i]),
+                                best_irts_1                     = psms_subset.irts[i],
+                                best_weight_1                   = psms_subset.weight[i],
+                                best_log2_intensity_explained_1 = psms_subset.log2_intensity_explained[i],
+                                best_ms_file_idx_1              = psms_subset.ms_file_idx[i],
+                                is_best_decoy_1                 = psms_subset.decoy[i]
+                            ))
+                            pair_to_best_score_new[pair_key] = new_pair_scores
+                        elseif prob > pair_scores.best_prob_2
+                            new_pair_scores = merge(pair_scores, (
+                                best_prob_2                     = prob,
+                                best_log2_weights_2             = log2.(psms_subset.weights[i]),
+                                best_irts_2                     = psms_subset.irts[i],
+                                best_weight_2                   = psms_subset.weight[i],
+                                best_log2_intensity_explained_2 = psms_subset.log2_intensity_explained[i],
+                                best_ms_file_idx_2              = psms_subset.ms_file_idx[i],
+                                is_best_decoy_2                 = psms_subset.decoy[i]
+                            ))
+                            pair_to_best_score_new[pair_key] = new_pair_scores
+                        end
+
+                        if qvals[i] <= max_q_value_xgboost_rescore
+                            push!(pair_scores.unique_passing_runs, psms_subset.ms_file_idx[i])
+                        end
+                    else
+                        insert!(pair_to_best_score_new, pair_key, (
+                                best_prob_1                     = prob,
+                                best_prob_2                     = zero(Float32),
+                                best_log2_weights_1             = log2.(psms_subset.weights[i]),
+                                best_log2_weights_2             = Vector{Float32}(),
+                                best_irts_1                     = psms_subset.irts[i],
+                                best_irts_2                     = Vector{Float32}(),
+                                best_weight_1                   = psms_subset.weight[i],
+                                best_weight_2                   = zero(Float32),
+                                best_log2_intensity_explained_1 = psms_subset.log2_intensity_explained[i],
+                                best_log2_intensity_explained_2 = zero(Float32),
+                                best_ms_file_idx_1              = psms_subset.ms_file_idx[i],
+                                best_ms_file_idx_2              = zero(UInt32),
+                                is_best_decoy_1                 = psms_subset.decoy[i],
+                                is_best_decoy_2                 = false,
+                                unique_passing_runs             = ( qvals[i] <= max_q_value_xgboost_rescore ?
+                                                                    Set{UInt16}([psms_subset.ms_file_idx[i]]) :
+                                                                    Set{UInt16}() )
+                            ))
+                    end
+
                     key = (pair_id = pair_id, isotopes = psms_subset[i,:isotopes_captured])
                     if haskey(prec_to_best_score_new, key)
                         scores = prec_to_best_score_new[key]
@@ -311,54 +374,117 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                 
                     
                 if match_between_runs && !is_last_iteration
-                    key = (pair_id = pair_id, isotopes = psms_subset[i,:isotopes_captured])
-                    if haskey(prec_to_best_score_new, key)
-                        scores = prec_to_best_score_new[key]
+                    iso_key = (pair_id = pair_id, isotopes = psms_subset[i,:isotopes_captured])
+                    iso_valid = false
+                    iso_decoy = true
 
-                        psms_subset.MBR_num_runs[i] = length(scores.unique_passing_runs)
+                    if haskey(prec_to_best_score_new, iso_key)
+                        iso_scores = prec_to_best_score_new[iso_key]
 
-                        best_log2_weights = Float32[]
-                        best_irts = Float32[]
-                        best_weight = zero(Float32)
-                        best_log2_ie = zero(Float32)
-
-                        if (scores.best_ms_file_idx_1 != psms_subset.ms_file_idx[i]) &&
-                           (!isempty(scores.best_log2_weights_1))
-                            best_log2_weights                   = scores.best_log2_weights_1
-                            best_irts                           = scores.best_irts_1
-                            best_weight                         = scores.best_weight_1
-                            best_log2_ie                        = scores.best_log2_intensity_explained_1
-                            psms_subset.MBR_max_pair_prob[i]    = scores.best_prob_1
-                            MBR_is_best_decoy                   = scores.is_best_decoy_1
-                        elseif (scores.best_ms_file_idx_2 != psms_subset.ms_file_idx[i]) &&
-                               (!isempty(scores.best_log2_weights_2))
-                            best_log2_weights                   = scores.best_log2_weights_2
-                            best_irts                           = scores.best_irts_2
-                            best_weight                         = scores.best_weight_2
-                            best_log2_ie                        = scores.best_log2_intensity_explained_2
-                            psms_subset.MBR_max_pair_prob[i]    = scores.best_prob_2
-                            MBR_is_best_decoy                   = scores.is_best_decoy_2
+                        if (iso_scores.best_ms_file_idx_1 != psms_subset.ms_file_idx[i]) &&
+                           (!isempty(iso_scores.best_log2_weights_1))
+                            psms_subset.MBR_isotope_max_pair_prob[i] = iso_scores.best_prob_1
+                            psms_subset.MBR_log2_weight_ratio[i] = log2(psms_subset.weight[i] / iso_scores.best_weight_1)
+                            psms_subset.MBR_log2_explained_ratio[i] = psms_subset.log2_intensity_explained[i] - iso_scores.best_log2_intensity_explained_1
+                            iso_decoy = iso_scores.is_best_decoy_1
+                            iso_valid = true
+                        elseif (iso_scores.best_ms_file_idx_2 != psms_subset.ms_file_idx[i]) &&
+                               (!isempty(iso_scores.best_log2_weights_2))
+                            psms_subset.MBR_isotope_max_pair_prob[i] = iso_scores.best_prob_2
+                            psms_subset.MBR_log2_weight_ratio[i] = log2(psms_subset.weight[i] / iso_scores.best_weight_2)
+                            psms_subset.MBR_log2_explained_ratio[i] = psms_subset.log2_intensity_explained[i] - iso_scores.best_log2_intensity_explained_2
+                            iso_decoy = iso_scores.is_best_decoy_2
+                            iso_valid = true
                         else
-                            psms_subset.MBR_best_irt_diff[i]        = -1.0f0
-                            psms_subset.MBR_rv_coefficient[i]       = -1.0f0
-                            psms_subset.MBR_is_best_decoy[i]        = true
-                            psms_subset.MBR_max_pair_prob[i]        = -1.0f0
-                            psms_subset.MBR_log2_weight_ratio[i]    = -1.0f0
+                            psms_subset.MBR_isotope_max_pair_prob[i] = -1.0f0
+                            psms_subset.MBR_log2_weight_ratio[i] = -1.0f0
                             psms_subset.MBR_log2_explained_ratio[i] = -1.0f0
-                            psms_subset.MBR_is_missing[i]           = true
-                            continue
                         end
-
-                        best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(psms_subset.weights[i]))
-                        best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_irts, psms_subset.irts[i])
-
-                        best_irt_at_apex = best_irts[argmax(best_log2_weights)]
-                        psms_subset.MBR_best_irt_diff[i] = abs(best_irt_at_apex - psms_subset.irts[i][argmax(psms_subset.weights[i])])
-                        psms_subset.MBR_rv_coefficient[i] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
-                        psms_subset.MBR_log2_weight_ratio[i] = log2(psms_subset.weight[i] / best_weight)
-                        psms_subset.MBR_log2_explained_ratio[i] = psms_subset.log2_intensity_explained[i] - best_log2_ie
-                        psms_subset.MBR_is_best_decoy[i] = MBR_is_best_decoy
+                    else
+                        psms_subset.MBR_isotope_max_pair_prob[i] = -1.0f0
+                        psms_subset.MBR_log2_weight_ratio[i] = -1.0f0
+                        psms_subset.MBR_log2_explained_ratio[i] = -1.0f0
                     end
+
+                    pair_key = pair_id
+                    pair_valid = false
+                    pair_decoy = true
+
+                    runs_other = 0
+                    if haskey(pair_to_best_score_new, pair_key)
+                        pair_scores = pair_to_best_score_new[pair_key]
+                        runs_other = length(pair_scores.unique_passing_runs)
+                        if hasproperty(psms_subset, :q_value) && psms_subset.q_value[i] <= max_q_value_xgboost_rescore &&
+                           (psms_subset.ms_file_idx[i] in pair_scores.unique_passing_runs)
+                            runs_other -= 1
+                        elseif !hasproperty(psms_subset, :q_value) && (psms_subset.ms_file_idx[i] in pair_scores.unique_passing_runs)
+                            runs_other -= 1
+                        end
+                        runs_other = max(runs_other, 0)
+                        psms_subset.MBR_num_runs[i] = Int32(runs_other)
+
+                        if runs_other > 0
+                            best_log2_weights = Float32[]
+                            best_irts = Float32[]
+                            best_weight = zero(Float32)
+                            best_log2_ie = zero(Float32)
+
+                            if (pair_scores.best_ms_file_idx_1 != psms_subset.ms_file_idx[i]) &&
+                               (!isempty(pair_scores.best_log2_weights_1))
+                                best_log2_weights = pair_scores.best_log2_weights_1
+                                best_irts = pair_scores.best_irts_1
+                                best_weight = pair_scores.best_weight_1
+                                best_log2_ie = pair_scores.best_log2_intensity_explained_1
+                                psms_subset.MBR_max_pair_prob[i] = pair_scores.best_prob_1
+                                pair_decoy = pair_scores.is_best_decoy_1
+                                pair_valid = true
+                            elseif (pair_scores.best_ms_file_idx_2 != psms_subset.ms_file_idx[i]) &&
+                                   (!isempty(pair_scores.best_log2_weights_2))
+                                best_log2_weights = pair_scores.best_log2_weights_2
+                                best_irts = pair_scores.best_irts_2
+                                best_weight = pair_scores.best_weight_2
+                                best_log2_ie = pair_scores.best_log2_intensity_explained_2
+                                psms_subset.MBR_max_pair_prob[i] = pair_scores.best_prob_2
+                                pair_decoy = pair_scores.is_best_decoy_2
+                                pair_valid = true
+                            end
+
+                            if pair_valid
+                                best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(psms_subset.weights[i]))
+                                best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_irts, psms_subset.irts[i])
+
+                                best_irt_at_apex = best_irts[argmax(best_log2_weights)]
+                                current_irt_at_apex = psms_subset.irts[i][argmax(psms_subset.weights[i])]
+                                psms_subset.MBR_best_irt_diff[i] = abs(best_irt_at_apex - current_irt_at_apex)
+                                psms_subset.MBR_rv_coefficient[i] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
+                            end
+                        end
+                    else
+                        psms_subset.MBR_num_runs[i] = Int32(0)
+                    end
+
+                    if !pair_valid
+                        psms_subset.MBR_best_irt_diff[i] = -1.0f0
+                        psms_subset.MBR_rv_coefficient[i] = -1.0f0
+                        psms_subset.MBR_max_pair_prob[i] = -1.0f0
+                        pair_decoy = true
+                    end
+
+                    if pair_valid && iso_valid && (iso_decoy != pair_decoy)
+                        psms_subset.MBR_isotope_max_pair_prob[i] = -1.0f0
+                        psms_subset.MBR_log2_weight_ratio[i] = -1.0f0
+                        psms_subset.MBR_log2_explained_ratio[i] = -1.0f0
+                        iso_valid = false
+                    end
+
+                    if !iso_valid
+                        psms_subset.MBR_isotope_max_pair_prob[i] = -1.0f0
+                        psms_subset.MBR_log2_weight_ratio[i] = -1.0f0
+                        psms_subset.MBR_log2_explained_ratio[i] = -1.0f0
+                    end
+
+                    psms_subset.MBR_is_best_decoy[i] = pair_decoy
+                    psms_subset.MBR_is_missing[i] = !(pair_valid && iso_valid)
                 end
             end
 
@@ -372,7 +498,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
             )
         end
         
-        return prec_to_best_score_new
+        return pair_to_best_score_new, prec_to_best_score_new
     end
 
 
@@ -440,6 +566,23 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
     end
     
     pbar = ProgressBar(total=length(iter_scheme))
+    pair_to_best_score = Dictionary{UInt32,
+                                    @NamedTuple{best_prob_1::Float32,
+                                                best_prob_2::Float32,
+                                                best_log2_weights_1::Vector{Float32},
+                                                best_log2_weights_2::Vector{Float32},
+                                                best_irts_1::Vector{Float32},
+                                                best_irts_2::Vector{Float32},
+                                                best_weight_1::Float32,
+                                                best_weight_2::Float32,
+                                                best_log2_intensity_explained_1::Float32,
+                                                best_log2_intensity_explained_2::Float32,
+                                                best_ms_file_idx_1::UInt32,
+                                                best_ms_file_idx_2::UInt32,
+                                                is_best_decoy_1::Bool,
+                                                is_best_decoy_2::Bool,
+                                                unique_passing_runs::Set{UInt16}}}()
+
     prec_to_best_score = Dictionary{@NamedTuple{pair_id::UInt32,
                                                 isotopes::Tuple{Int8,Int8}},
                                     @NamedTuple{best_prob_1::Float32,
@@ -463,7 +606,8 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
         for test_fold_idx in unique_cv_folds
             insert!(models_for_iter, test_fold_idx, models[test_fold_idx][train_iter])
         end
-        prec_to_best_score = getBestScorePerPrec!(
+        pair_to_best_score, prec_to_best_score = getBestScorePerPrec!(
+            pair_to_best_score,
             prec_to_best_score,
             file_paths,
             models_for_iter,
@@ -524,33 +668,27 @@ function update_mbr_features!(psms_train::AbstractDataFrame,
 end
 
 function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01f0)
-    # Compute pair specific features that rely on decoys and chromatograms
-    pair_groups = collect(pairs(groupby(psms, [:pair_id, :isotopes_captured])))
-    Threads.@threads for idx in eachindex(pair_groups)
-        _, sub_psms = pair_groups[idx]
-        
-        # Efficient way to find the top 2 precursors so we can do MBR on the 
-        # best precursor match that isn't itself. It's always one of the top 2.
+    # First compute features that depend on matching isotopes separately
+    pair_isotope_groups = collect(pairs(groupby(psms, [:pair_id, :isotopes_captured])))
+    Threads.@threads for idx in eachindex(pair_isotope_groups)
+        _, sub_psms = pair_isotope_groups[idx]
 
-        # single pass: record the best PSM index & prob per run
         offset = Int(minimum(sub_psms.ms_file_idx))
         range_len = Int(maximum(sub_psms.ms_file_idx)) - offset + 1
         best_i = zeros(Int, range_len)
         best_p = fill(-Inf, range_len)
         for (i, run) in enumerate(sub_psms.ms_file_idx)
-            idx = Int(run) - offset + 1
+            ridx = Int(run) - offset + 1
             p = sub_psms.prob[i]
-            if p > best_p[idx]
-                best_p[idx] = p
-                best_i[idx] = i
+            if p > best_p[ridx]
+                best_p[ridx] = p
+                best_i[ridx] = i
             end
         end
 
-        # if more than one run, find the global top-2 runs by their best-PSM prob
         run_best_indices = zeros(Int, range_len)
         runs = findall(!=(0), best_i)
         if length(runs) > 1
-            # track top two runs (r1 > r2)
             r1 = 0; p1 = -Inf
             r2 = 0; p2 = -Inf
             for r in runs
@@ -563,45 +701,119 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
                 end
             end
 
-            # assign, for each run, the best index in “any other” run
             for r in runs
                 run_best_indices[r] = (r == r1 ? best_i[r2] : best_i[r1])
             end
         end
 
-        # Compute MBR features
-        num_runs_passing = length(sub_psms.ms_file_idx[sub_psms.q_value .<= q_cutoff])
         for i in 1:nrow(sub_psms)
-            sub_psms.MBR_num_runs[i] = num_runs_passing - (sub_psms.q_value[i] .<= q_cutoff)
-
-            idx = Int(sub_psms.ms_file_idx[i]) - offset + 1
-            best_idx = run_best_indices[idx]
-            if best_idx == 0 || sub_psms.MBR_num_runs[i] == 0
-                sub_psms.MBR_best_irt_diff[i]           = -1.0f0
-                sub_psms.MBR_rv_coefficient[i]          = -1.0f0
-                sub_psms.MBR_is_best_decoy[i]           = true
+            ridx = Int(sub_psms.ms_file_idx[i]) - offset + 1
+            best_idx = run_best_indices[ridx]
+            if best_idx == 0
                 sub_psms.MBR_log2_weight_ratio[i]       = -1.0f0
                 sub_psms.MBR_log2_explained_ratio[i]    = -1.0f0
-                sub_psms.MBR_max_pair_prob[i]           = -1.0f0
+                sub_psms.MBR_isotope_max_pair_prob[i]   = -1.0f0
+                sub_psms.MBR_is_best_decoy[i]           = true
                 sub_psms.MBR_is_missing[i]              = true
                 continue
             end
 
             best_log2_weights = log2.(sub_psms.weights[best_idx])
-            best_iRTs = sub_psms.irts[best_idx]
+            best_irts = sub_psms.irts[best_idx]
             best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(sub_psms.weights[i]))
-            best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_iRTs, sub_psms.irts[i])
-            
-            best_irt_at_apex = sub_psms.irts[best_idx][argmax(best_log2_weights)]
-            sub_psms.MBR_max_pair_prob[i] = sub_psms.prob[best_idx]
-            sub_psms.MBR_best_irt_diff[i] = abs(best_irt_at_apex - sub_psms.irts[i][argmax(sub_psms.weights[i])])
-            sub_psms.MBR_rv_coefficient[i] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
+            best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_irts, sub_psms.irts[i])
+
+            sub_psms.MBR_isotope_max_pair_prob[i] = sub_psms.prob[best_idx]
             sub_psms.MBR_log2_weight_ratio[i] = log2(sub_psms.weight[i] / sub_psms.weight[best_idx])
             sub_psms.MBR_log2_explained_ratio[i] = sub_psms.log2_intensity_explained[i] - sub_psms.log2_intensity_explained[best_idx]
             sub_psms.MBR_is_best_decoy[i] = sub_psms.decoy[best_idx]
+            sub_psms.MBR_is_missing[i] = false
         end
     end
 
+    # Now compute features that use all PSMs for a pair regardless of isotopes
+    pair_groups = collect(pairs(groupby(psms, :pair_id)))
+    Threads.@threads for idx in eachindex(pair_groups)
+        _, sub_psms = pair_groups[idx]
+
+        offset = Int(minimum(sub_psms.ms_file_idx))
+        range_len = Int(maximum(sub_psms.ms_file_idx)) - offset + 1
+        best_i = zeros(Int, range_len)
+        best_p = fill(-Inf, range_len)
+        for (i, run) in enumerate(sub_psms.ms_file_idx)
+            ridx = Int(run) - offset + 1
+            p = sub_psms.prob[i]
+            if p > best_p[ridx]
+                best_p[ridx] = p
+                best_i[ridx] = i
+            end
+        end
+
+        run_best_indices = zeros(Int, range_len)
+        runs = findall(!=(0), best_i)
+        if length(runs) > 1
+            r1 = 0; p1 = -Inf
+            r2 = 0; p2 = -Inf
+            for r in runs
+                p = best_p[r]
+                if p > p1
+                    r2, p2 = r1, p1
+                    r1, p1 = r, p
+                elseif p > p2
+                    r2, p2 = r, p
+                end
+            end
+
+            for r in runs
+                run_best_indices[r] = (r == r1 ? best_i[r2] : best_i[r1])
+            end
+        end
+
+        qvals = sub_psms.q_value
+        passing_mask = qvals .<= q_cutoff
+        passing_runs = Set(sub_psms.ms_file_idx[passing_mask])
+
+        for i in 1:nrow(sub_psms)
+            ridx = Int(sub_psms.ms_file_idx[i]) - offset + 1
+            best_idx = run_best_indices[ridx]
+            runs_other = length(passing_runs) - (passing_mask[i] ? 1 : 0)
+            sub_psms.MBR_num_runs[i] = Int32(max(runs_other, 0))
+
+            if best_idx == 0 || sub_psms.MBR_num_runs[i] == 0
+                sub_psms.MBR_best_irt_diff[i]    = -1.0f0
+                sub_psms.MBR_rv_coefficient[i]   = -1.0f0
+                sub_psms.MBR_max_pair_prob[i]    = -1.0f0
+                sub_psms.MBR_is_best_decoy[i]    = true
+                sub_psms.MBR_is_missing[i]       = true
+                continue
+            end
+
+            best_log2_weights = log2.(sub_psms.weights[best_idx])
+            best_irts = sub_psms.irts[best_idx]
+            best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(sub_psms.weights[i]))
+            best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_irts, sub_psms.irts[i])
+
+            best_irt_at_apex = best_irts[argmax(best_log2_weights)]
+            current_irt_at_apex = sub_psms.irts[i][argmax(sub_psms.weights[i])]
+            pair_best_decoy = sub_psms.decoy[best_idx]
+            isotope_decoy = sub_psms.MBR_is_best_decoy[i]
+
+            sub_psms.MBR_max_pair_prob[i] = sub_psms.prob[best_idx]
+            sub_psms.MBR_best_irt_diff[i] = abs(best_irt_at_apex - current_irt_at_apex)
+            sub_psms.MBR_rv_coefficient[i] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
+
+            if (sub_psms.MBR_isotope_max_pair_prob[i] >= 0) && (isotope_decoy != pair_best_decoy)
+                sub_psms.MBR_isotope_max_pair_prob[i] = -1.0f0
+                sub_psms.MBR_log2_weight_ratio[i] = -1.0f0
+                sub_psms.MBR_log2_explained_ratio[i] = -1.0f0
+                sub_psms.MBR_is_missing[i] = true
+            end
+
+            sub_psms.MBR_is_best_decoy[i] = pair_best_decoy
+        end
+    end
+
+    return psms
 end
 
 function initialize_prob_group_features!(
@@ -614,6 +826,7 @@ function initialize_prob_group_features!(
 
     if match_between_runs
         psms[!, :MBR_max_pair_prob]             = zeros(Float32, n)
+        psms[!, :MBR_isotope_max_pair_prob]     = zeros(Float32, n)
         psms[!, :MBR_best_irt_diff]             = zeros(Float32, n)
         psms[!, :MBR_log2_weight_ratio]         = zeros(Float32, n)
         psms[!, :MBR_log2_explained_ratio]      = zeros(Float32, n)
