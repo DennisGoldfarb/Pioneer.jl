@@ -25,14 +25,14 @@ The full model_comparison.jl file is deprecated and should not be used.
 Configuration for a single model in the scoring framework.
 
 # Fields
-- `name`: Model identifier (e.g., "SimpleXGBoost", "ProbitRegression")
-- `model_type`: Algorithm type (:xgboost or :probit)
+- `name`: Model identifier (e.g., "SimpleLightGBM", "ProbitRegression")
+- `model_type`: Algorithm type (:lightgbm or :probit)
 - `features`: Vector of feature symbols to use
 - `hyperparams`: Dictionary of hyperparameters for the model
 """
 struct ModelConfig
     name::String
-    model_type::Symbol  # :xgboost or :probit
+    model_type::Symbol  # :lightgbm or :probit
     features::Vector{Symbol}
     hyperparams::Dict{Symbol, Any}
 end
@@ -130,14 +130,14 @@ const MINIMAL_FEATURE_SET = [
 Creates the model configurations for comparison.
 
 # Returns
-- Vector of ModelConfig objects for SimpleXGBoost, AdvancedXGBoost, ProbitRegression, and SuperSimplified models
+- Vector of ModelConfig objects for SimpleLightGBM, AdvancedLightGBM, ProbitRegression, and SuperSimplifiedLightGBM models
 """
 function create_model_configurations()
     return [
-        # Model 1: Simple XGBoost (Default for small datasets)
+        # Model 1: Simple LightGBM (Default for small datasets)
         ModelConfig(
-            "SimpleXGBoost",
-            :xgboost,
+            "SimpleLightGBM",
+            :lightgbm,
             REDUCED_FEATURE_SET,
             Dict(
                 :colsample_bytree => 0.8,
@@ -150,10 +150,10 @@ function create_model_configurations()
             )
         ),
         
-        # Model 2: Advanced XGBoost (Same as used for >100K PSMs)
+        # Model 2: Advanced LightGBM (Same as used for >100K PSMs)
         ModelConfig(
-            "AdvancedXGBoost",
-            :xgboost,
+            "AdvancedLightGBM",
+            :lightgbm,
             ADVANCED_FEATURE_SET,
             Dict(
                 :colsample_bytree => 0.5,
@@ -165,7 +165,7 @@ function create_model_configurations()
                 :iter_scheme => [100, 200, 200]
             )
         ),
-        
+
         # Model 3: Probit Regression
         ModelConfig(
             "ProbitRegression",
@@ -176,10 +176,10 @@ function create_model_configurations()
             )
         ),
         
-        # Model 4: Super Simplified Model
+        # Model 4: Super Simplified LightGBM Model
         ModelConfig(
-            "SuperSimplified",
-            :xgboost,
+            "SuperSimplifiedLightGBM",
+            :lightgbm,
             MINIMAL_FEATURE_SET,
             Dict(
                 :colsample_bytree => 0.8,
