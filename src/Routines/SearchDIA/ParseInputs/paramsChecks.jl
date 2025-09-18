@@ -235,10 +235,17 @@ function checkParams(json_path::String)
     check_param(deconv, "max_diff", Real)
 
     ml_params = opt_params["machine_learning"]
+    if haskey(ml_params, "max_q_value_xgboost_mbr_rescore") && !haskey(ml_params, "max_q_value_lightgbm_mbr_rescore")
+        ml_params["max_q_value_lightgbm_mbr_rescore"] = ml_params["max_q_value_xgboost_mbr_rescore"]
+    end
+    if haskey(ml_params, "min_PEP_neg_threshold_xgboost_rescore") && !haskey(ml_params, "min_PEP_neg_threshold_lightgbm_rescore")
+        ml_params["min_PEP_neg_threshold_lightgbm_rescore"] = ml_params["min_PEP_neg_threshold_xgboost_rescore"]
+    end
+
     check_param(ml_params, "max_psms_in_memory", Integer)
     check_param(ml_params, "min_trace_prob", Real)
-    check_param(ml_params, "max_q_value_xgboost_mbr_rescore", Real)
-    check_param(ml_params, "min_PEP_neg_threshold_xgboost_rescore", Real)
+    check_param(ml_params, "max_q_value_lightgbm_mbr_rescore", Real)
+    check_param(ml_params, "min_PEP_neg_threshold_lightgbm_rescore", Real)
     check_param(ml_params, "spline_points", Integer)
     check_param(ml_params, "interpolation_points", Integer)
 
