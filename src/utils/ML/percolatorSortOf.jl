@@ -536,7 +536,7 @@ function train_booster(psms::AbstractDataFrame, features, num_round;
 
     X = feature_matrix(psms, features)
     y = Float32.(psms.target)
-    dataset = LightGBM.LGBM_Dataset(X; label = y, feature_name = String.(features))
+    dataset = LightGBM.Dataset(X; label = y)
 
     params = Dict(
         "objective" => "binary",
