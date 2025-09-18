@@ -25,7 +25,7 @@ const LightGBMModelVector = Vector{LightGBMModel}
 function feature_matrix(psms::AbstractDataFrame, features::Vector{Symbol})
     n = nrow(psms)
     m = length(features)
-    matrix = Matrix{Float32}(undef, n, m)
+    matrix = Matrix{Float64}(undef, n, m)
 
     for (j, feat) in enumerate(features)
         column = psms[!, feat]
@@ -33,21 +33,21 @@ function feature_matrix(psms::AbstractDataFrame, features::Vector{Symbol})
 
         if T <: AbstractFloat
             if eltype(column) <: Union{Missing, T}
-                matrix[:, j] = Float32.(coalesce.(column, zero(T)))
+                matrix[:, j] = Float64.(coalesce.(column, zero(T)))
             else
-                matrix[:, j] = Float32.(column)
+                matrix[:, j] = Float64.(column)
             end
         elseif T <: Integer
             if eltype(column) <: Union{Missing, T}
-                matrix[:, j] = Float32.(coalesce.(column, zero(T)))
+                matrix[:, j] = Float64.(coalesce.(column, zero(T)))
             else
-                matrix[:, j] = Float32.(column)
+                matrix[:, j] = Float64.(column)
             end
         elseif T <: Bool
             if eltype(column) <: Union{Missing, Bool}
-                matrix[:, j] = Float32.(coalesce.(column, false))
+                matrix[:, j] = Float64.(coalesce.(column, false))
             else
-                matrix[:, j] = Float32.(column)
+                matrix[:, j] = Float64.(column)
             end
         else
             throw(ArgumentError("Unsupported feature type $(eltype(column)) for LightGBM"))
@@ -535,7 +535,7 @@ function train_booster(psms::AbstractDataFrame, features, num_round;
                        max_depth::Int)
 
     X = feature_matrix(psms, features)
-    y = Float32.(psms.target)
+    y = Float64.(psms.target)
     dataset = LightGBM.Dataset(X; label = y)
 
     params = Dict(
