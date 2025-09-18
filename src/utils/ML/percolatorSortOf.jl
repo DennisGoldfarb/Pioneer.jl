@@ -536,7 +536,8 @@ function train_booster(psms::AbstractDataFrame, features, num_round;
 
     X = feature_matrix(psms, features)
     y = Float32.(psms.target)
-    dataset = LightGBM.Dataset(X, y)
+
+    dataset = LightGBM.LGBMDataset(X; label = y)
 
     params = Dict(
         "objective" => "binary",
@@ -552,7 +553,11 @@ function train_booster(psms::AbstractDataFrame, features, num_round;
         "num_threads" => Base.Threads.nthreads(),
     )
 
-    booster = LightGBM.train(params, dataset; num_boost_round = num_round)
+    booster = LightGBM.Booster(params, dataset)
+    for _ in 1:num_round
+        LightGBM.update!(booster)
+    end
+
     return LightGBMModel(booster, collect(features))
 end
 
