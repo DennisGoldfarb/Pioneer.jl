@@ -106,7 +106,7 @@ ScoringSearch implements a comprehensive 23-step pipeline:
 
 **Clean Output Design**:
 - Progress bars suppressed during comparison using `show_progress=false` parameter
-- stdout redirected to devnull to suppress EvoTrees output
+- stdout redirected to devnull to suppress LightGBM output
 - Only essential results shown: model name and target count at q-value threshold
 - Final training shows normal progress bars for user feedback
 
@@ -211,7 +211,7 @@ When enabled via parameters:
 }
 ```
 
-Uses EvoTrees/XGBoost with top N precursor scores as features, implemented in `utils_protein_ml.jl`.
+Uses LightGBM with top N precursor scores as features, implemented in `utils_protein_ml.jl`.
 
 ## Common Issues and Solutions
 
@@ -310,9 +310,9 @@ include("test/UnitTests/ScoringSearch/test_protein_inference.jl")
 - **Advanced Feature Set**: Added ADVANCED_FEATURE_SET with 50 features for maximum performance model
 - **User-Defined Q-value**: Model selection now uses q_value_threshold from parameters instead of hardcoded 0.01
 - **Clean Output Design**: 
-  - Implemented stdout redirection to suppress EvoTrees progress bars
+  - Implemented stdout redirection to suppress LightGBM progress bars
   - Added `show_progress` parameter to control ProgressBar display
-  - Removed `colsample_bynode` parameter (not supported by EvoTrees)
+  - Removed `colsample_bynode` parameter (not supported by LightGBM)
   - Fixed duplicate parameter issues in train_booster calls
 - **Separation of Concerns**: Separated PSM scoring from file I/O operations
   - Removed file writing from `sort_of_percolator_in_memory!`

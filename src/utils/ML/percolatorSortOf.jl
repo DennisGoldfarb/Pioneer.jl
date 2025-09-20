@@ -186,7 +186,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     nonMBR_estimates  = zeros(Float32, nrow(psms)) # keep track of last nonMBR test scores
 
     unique_cv_folds = unique(psms[!, :cv_fold])
-    models = Dict{UInt8, Vector{EvoTrees.EvoTree}}()
+    models = Dict{UInt8, Vector{LightGBMModel}}()
     mbr_start_iter = length(iter_scheme)
 
     cv_fold_col = psms[!, :cv_fold]
@@ -224,7 +224,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             end
         end
 
-        fold_models = Vector{EvoTrees.EvoTree}(undef, length(iter_scheme))
+        fold_models = Vector{LightGBMModel}(undef, length(iter_scheme))
 
         for (itr, num_round) in enumerate(iter_scheme)
             psms_train_itr = get_training_data_for_iteration!(psms_train,
@@ -249,7 +249,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
 
             # Print feature importances for each iteration and fold
             if print_importance
-                importances = EvoTrees.importance(bst)
+                importances = lightgbm_importance(bst)
                 @user_info "Feature Importances - Fold $(test_fold_idx), Iteration $(itr) ($(length(importances)) features):"
                 for i in 1:10:length(importances)
                     chunk = importances[i:min(i+9, end)]
@@ -333,7 +333,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
     function getBestScorePerPrec!(
         prec_to_best_score_new::Dictionary,
         file_paths::Vector{String},
-        models::Dictionary{UInt8,EvoTrees.EvoTree},
+        models::Dictionary{UInt8,LightGBMModel},
         features::Vector{Symbol},
         match_between_runs::Bool;
         is_last_iteration::Bool = false)
@@ -519,7 +519,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
 
     unique_cv_folds = unique(psms[!, :cv_fold])
     #Train the model for 1:K-1 cross validation folds and apply to the held-out fold
-    models = Dictionary{UInt8, Vector{EvoTrees.EvoTree}}()
+    models = Dictionary{UInt8, Vector{LightGBMModel}}()
     pbar = ProgressBar(total=length(unique_cv_folds)*length(iter_scheme))
     Random.seed!(1776);
     non_mbr_features = [f for f in features if !startswith(String(f), "MBR_")]
@@ -553,14 +553,14 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                 insert!(
                     models,
                     test_fold_idx,
-                    Vector{EvoTrees.EvoTree}([bst])
+                        Vector{LightGBMModel}([bst])
                 )
             else
                 push!(models[test_fold_idx], bst)
             end
             # Print feature importances
             if print_importance
-                importances = EvoTrees.importance(bst)
+                importances = lightgbm_importance(bst)
                 @user_info "Feature Importances ($(length(importances)) features):"
                 for i in 1:10:length(importances)
                     chunk = importances[i:min(i+9, end)]
@@ -570,7 +570,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
             end
 
             # Get probabilities for training sample so we can get q-values
-            psms_train[!,:prob] = EvoTrees.predict(bst, psms_train)
+            psms_train[!,:prob] = predict(bst, psms_train)
             
             if match_between_runs
                 summarize_precursors!(psms_train, q_cutoff = max_q_value_xgboost_rescore)
@@ -604,7 +604,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                                                 unique_passing_runs::Set{UInt16}}}()
 
     for (train_iter, num_round) in enumerate(iter_scheme)
-        models_for_iter = Dictionary{UInt8,EvoTrees.EvoTree}()
+        models_for_iter = Dictionary{UInt8,LightGBMModel}()
         for test_fold_idx in unique_cv_folds
             insert!(models_for_iter, test_fold_idx, models[test_fold_idx][train_iter])
         end
@@ -630,18 +630,26 @@ function train_booster(psms::AbstractDataFrame, features, num_round;
                        gamma::Float64,
                        max_depth::Int)
 
-    config = EvoTreeRegressor(
-        loss=:logloss,
-        nrounds = num_round,
-        max_depth = max_depth,
-        min_weight = min_child_weight,
-        rowsample = subsample,
-        colsample = colsample,
-        eta = eta,
-        gamma = gamma
+    feature_names = collect(Symbol, features)
+    feature_matrix = build_feature_matrix(psms, feature_names)
+    labels = Float64.(psms[!, :target])
+
+    params = Dict{String, Any}(
+        "objective" => "binary",
+        "metric" => "binary_logloss",
+        "feature_fraction" => colsample,
+        "learning_rate" => eta,
+        "bagging_fraction" => subsample,
+        "bagging_freq" => 1,
+        "min_sum_hessian_in_leaf" => max(min_child_weight, 1),
+        "lambda_l1" => max(gamma, 0.0),
+        "max_depth" => max_depth,
+        "verbose" => -1,
+        "num_iterations" => num_round,
     )
-    model = fit(config, psms; target_name = :target, feature_names = features, verbosity = 0)
-    return model
+
+    booster = train_lightgbm_booster(params, feature_matrix, labels, num_round)
+    return LightGBMModel(booster, feature_names)
 end
 
 function predict_fold!(bst, psms_train::AbstractDataFrame,
@@ -890,7 +898,7 @@ end
 
 Return a vector of probabilities for `df` using the cross validation `models`.
 """
-function predict_cv_models(models::Dictionary{UInt8,EvoTrees.EvoTree},
+function predict_cv_models(models::Dictionary{UInt8,LightGBMModel},
                            df::AbstractDataFrame,
                            features::Vector{Symbol})
     probs = zeros(Float32, nrow(df))
@@ -1051,3 +1059,118 @@ function convert_subarrays(df::DataFrame)
     end
     return df
 end
+struct LightGBMModel
+    booster::Any
+    feature_names::Vector{Symbol}
+end
+
+function build_feature_matrix(psms::AbstractDataFrame, features::Vector{Symbol})
+    n = nrow(psms)
+    m = length(features)
+    mat = Matrix{Float32}(undef, n, m)
+    for (j, feature) in enumerate(features)
+        col = psms[!, feature]
+        @inbounds for i in 1:n
+            mat[i, j] = convert_feature_value(col[i])
+        end
+    end
+    return mat
+end
+
+convert_feature_value(val::Missing) = 0.0f0
+convert_feature_value(val::Bool) = val ? 1.0f0 : 0.0f0
+convert_feature_value(::Nothing) = 0.0f0
+convert_feature_value(val) = Float32(val)
+
+function train_lightgbm_booster(params::Dict{String, Any},
+                                features::Matrix{Float32},
+                                labels::Vector{Float64},
+                                num_round::Int)
+    dataset = create_lgbm_dataset(features, labels)
+    if isdefined(LightGBM, :train)
+        train_fn = getfield(LightGBM, :train)
+        return train_fn(params, dataset, num_round; verbose=-1)
+    elseif isdefined(LightGBM, :LGBMBooster) && isdefined(LightGBM, :update!)
+        booster_ctor = getfield(LightGBM, :LGBMBooster)
+        booster = booster_ctor(params, dataset)
+        update_fn = getfield(LightGBM, :update!)
+        for _ in 1:num_round
+            update_fn(booster)
+        end
+        return booster
+    else
+        error("LightGBM training interface not available")
+    end
+end
+
+function create_lgbm_dataset(features::Matrix{Float32}, labels::Union{Nothing, AbstractVector{<:Real}})
+    if isdefined(LightGBM, :LGBMDataset)
+        dataset_ctor = getfield(LightGBM, :LGBMDataset)
+    elseif isdefined(LightGBM, :Dataset)
+        dataset_ctor = getfield(LightGBM, :Dataset)
+    else
+        error("LightGBM dataset constructor not available")
+    end
+
+    if labels === nothing
+        return dataset_ctor(features)
+    else
+        return dataset_ctor(features; label=labels)
+    end
+end
+
+create_lgbm_dataset(features::Matrix{Float32}) = create_lgbm_dataset(features, nothing)
+
+function predict(model::LightGBMModel, df::AbstractDataFrame)
+    feature_matrix = build_feature_matrix(df, model.feature_names)
+    preds = lightgbm_predict(model.booster, feature_matrix)
+    return Float32.(preds)
+end
+
+function lightgbm_predict(booster, feature_matrix::Matrix{Float32})
+    predict_fn = getfield(LightGBM, :predict)
+    preds = nothing
+    try
+        preds = predict_fn(booster, feature_matrix; predict_type=:probability)
+    catch
+        try
+            preds = predict_fn(booster, feature_matrix)
+        catch
+            dataset = create_lgbm_dataset(feature_matrix)
+            preds = predict_fn(booster, dataset)
+        end
+    end
+
+    preds = preds isa Tuple ? first(preds) : preds
+    if preds isa AbstractArray
+        return vec(preds)
+    else
+        return collect(preds)
+    end
+end
+
+function lightgbm_importance(model::LightGBMModel)
+    booster = model.booster
+    scores = nothing
+    if isdefined(LightGBM, :importance)
+        try
+            scores = getfield(LightGBM, :importance)(booster)
+        catch
+        end
+    end
+    if scores === nothing && isdefined(LightGBM, :feature_importance)
+        try
+            scores = getfield(LightGBM, :feature_importance)(booster)
+        catch
+        end
+    end
+
+    if scores === nothing
+        return [(feature, 0.0) for feature in model.feature_names]
+    end
+
+    score_array = scores isa AbstractArray ? vec(Float64.(scores)) : Float64.(collect(scores))
+    limit = min(length(score_array), length(model.feature_names))
+    return [(model.feature_names[i], score_array[i]) for i in 1:limit]
+end
+

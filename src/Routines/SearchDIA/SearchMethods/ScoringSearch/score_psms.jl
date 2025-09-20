@@ -16,8 +16,11 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 #==========================================================
-PSM sampling and scoring 
+PSM sampling and scoring
 ==========================================================#
+
+# NOTE: Legacy helper names still reference "xgboost" for backward compatibility,
+# but the underlying implementation now uses LightGBM for gradient boosted models.
 
 # Constant for model selection threshold
 const MAX_FOR_MODEL_SELECTION = 200_000
@@ -46,13 +49,13 @@ Main entry point for PSM scoring with automatic model selection based on dataset
 - `file_paths`: Vector of PSM file paths
 - `precursors`: Library precursors
 - `match_between_runs`: Whether to perform match between runs
-- `max_q_value_xgboost_rescore`: Max q-value for EvoTrees/XGBoost rescoring
+- `max_q_value_xgboost_rescore`: Max q-value for LightGBM rescoring
 - `max_q_value_xgboost_mbr_rescore`: Max q-value for MBR rescoring
 - `min_PEP_neg_threshold_xgboost_rescore`: Min PEP for negative relabeling
 - `max_psms_in_memory`: Maximum PSMs to keep in memory
 
 # Returns
-- Trained EvoTrees/XGBoost models or nothing for probit regression
+- Trained LightGBM models or nothing for probit regression
 """
 function score_precursor_isotope_traces(
     second_pass_folder::String,
@@ -392,7 +395,7 @@ end
 """
      get_psms_count(quant_psms_folder::String)::Integer
 
-Sample PSMs from multiple files for EvoTrees/XGBoost model training.
+Sample PSMs from multiple files for LightGBM model training.
 
 # Arguments
 - `quant_psms_folder`: Folder containing PSM Arrow files
@@ -417,7 +420,7 @@ end
 """
     sample_psms_for_xgboost(quant_psms_folder::String, psms_count::Integer max_psms::Integer) -> DataFrame
 
-Sample PSMs from multiple files for EvoTrees/XGBoost model training.
+Sample PSMs from multiple files for LightGBM model training.
 
 # Arguments
 - `quant_psms_folder`: Folder containing PSM Arrow files
@@ -461,7 +464,7 @@ end
 """
      get_psms_count(quant_psms_folder::String)::Integer
 
-Loads all PSMs from multiple files for EvoTrees/XGBoost model training.
+Loads all PSMs from multiple files for LightGBM model training.
 """
 function load_psms_for_xgboost(quant_psms_folder::String)
     file_paths = [fpath for fpath in readdir(quant_psms_folder, join=true) if endswith(fpath,".arrow")]
@@ -470,9 +473,9 @@ end
 
 """
     score_precursor_isotope_traces_in_memory!(best_psms::DataFrame, file_paths::Vector{String},
-                                  precursors::LibraryPrecursors) -> EvoTreesModels
+                                  precursors::LibraryPrecursors) -> LightGBMModels
 
-Train EvoTrees/XGBoost models for PSM scoring. All psms are kept in memory
+Train LightGBM models for PSM scoring. All psms are kept in memory
 
 # Arguments
 - `best_psms`: Sample of high-quality PSMs for training
@@ -480,7 +483,7 @@ Train EvoTrees/XGBoost models for PSM scoring. All psms are kept in memory
 - `precursors`: Library precursor information
 
 # Returns
-Trained EvoTrees/XGBoost models or simplified model if insufficient PSMs.
+Trained LightGBM models or simplified model if insufficient PSMs.
 """
 
 """
@@ -493,7 +496,7 @@ Trained EvoTrees/XGBoost models or simplified model if insufficient PSMs.
 
 Alternative PSM scoring using probit regression with cross-validation.
 
-This is a simpler alternative to XGBoost/EvoTrees for small datasets (<100k PSMs).
+This is a simpler alternative to LightGBM for small datasets (<100k PSMs).
 Uses linear probit model with cross-validation, similar to FirstPassSearch but with CV folds.
 No iterative refinement or max_prob updates - single pass training only.
 
@@ -697,9 +700,9 @@ end
 
 """
     score_precursor_isotope_traces_out_of_memory!(best_psms::DataFrame, file_paths::Vector{String},
-                                  precursors::LibraryPrecursors) -> EvoTreesModels
+                                  precursors::LibraryPrecursors) -> LightGBMModels
 
-Train EvoTrees/XGBoost models for PSM scoring. Only a subset of psms are kept in memory
+Train LightGBM models for PSM scoring. Only a subset of psms are kept in memory
 
 # Arguments
 - `best_psms`: Sample of high-quality PSMs for training
@@ -707,7 +710,7 @@ Train EvoTrees/XGBoost models for PSM scoring. Only a subset of psms are kept in
 - `precursors`: Library precursor information
 
 # Returns
-Trained EvoTrees/XGBoost models or simplified model if insufficient PSMs.
+Trained LightGBM models or simplified model if insufficient PSMs.
 """
 function score_precursor_isotope_traces_out_of_memory!(
     best_psms::DataFrame,
