@@ -844,29 +844,6 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
     end
 end
 
-function initialize_prob_group_features!(
-    psms::AbstractDataFrame,
-    match_between_runs::Bool
-)
-    n = nrow(psms)
-    psms[!, :prob]      = zeros(Float32, n)
-    psms[!, :q_value]   = zeros(Float64, n)
-
-    if match_between_runs
-        psms[!, :MBR_max_pair_prob]             = zeros(Float32, n)
-        psms[!, :MBR_best_irt_diff]             = zeros(Float32, n)
-        psms[!, :MBR_log2_weight_ratio]         = zeros(Float32, n)
-        psms[!, :MBR_log2_explained_ratio]      = zeros(Float32, n)
-        psms[!, :MBR_rv_coefficient]            = zeros(Float32, n)
-        psms[!, :MBR_is_best_decoy]             = trues(n)
-        psms[!, :MBR_num_runs]                  = zeros(Int32, n)
-        psms[!, :MBR_transfer_candidate]        = falses(n)
-        psms[!, :MBR_is_missing]                = falses(n)
-    end
-
-    return psms
-end
-
 function get_training_data_for_iteration!(
     psms_train::AbstractDataFrame,
     itr::Int,

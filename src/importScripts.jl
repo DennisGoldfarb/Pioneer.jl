@@ -138,6 +138,7 @@ function importScripts()
         [
             "fdrUtilities.jl",
             "ftrUtilities.jl",
+            "prob_group_features.jl",
             "percolatorSortOf.jl",
             "piecewiseLinearFunction.jl",
             "probitRegression.jl",
