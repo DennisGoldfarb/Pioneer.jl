@@ -144,6 +144,125 @@ function assign_pair_ids(
     return pair_ids, last_pair_id
 end
 
+#############################################################################
+# LightGBM Utilities
+#############################################################################
+
+struct LightGBMModel
+    booster::Any
+    feature_names::Vector{Symbol}
+end
+
+function build_feature_matrix(psms::AbstractDataFrame, features::Vector{Symbol})
+    n = nrow(psms)
+    m = length(features)
+    mat = Matrix{Float32}(undef, n, m)
+    for (j, feature) in enumerate(features)
+        col = psms[!, feature]
+        @inbounds for i in 1:n
+            mat[i, j] = convert_feature_value(col[i])
+        end
+    end
+    return mat
+end
+
+convert_feature_value(val::Missing) = 0.0f0
+convert_feature_value(val::Bool) = val ? 1.0f0 : 0.0f0
+convert_feature_value(::Nothing) = 0.0f0
+convert_feature_value(val) = Float32(val)
+
+function train_lightgbm_booster(params::Dict{String, Any},
+                                features::Matrix{Float32},
+                                labels::Vector{Float64},
+                                num_round::Int)
+    dataset = create_lgbm_dataset(features, labels)
+    if isdefined(LightGBM, :train)
+        train_fn = getfield(LightGBM, :train)
+        return train_fn(params, dataset, num_round; verbose=-1)
+    elseif isdefined(LightGBM, :LGBMBooster) && isdefined(LightGBM, :update!)
+        booster_ctor = getfield(LightGBM, :LGBMBooster)
+        booster = booster_ctor(params, dataset)
+        update_fn = getfield(LightGBM, :update!)
+        for _ in 1:num_round
+            update_fn(booster)
+        end
+        return booster
+    else
+        error("LightGBM training interface not available")
+    end
+end
+
+function create_lgbm_dataset(features::Matrix{Float32}, labels::Union{Nothing, AbstractVector{<:Real}})
+    if isdefined(LightGBM, :LGBMDataset)
+        dataset_ctor = getfield(LightGBM, :LGBMDataset)
+    elseif isdefined(LightGBM, :Dataset)
+        dataset_ctor = getfield(LightGBM, :Dataset)
+    else
+        error("LightGBM dataset constructor not available")
+    end
+
+    if labels === nothing
+        return dataset_ctor(features)
+    else
+        return dataset_ctor(features; label=labels)
+    end
+end
+
+create_lgbm_dataset(features::Matrix{Float32}) = create_lgbm_dataset(features, nothing)
+
+function predict(model::LightGBMModel, df::AbstractDataFrame)
+    feature_matrix = build_feature_matrix(df, model.feature_names)
+    preds = lightgbm_predict(model.booster, feature_matrix)
+    return Float32.(preds)
+end
+
+function lightgbm_predict(booster, feature_matrix::Matrix{Float32})
+    predict_fn = getfield(LightGBM, :predict)
+    preds = nothing
+    try
+        preds = predict_fn(booster, feature_matrix; predict_type=:probability)
+    catch
+        try
+            preds = predict_fn(booster, feature_matrix)
+        catch
+            dataset = create_lgbm_dataset(feature_matrix)
+            preds = predict_fn(booster, dataset)
+        end
+    end
+
+    preds = preds isa Tuple ? first(preds) : preds
+    if preds isa AbstractArray
+        return vec(preds)
+    else
+        return collect(preds)
+    end
+end
+
+function lightgbm_importance(model::LightGBMModel)
+    booster = model.booster
+    scores = nothing
+    if isdefined(LightGBM, :importance)
+        try
+            scores = getfield(LightGBM, :importance)(booster)
+        catch
+        end
+    end
+    if scores === nothing && isdefined(LightGBM, :feature_importance)
+        try
+            scores = getfield(LightGBM, :feature_importance)(booster)
+        catch
+        end
+    end
+
+    if scores === nothing
+        return [(feature, 0.0) for feature in model.feature_names]
+    end
+
+    score_array = scores isa AbstractArray ? vec(Float64.(scores)) : Float64.(collect(scores))
+    limit = min(length(score_array), length(model.feature_names))
+    return [(model.feature_names[i], score_array[i]) for i in 1:limit]
+end
+
 function sort_of_percolator_in_memory!(psms::DataFrame, 
                   features::Vector{Symbol},
                   match_between_runs::Bool = true;
@@ -1058,119 +1177,5 @@ function convert_subarrays(df::DataFrame)
         end
     end
     return df
-end
-struct LightGBMModel
-    booster::Any
-    feature_names::Vector{Symbol}
-end
-
-function build_feature_matrix(psms::AbstractDataFrame, features::Vector{Symbol})
-    n = nrow(psms)
-    m = length(features)
-    mat = Matrix{Float32}(undef, n, m)
-    for (j, feature) in enumerate(features)
-        col = psms[!, feature]
-        @inbounds for i in 1:n
-            mat[i, j] = convert_feature_value(col[i])
-        end
-    end
-    return mat
-end
-
-convert_feature_value(val::Missing) = 0.0f0
-convert_feature_value(val::Bool) = val ? 1.0f0 : 0.0f0
-convert_feature_value(::Nothing) = 0.0f0
-convert_feature_value(val) = Float32(val)
-
-function train_lightgbm_booster(params::Dict{String, Any},
-                                features::Matrix{Float32},
-                                labels::Vector{Float64},
-                                num_round::Int)
-    dataset = create_lgbm_dataset(features, labels)
-    if isdefined(LightGBM, :train)
-        train_fn = getfield(LightGBM, :train)
-        return train_fn(params, dataset, num_round; verbose=-1)
-    elseif isdefined(LightGBM, :LGBMBooster) && isdefined(LightGBM, :update!)
-        booster_ctor = getfield(LightGBM, :LGBMBooster)
-        booster = booster_ctor(params, dataset)
-        update_fn = getfield(LightGBM, :update!)
-        for _ in 1:num_round
-            update_fn(booster)
-        end
-        return booster
-    else
-        error("LightGBM training interface not available")
-    end
-end
-
-function create_lgbm_dataset(features::Matrix{Float32}, labels::Union{Nothing, AbstractVector{<:Real}})
-    if isdefined(LightGBM, :LGBMDataset)
-        dataset_ctor = getfield(LightGBM, :LGBMDataset)
-    elseif isdefined(LightGBM, :Dataset)
-        dataset_ctor = getfield(LightGBM, :Dataset)
-    else
-        error("LightGBM dataset constructor not available")
-    end
-
-    if labels === nothing
-        return dataset_ctor(features)
-    else
-        return dataset_ctor(features; label=labels)
-    end
-end
-
-create_lgbm_dataset(features::Matrix{Float32}) = create_lgbm_dataset(features, nothing)
-
-function predict(model::LightGBMModel, df::AbstractDataFrame)
-    feature_matrix = build_feature_matrix(df, model.feature_names)
-    preds = lightgbm_predict(model.booster, feature_matrix)
-    return Float32.(preds)
-end
-
-function lightgbm_predict(booster, feature_matrix::Matrix{Float32})
-    predict_fn = getfield(LightGBM, :predict)
-    preds = nothing
-    try
-        preds = predict_fn(booster, feature_matrix; predict_type=:probability)
-    catch
-        try
-            preds = predict_fn(booster, feature_matrix)
-        catch
-            dataset = create_lgbm_dataset(feature_matrix)
-            preds = predict_fn(booster, dataset)
-        end
-    end
-
-    preds = preds isa Tuple ? first(preds) : preds
-    if preds isa AbstractArray
-        return vec(preds)
-    else
-        return collect(preds)
-    end
-end
-
-function lightgbm_importance(model::LightGBMModel)
-    booster = model.booster
-    scores = nothing
-    if isdefined(LightGBM, :importance)
-        try
-            scores = getfield(LightGBM, :importance)(booster)
-        catch
-        end
-    end
-    if scores === nothing && isdefined(LightGBM, :feature_importance)
-        try
-            scores = getfield(LightGBM, :feature_importance)(booster)
-        catch
-        end
-    end
-
-    if scores === nothing
-        return [(feature, 0.0) for feature in model.feature_names]
-    end
-
-    score_array = scores isa AbstractArray ? vec(Float64.(scores)) : Float64.(collect(scores))
-    limit = min(length(score_array), length(model.feature_names))
-    return [(model.feature_names[i], score_array[i]) for i in 1:limit]
 end
 
