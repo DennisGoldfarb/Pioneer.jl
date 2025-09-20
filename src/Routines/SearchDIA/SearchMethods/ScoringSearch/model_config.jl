@@ -39,7 +39,7 @@ end
 
 # Feature set definitions
 
-# Full feature set used for advanced XGBoost model (matches out-of-memory case)
+# Full feature set used for advanced LightGBM model (matches out-of-memory case)
 # Note: :target is excluded as it's the label, not a feature
 const ADVANCED_FEATURE_SET = [
     :missed_cleavage,
