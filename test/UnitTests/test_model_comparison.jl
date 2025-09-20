@@ -28,12 +28,12 @@ include("../../src/Routines/SearchDIA/SearchMethods/ScoringSearch/model_comparis
         configs = create_model_configurations()
         
         @test length(configs) == 3
-        @test any(c -> c.name == "SimpleXGBoost", configs)
+        @test any(c -> c.name == "SimpleLightGBM", configs)
         @test any(c -> c.name == "ProbitRegression", configs)
         @test any(c -> c.name == "SuperSimplified", configs)
         
-        simple_xgb = configs[findfirst(c -> c.name == "SimpleXGBoost", configs)]
-        @test simple_xgb.model_type == :xgboost
+        simple_xgb = configs[findfirst(c -> c.name == "SimpleLightGBM", configs)]
+        @test simple_xgb.model_type == :lightgbm
         @test length(simple_xgb.features) > 30  # Should have many features
         @test haskey(simple_xgb.hyperparams, :eta)
         
@@ -42,7 +42,7 @@ include("../../src/Routines/SearchDIA/SearchMethods/ScoringSearch/model_comparis
         @test haskey(probit.hyperparams, :n_folds)
         
         simplified = configs[findfirst(c -> c.name == "SuperSimplified", configs)]
-        @test simplified.model_type == :xgboost
+        @test simplified.model_type == :lightgbm
         @test length(simplified.features) == 5  # Minimal feature set
     end
     

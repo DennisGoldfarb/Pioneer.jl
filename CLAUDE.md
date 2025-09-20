@@ -158,7 +158,7 @@ All search methods implement this interface:
 **ML-Enhanced Scoring** (`utils_protein_ml.jl`):
 - Extracts top-N precursor scores as features
 - Adds protein-level statistics (peptide count, score distribution)
-- Uses EvoTrees/XGBoost gradient boosting with cross-validation
+- Uses LightGBM gradient boosting with cross-validation
 - Maintains CV fold consistency with precursor models
 
 **Merging Functions**:
@@ -235,7 +235,7 @@ results_dir/
 - Custom fragment indexing for fast lookup
 - Multi-threaded processing with task partitioning
 - Spline-based models for RT conversion and quadrupole transmission
-- EvoTrees/XGBoost integration for PSM rescoring and protein group ML scoring
+- LightGBM integration for PSM rescoring and protein group ML scoring
 - Huber loss optimization for robust parameter estimation
 
 ### Performance Considerations
@@ -287,7 +287,7 @@ Key parameters control tolerances, scoring, FDR thresholds, and output formats.
 ### External Dependencies
 - PioneerConverter (.NET) - Required for Thermo RAW file conversion
 - Koina API - External service for spectrum prediction (requires internet)
-- EvoTrees/XGBoost - Machine learning for PSM rescoring
+- LightGBM - Machine learning for PSM rescoring
 
 ### Supported Prediction Models
 - **unispec** - Instrument-specific models for QE, QEHFX, LUMOS, ELITE, VELOS
@@ -371,14 +371,14 @@ JSON parameters control debug verbosity:
 ### Current Development Focus
 - Refactoring ScoringSearch and MaxLFQSearch for better encapsulation
 - Adding FileReference abstraction layer for type-safe file operations
-- Protein group ML scoring integration using EvoTrees/XGBoost gradient boosting
+- Protein group ML scoring integration using LightGBM gradient boosting
 - Features top-N precursor scores with cross-validation consistency
 
 ### Protein Group ML Scoring
 
 Pioneer now supports ML-enhanced protein group scoring that uses top N precursor scores as features:
 
-- EvoTrees/XGBoost models trained per CV fold
+- LightGBM models trained per CV fold
 - Uses top N precursor scores plus protein-level statistics as features
 - Out-of-memory (OOM) support for large experiments
 - Automatic fallback to standard scoring if ML fails

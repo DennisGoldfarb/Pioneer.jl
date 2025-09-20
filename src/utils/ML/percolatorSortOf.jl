@@ -39,7 +39,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     MBR_estimates  = zeros(Float32, nrow(psms))
 
     unique_cv_folds = unique(psms[!, :cv_fold])
-    models = Dict{UInt8, Vector{EvoTrees.EvoTree}}()
+    models = Dict{UInt8, Vector{Any}}()
     mbr_start_iter = length(iter_scheme)
 
     cv_fold_col = psms[!, :cv_fold]
@@ -55,7 +55,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
         psms_train = @view psms[train_indices[test_fold_idx], :]
         test_fold_idxs = fold_indices[test_fold_idx]
         test_fold_psms = @view psms[test_fold_idxs, :]
-        fold_models = Vector{EvoTrees.EvoTree}(undef, length(iter_scheme))
+        fold_models = Vector{Any}(undef, length(iter_scheme))
 
         for (itr, num_round) in enumerate(iter_scheme)
             psms_train_itr = get_training_data_for_iteration!(psms_train,
@@ -143,7 +143,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
     function getBestScorePerPrec!(
         prec_to_best_score_new::Dictionary,
         file_paths::Vector{String},
-        models::Dictionary{UInt8,EvoTrees.EvoTree},
+        models,
         features::Vector{Symbol},
         match_between_runs::Bool;
         is_last_iteration::Bool = false)
@@ -319,7 +319,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
 
     unique_cv_folds = unique(psms[!, :cv_fold])
     #Train the model for 1:K-1 cross validation folds and apply to the held-out fold
-    models = Dictionary{UInt8, Vector{EvoTrees.EvoTree}}()
+    models = Dictionary{UInt8, Vector{Any}}()
     pbar = ProgressBar(total=length(unique_cv_folds)*length(iter_scheme))
     Random.seed!(1776);
     non_mbr_features = [f for f in features if !startswith(String(f), "MBR_")]
@@ -353,16 +353,16 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                 insert!(
                     models,
                     test_fold_idx,
-                    Vector{EvoTrees.EvoTree}([bst])
+                    Vector{Any}([bst])
                 )
             else
                 push!(models[test_fold_idx], bst)
             end
             #print_importance = true
-            print_importance ? println(collect(zip(feature_importance(bst)))[1:30]) : nothing
+            maybe_print_lightgbm_importance(bst, train_feats, print_importance)
 
             # Get probabilities for training sample so we can get q-values
-            psms_train[!,:prob] = EvoTrees.predict(bst, psms_train)
+            psms_train[!,:prob] = predict(bst, psms_train)
             
             if match_between_runs
                 summarize_precursors!(psms_train, q_cutoff = max_q_value_xgboost_rescore)
@@ -392,7 +392,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                                                 unique_passing_runs::Set{UInt16}}}()
 
     for (train_iter, num_round) in enumerate(iter_scheme)
-        models_for_iter = Dictionary{UInt8,EvoTrees.EvoTree}()
+        models_for_iter = Dictionary{UInt8, Any}()
         for test_fold_idx in unique_cv_folds
             insert!(models_for_iter, test_fold_idx, models[test_fold_idx][train_iter])
         end
@@ -431,15 +431,16 @@ function train_booster(psms::AbstractDataFrame, features, num_round;
                        gamma::Float64,
                        max_depth::Int)
 
-    config = EvoTreeRegressor(
-        loss=:logloss,
-        nrounds = num_round,
+    config = LightGBM.LGBMClassifier(
+        objective = :binary,
+        num_iterations = num_round,
         max_depth = max_depth,
-        min_weight = min_child_weight,
-        rowsample = subsample,
-        colsample = colsample,
-        eta = eta,
-        gamma = gamma
+        learning_rate = eta,
+        min_sum_hessian_in_leaf = min_child_weight,
+        bagging_fraction = subsample,
+        feature_fraction = colsample,
+        min_gain_to_split = gamma,
+        verbosity = -1,
     )
     model = fit(config, psms; target_name = :target, feature_names = features, verbosity = 0)
     return model
@@ -450,6 +451,34 @@ function predict_fold!(bst, psms_train::AbstractDataFrame,
     test_fold_psms[!, :prob] = predict(bst, test_fold_psms)
     psms_train[!, :prob] = predict(bst, psms_train)
     get_qvalues!(psms_train.prob, psms_train.target, psms_train.q_value)
+end
+
+function maybe_print_lightgbm_importance(model, feature_names, print_importance::Bool)
+    print_importance || return
+
+    importances = nothing
+    if isdefined(LightGBM, :importance)
+        try
+            importances = LightGBM.importance(model)
+        catch
+            importances = nothing
+        end
+    elseif isdefined(LightGBM, :feature_importance)
+        try
+            importances = LightGBM.feature_importance(model)
+        catch
+            importances = nothing
+        end
+    end
+
+    if importances === nothing
+        return
+    end
+
+    pairs = collect(zip(feature_names, importances))
+    isempty(pairs) && return
+    limit = min(length(pairs), 30)
+    println(pairs[1:limit])
 end
 
 function update_mbr_features!(psms_train::AbstractDataFrame,
@@ -696,7 +725,7 @@ end
 
 Return a vector of probabilities for `df` using the cross validation `models`.
 """
-function predict_cv_models(models::Dictionary{UInt8,EvoTrees.EvoTree},
+function predict_cv_models(models,
                            df::AbstractDataFrame,
                            features::Vector{Symbol})
     probs = zeros(Float32, nrow(df))
