@@ -203,8 +203,40 @@ function create_lgbm_dataset(features::Matrix{Float32}, labels::Union{Nothing, A
 
     if labels === nothing
         return dataset_ctor(features)
+    end
+
+    label_array = collect(Float64.(labels))
+
+    # Try common constructor signatures first (positional, then keyword-based)
+    attempts = (
+        () -> dataset_ctor(features, label_array),
+        () -> dataset_ctor(features; label=label_array)
+    )
+
+    last_error = nothing
+    for attempt in attempts
+        try
+            return attempt()
+        catch err
+            last_error = err
+        end
+    end
+
+    # Fall back to constructing the dataset without labels and attaching them afterwards
+    if isdefined(LightGBM, :set_field)
+        try
+            dataset = dataset_ctor(features)
+            getfield(LightGBM, :set_field)(dataset, "label", label_array)
+            return dataset
+        catch err
+            last_error = err
+        end
+    end
+
+    if last_error === nothing
+        error("Unable to construct LightGBM dataset with provided labels")
     else
-        return dataset_ctor(features; label=labels)
+        throw(last_error)
     end
 end
 
