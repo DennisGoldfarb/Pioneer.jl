@@ -37,31 +37,52 @@ function _select_transitions_impl!(
     iRT_tol::Float32,
     frag_mz_bounds::Tuple{Float32, Float32};
     isotope_err_bounds::Tuple{I, I} = (3, 1),
-    block_size::Int64 = 10000
-    ) where {I<:Integer}
+    block_size::Int64 = 10000,
+    min_fraction_transmitted::Float32 = 0.0f0,
+) where {I<:Integer}
+
+    mz_low_offset = Float32(NEUTRON * first(isotope_err_bounds))
+    mz_high_offset = Float32(NEUTRON * last(isotope_err_bounds))
+    processed_precursors = 0
 
     for i in scan_to_prec_idx
         # Get precursor properties
         prec_idx = precursors_passed_scoring[i]
         prec_charge = prec_charges[prec_idx]
         prec_mz = prec_mzs[prec_idx]
-        
+
         # Check retention time tolerance
         if abs(prec_irts[prec_idx] - iRT) > iRT_tol
             continue
         end
-        
+
         # Handle isotope errors
-        mz_low = getPrecMinBound(quad_transmission_func) - NEUTRON*first(isotope_err_bounds)/prec_charge
-        mz_high = getPrecMaxBound(quad_transmission_func) + NEUTRON*last(isotope_err_bounds)/prec_charge
-        
+        mz_low = getPrecMinBound(quad_transmission_func) - mz_low_offset / prec_charge
+        mz_high = getPrecMaxBound(quad_transmission_func) + mz_high_offset / prec_charge
+
         if (prec_mz < mz_low) | (prec_mz > mz_high)
             continue
         end
-        
+
         prec_sulfur_count = prec_sulfur_counts[prec_idx]
-        # Fill transition list using spline-specific implementation
-        transition_idx = @inline fillTransitionList!(
+        prec_isotope_set = getPrecursorIsotopeSet(prec_mz, prec_charge, quad_transmission_func)
+        last(prec_isotope_set) < 0 && continue
+
+        fraction_transmitted = getPrecursorFractionTransmitted!(
+            precursor_transmission,
+            iso_splines,
+            prec_isotope_set,
+            quad_transmission_func,
+            prec_mz,
+            prec_charge,
+            prec_sulfur_count,
+        )
+
+        fraction_transmitted < min_fraction_transmitted && continue
+
+        processed_precursors += 1
+
+        transition_idx = @inline fillTransitionListPrecomputed!(
             transitions,
             prec_estimation_type,
             getPrecFragRange(lookup, prec_idx),
@@ -71,16 +92,16 @@ function _select_transitions_impl!(
             prec_charge,
             prec_sulfur_count,
             transition_idx,
-            quad_transmission_func,
             precursor_transmission,
+            prec_isotope_set,
             isotopes,
             n_frag_isotopes,
             max_frag_rank,
             iso_splines,
             frag_mz_bounds,
-            block_size
+            block_size,
         )
     end
-    
-    return transition_idx, 0
+
+    return transition_idx, processed_precursors
 end

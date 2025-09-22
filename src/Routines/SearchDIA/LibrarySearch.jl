@@ -152,12 +152,12 @@ function getPSMS(
 
         # Ion Template Selection
         ion_idx, _ = selectTransitions!(
-            getIonTemplates(search_data), 
-            StandardTransitionSelection(), 
+            getIonTemplates(search_data),
+            StandardTransitionSelection(),
             getPrecEstimation(params),
             ion_list,
             scan_to_prec_idx[scan_idx], precursors_passed_scoring,
-            getMz(precursors), 
+            getMz(precursors),
             getCharge(precursors),
             getSulfurCount(precursors),
             getIrt(precursors),
@@ -166,9 +166,10 @@ function getPSMS(
             precursor_transmission, isotopes, getNFragIsotopes(params),
             getMaxFragRank(params),
             Float32(rt_to_irt_spline(getRetentionTime(spectra, scan_idx))),
-            Float32(irt_tol), 
+            Float32(irt_tol),
             (getLowMz(spectra, scan_idx), getHighMz(spectra, scan_idx));
-            isotope_err_bounds = getIsotopeErrBounds(params)
+            isotope_err_bounds = getIsotopeErrBounds(params),
+            min_fraction_transmitted = getMinFractionTransmitted(params),
         )
 
         ion_idx < 2 && continue
