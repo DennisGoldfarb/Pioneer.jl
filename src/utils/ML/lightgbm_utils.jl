@@ -31,13 +31,13 @@ Vector alias for collections of `LightGBMModel` instances.
 const LightGBMModelVector = Vector{LightGBMModel}
 
 """
-    feature_matrix(psms, features) -> Matrix{Float32}
+    lightgbm_feature_matrix(psms, features) -> Matrix{Float32}
 
 Convert the requested feature columns from a `DataFrame` into a dense
 `Float32` matrix. Missing values are imputed with sensible defaults based
 on the underlying column type.
 """
-function feature_matrix(psms::AbstractDataFrame, features::Vector{Symbol})
+function lightgbm_feature_matrix(psms::AbstractDataFrame, features::Vector{Symbol})
     n = nrow(psms)
     m = length(features)
     matrix = Matrix{Float32}(undef, n, m)
@@ -73,14 +73,14 @@ function feature_matrix(psms::AbstractDataFrame, features::Vector{Symbol})
 end
 
 function _prepare_labels(labels)
-    result = Vector{Float32}(undef, length(labels))
+    result = Vector{Float64}(undef, length(labels))
     @inbounds for (idx, value) in pairs(labels)
         if value isa Missing
-            result[idx] = 0f0
+            result[idx] = 0.0
         elseif value isa Bool
-            result[idx] = value ? 1f0 : 0f0
+            result[idx] = value ? 1.0 : 0.0
         else
-            result[idx] = Float32(value)
+            result[idx] = Float64(value)
         end
     end
     return result
@@ -106,10 +106,21 @@ function train_lightgbm_booster(
     max_depth::Integer = -1,
     verbosity::Integer = 0,
 )
-    matrix = feature_matrix(psms, features)
+    available_features = Symbol[]
+    for feat in features
+        if hasproperty(psms, feat)
+            push!(available_features, feat)
+        end
+    end
+
+    if isempty(available_features)
+        throw(ArgumentError("No available features for LightGBM training"))
+    end
+
+    matrix = lightgbm_feature_matrix(psms, available_features)
     labels = _prepare_labels(psms[!, target_name])
 
-    dataset = _create_lightgbm_dataset(matrix, labels, features)
+    dataset = _create_lightgbm_dataset(matrix, labels, available_features)
 
     params = Dict{String, Any}(
         "objective" => "binary",
@@ -125,46 +136,23 @@ function train_lightgbm_booster(
     )
 
     booster = LightGBM.train(params, dataset; num_boost_round = Int(num_round))
-    return LightGBMModel(booster, Symbol.(features))
+
+    if isdefined(LightGBM, :free_dataset!)
+        try
+            LightGBM.free_dataset!(dataset)
+        catch
+        end
+    end
+
+    return LightGBMModel(booster, available_features)
 end
 
 function _create_lightgbm_dataset(
     matrix::AbstractMatrix{Float32},
-    labels::AbstractVector{Float32},
+    labels::AbstractVector{Float64},
     features::Vector{Symbol},
 )
-    feature_names = String.(features)
-    attempts = (
-        ("keyword constructor", () -> LightGBM.Dataset(; data = matrix, label = labels, feature_name = feature_names)),
-        ("positional data with keyword label", () -> LightGBM.Dataset(matrix; label = labels, feature_name = feature_names)),
-        ("positional data and label", () -> LightGBM.Dataset(matrix, labels)),
-        ("positional data, label, and feature_name", () -> LightGBM.Dataset(matrix, labels, feature_names)),
-    )
-
-    errors = Pair{String, Any}[]
-    for (label, attempt) in attempts
-        try
-            return attempt()
-        catch err
-            if err isa MethodError || err isa ArgumentError
-                push!(errors, label => err)
-            else
-                rethrow(err)
-            end
-        end
-    end
-
-    if !isempty(errors)
-        message = join(
-            map(errors) do (label, err)
-                "$(label) failed with $(sprint(showerror, err))"
-            end,
-            "\n",
-        )
-        error("Failed to construct LightGBM dataset using available constructors.\n" * message)
-    else
-        error("Failed to construct LightGBM dataset from provided data.")
-    end
+    return LightGBM.Dataset(matrix; label = labels, feature_name = String.(features))
 end
 
 """
@@ -173,7 +161,7 @@ end
 Generate probability predictions for the provided PSMs.
 """
 function predict(model::LightGBMModel, psms::AbstractDataFrame)
-    matrix = feature_matrix(psms, model.features)
+    matrix = lightgbm_feature_matrix(psms, model.features)
     return Float32.(LightGBM.predict(model.booster, matrix))
 end
 
