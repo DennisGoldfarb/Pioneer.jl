@@ -164,22 +164,32 @@ function _create_lightgbm_dataset(
     feature_names = String.(features)
     attempts = (
         ("keyword-only constructor", () -> LightGBM.Dataset(; data = feature_matrix, label = labels, feature_name = feature_names)),
-        ("positional data with keywords", () -> LightGBM.Dataset(feature_matrix; label = labels, feature_name = feature_names)),
+        ("positional data with feature_name keyword", () -> LightGBM.Dataset(feature_matrix; label = labels, feature_name = feature_names)),
+        ("positional data with feature_names keyword", () -> LightGBM.Dataset(feature_matrix; label = labels, feature_names = feature_names)),
+        ("positional data, label keyword only", () -> LightGBM.Dataset(feature_matrix; label = labels)),
         ("positional data and label", () -> LightGBM.Dataset(feature_matrix, labels)),
-        ("positional data, label, and feature names", () -> LightGBM.Dataset(feature_matrix, labels, feature_names)),
+        ("positional data, label, and feature_name", () -> LightGBM.Dataset(feature_matrix, labels, feature_names)),
     )
 
-    collected_errors = Vector{Pair{String, MethodError}}()
+    collected_errors = Vector{Pair{String, Any}}()
 
     for (label, attempt) in attempts
         try
             return attempt()
         catch err
-            if err isa MethodError
+            if err isa MethodError || err isa ArgumentError
                 push!(collected_errors, label => err)
             else
                 rethrow(err)
             end
+        end
+    end
+
+    if _has_lightgbm_low_level_api()
+        try
+            return _create_dataset_via_low_level(feature_matrix, labels, feature_names)
+        catch err
+            push!(collected_errors, "low-level LightGBM C API" => err)
         end
     end
 
@@ -197,6 +207,138 @@ function _create_lightgbm_dataset(
     else
         error("Failed to construct LightGBM dataset from the provided feature matrix.")
     end
+end
+
+function _has_lightgbm_low_level_api()
+    return all(
+        name -> isdefined(LightGBM, name),
+        (:LGBM_DatasetCreateFromMat, :LGBM_DatasetSetField, :LGBM_DatasetSetFeatureNames),
+    )
+end
+
+const _LIGHTGBM_FLOAT32 = isdefined(LightGBM, :C_API_DTYPE_FLOAT32) ? LightGBM.C_API_DTYPE_FLOAT32 : Cint(0)
+
+function _create_dataset_via_low_level(
+    feature_matrix::AbstractMatrix{Float32},
+    labels::AbstractVector{Float32},
+    feature_names::Vector{String},
+)
+    handle_ref = Ref{Ptr{Nothing}}()
+    status = _call_lgbm_dataset_create_from_mat(feature_matrix, handle_ref)
+    _check_lightgbm_status(status, "creating dataset from matrix")
+
+    dataset = LightGBM.Dataset(handle_ref[])
+
+    status = _call_lgbm_dataset_set_field(dataset, "label", labels, _LIGHTGBM_FLOAT32)
+    _check_lightgbm_status(status, "attaching labels")
+
+    if !isempty(feature_names)
+        status = _call_lgbm_dataset_set_feature_names(dataset, feature_names)
+        _check_lightgbm_status(status, "setting feature names")
+    end
+
+    return dataset
+end
+
+function _call_lgbm_dataset_create_from_mat(
+    feature_matrix::AbstractMatrix{Float32},
+    handle_ref::Ref{Ptr{Nothing}},
+)
+    try
+        return LightGBM.LGBM_DatasetCreateFromMat(
+            feature_matrix,
+            _LIGHTGBM_FLOAT32,
+            size(feature_matrix, 1),
+            size(feature_matrix, 2),
+            0,
+            "",
+            nothing,
+            handle_ref,
+        )
+    catch err
+        if err isa MethodError
+            return LightGBM.LGBM_DatasetCreateFromMat(
+                pointer(feature_matrix),
+                _LIGHTGBM_FLOAT32,
+                size(feature_matrix, 1),
+                size(feature_matrix, 2),
+                0,
+                "",
+                Ptr{Nothing}(C_NULL),
+                handle_ref,
+            )
+        else
+            rethrow(err)
+        end
+    end
+end
+
+function _call_lgbm_dataset_set_field(
+    dataset,
+    field_name::AbstractString,
+    values::AbstractVector{Float32},
+    dtype,
+)
+    try
+        return LightGBM.LGBM_DatasetSetField(
+            dataset,
+            field_name,
+            values,
+            length(values),
+            dtype,
+        )
+    catch err
+        if err isa MethodError
+            handle = getfield(dataset, :handle)
+            return LightGBM.LGBM_DatasetSetField(
+                handle,
+                field_name,
+                pointer(values),
+                length(values),
+                dtype,
+            )
+        else
+            rethrow(err)
+        end
+    end
+end
+
+function _call_lgbm_dataset_set_feature_names(dataset, feature_names::Vector{String})
+    try
+        return LightGBM.LGBM_DatasetSetFeatureNames(dataset, feature_names)
+    catch err
+        if err isa MethodError
+            handle = getfield(dataset, :handle)
+            c_feature_names = Base.cconvert(Vector{Cstring}, feature_names)
+            return LightGBM.LGBM_DatasetSetFeatureNames(
+                handle,
+                c_feature_names,
+                length(c_feature_names),
+            )
+        else
+            rethrow(err)
+        end
+    end
+end
+
+function _check_lightgbm_status(status::Integer, context::AbstractString)
+    status == 0 && return
+    last_error = _lightgbm_last_error()
+    if isempty(last_error)
+        error("LightGBM $context failed with status $status")
+    else
+        error("LightGBM $context failed with status $status: $last_error")
+    end
+end
+
+function _lightgbm_last_error()
+    if isdefined(LightGBM, :LGBM_GetLastError)
+        ptr = LightGBM.LGBM_GetLastError()
+        if ptr !== C_NULL
+            return unsafe_string(ptr)
+        end
+    end
+    return ""
 end
 
 """
