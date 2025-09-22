@@ -124,7 +124,7 @@ score_precursor_isotope_traces()
 │   └── score_precursor_isotope_traces_out_of_memory!()
 │       └── sort_of_percolator_out_of_memory!()
 │           └── [For each CV fold]
-│               └── train_booster() → PioneerLightGBMModel
+│               └── train_booster() → LightGBMModel
 └── else (in-memory processing):
     ├── load_psms_for_lightgbm()
     ├── if psms_count >= 100K:
@@ -140,7 +140,7 @@ score_precursor_isotope_traces()
         │   └── train_lightgbm_model_in_memory()
         │       └── sort_of_percolator_in_memory!()
         │           └── [For each CV fold × iteration]
-        │               └── train_booster() → PioneerLightGBMModel
+        │               └── train_booster() → LightGBMModel
         └── elif model_config.model_type == :probit:
             └── train_probit_model_in_memory()
                 └── probit_regression_scoring_cv!()
@@ -165,13 +165,13 @@ sort_of_percolator_in_memory!()
 │   │   │       ├── Convert worst targets to decoys (PEP filtering)
 │   │   │       └── Filter to high-confidence PSMs (q-value filtering)
 │   │   ├── train_booster()
-│   │   │   └── PioneerLightGBMModel(loss=:logloss, hyperparams...)
+│   │   │   └── LightGBMModel(loss=:logloss, hyperparams...)
 │   │   ├── Predict on train/test sets
 │   │   ├── Calculate q-values
 │   │   └── update_mbr_features!() [if match_between_runs]
 │   └── Store fold predictions
 ├── Handle MBR transfer candidates [if match_between_runs]
-└── Return trained models (Dict{UInt8, Vector{PioneerLightGBMModel}})
+└── Return trained models (Dict{UInt8, Vector{LightGBMModel}})
 ```
 
 ### Key Training Features

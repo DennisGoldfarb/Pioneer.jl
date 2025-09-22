@@ -186,7 +186,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     nonMBR_estimates  = zeros(Float32, nrow(psms)) # keep track of last nonMBR test scores
 
     unique_cv_folds = unique(psms[!, :cv_fold])
-    models = Dict{UInt8, Vector{PioneerLightGBMModel}}()
+    models = Dict{UInt8, LightGBMModelVector}()
     mbr_start_iter = length(iter_scheme)
 
     cv_fold_col = psms[!, :cv_fold]
@@ -224,7 +224,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             end
         end
 
-        fold_models = Vector{PioneerLightGBMModel}(undef, length(iter_scheme))
+        fold_models = Vector{LightGBMModel}(undef, length(iter_scheme))
 
         for (itr, num_round) in enumerate(iter_scheme)
             psms_train_itr = get_training_data_for_iteration!(psms_train,
@@ -333,7 +333,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
     function getBestScorePerPrec!(
         prec_to_best_score_new::Dictionary,
         file_paths::Vector{String},
-        models::Dictionary{UInt8,PioneerLightGBMModel},
+        models::Dictionary{UInt8,LightGBMModel},
         features::Vector{Symbol},
         match_between_runs::Bool;
         is_last_iteration::Bool = false)
@@ -519,7 +519,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
 
     unique_cv_folds = unique(psms[!, :cv_fold])
     #Train the model for 1:K-1 cross validation folds and apply to the held-out fold
-    models = Dictionary{UInt8, Vector{PioneerLightGBMModel}}()
+    models = Dictionary{UInt8, LightGBMModelVector}()
     pbar = ProgressBar(total=length(unique_cv_folds)*length(iter_scheme))
     Random.seed!(1776);
     non_mbr_features = [f for f in features if !startswith(String(f), "MBR_")]
@@ -553,7 +553,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                 insert!(
                     models,
                     test_fold_idx,
-                    Vector{PioneerLightGBMModel}([bst])
+                    Vector{LightGBMModel}([bst])
                 )
             else
                 push!(models[test_fold_idx], bst)
@@ -604,7 +604,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                                                 unique_passing_runs::Set{UInt16}}}()
 
     for (train_iter, num_round) in enumerate(iter_scheme)
-        models_for_iter = Dictionary{UInt8,PioneerLightGBMModel}()
+        models_for_iter = Dictionary{UInt8,LightGBMModel}()
         for test_fold_idx in unique_cv_folds
             insert!(models_for_iter, test_fold_idx, models[test_fold_idx][train_iter])
         end
@@ -891,7 +891,7 @@ end
 
 Return a vector of probabilities for `df` using the cross validation `models`.
 """
-function predict_cv_models(models::Dictionary{UInt8,PioneerLightGBMModel},
+function predict_cv_models(models::Dictionary{UInt8,LightGBMModel},
                            df::AbstractDataFrame,
                            features::Vector{Symbol})
     probs = zeros(Float32, nrow(df))
