@@ -151,8 +151,9 @@ const MINIMAL_FEATURE_SET = [
 Creates the model configurations for comparison.
 
 # Returns
-- Vector of ModelConfig objects for SimpleXGBoost, AdvancedXGBoost, ProbitRegression,
-- ProbitRegressionSimple, and SuperSimplified models
+- Vector of ModelConfig objects for the LightGBM-based configurations (historical
+  names retain the `XGBoost` suffix for compatibility), ProbitRegression,
+  ProbitRegressionSimple, and SuperSimplified models
 """
 function create_model_configurations()
     return [

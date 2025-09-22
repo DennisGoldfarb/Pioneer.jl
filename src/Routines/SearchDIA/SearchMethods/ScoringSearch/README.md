@@ -5,7 +5,7 @@ ScoringSearch is the 7th stage in the Pioneer DIA search pipeline, responsible f
 ## Overview
 
 ScoringSearch performs three main functions:
-1. **PSM Scoring**: Machine learning models (XGBoost/EvoTrees or Probit Regression) rescore PSMs
+1. **PSM Scoring**: Machine learning models (LightGBM or Probit Regression) rescore PSMs
 2. **FDR Control**: Calculate q-values and filter PSMs based on false discovery rate thresholds
 3. **Protein Inference**: Group peptides into minimal protein sets and calculate protein-level scores
 
@@ -171,7 +171,7 @@ sort_of_percolator_in_memory!()
 │   │   └── update_mbr_features!() [if match_between_runs]
 │   └── Store fold predictions
 ├── Handle MBR transfer candidates [if match_between_runs]
-└── Return trained models (Dict{UInt8, Vector{EvoTrees.EvoTree}})
+└── Return trained models (Dict{UInt8, Vector{LightGBM.EvoTree}})
 ```
 
 ### Key Training Features
