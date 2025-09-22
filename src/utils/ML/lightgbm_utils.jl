@@ -129,11 +129,7 @@ function train_lightgbm_booster(
         labels[i] = _convert_label(value)
     end
 
-    dataset = LightGBM.Dataset(
-        feature_matrix;
-        label = labels,
-        feature_name = String.(features),
-    )
+    dataset = _create_lightgbm_dataset(feature_matrix, labels, features)
 
     params = Dict{String, Any}(
         "objective" => "binary",
@@ -150,6 +146,46 @@ function train_lightgbm_booster(
 
     booster = LightGBM.train(params, dataset; num_boost_round = Int(num_round))
     return PioneerLightGBMModel(booster, Symbol.(features), fill_values)
+end
+
+"""
+    _create_lightgbm_dataset(feature_matrix, labels, features)
+
+Construct a LightGBM dataset using the keyword-based API introduced in
+LightGBM.jl 2.0.0, falling back to the positional constructor used by
+earlier releases. This keeps Pioneer compatible across LightGBM versions
+without requiring callers to care about the specific signature.
+"""
+function _create_lightgbm_dataset(
+    feature_matrix::AbstractMatrix{Float32},
+    labels::AbstractVector{Float32},
+    features::Vector{Symbol},
+)
+    feature_names = String.(features)
+    attempts = (
+        () -> LightGBM.Dataset(; data = feature_matrix, label = labels, feature_name = feature_names),
+        () -> LightGBM.Dataset(feature_matrix; label = labels, feature_name = feature_names),
+    )
+
+    collected_errors = MethodError[]
+
+    for attempt in attempts
+        try
+            return attempt()
+        catch err
+            if err isa MethodError
+                push!(collected_errors, err)
+            else
+                rethrow(err)
+            end
+        end
+    end
+
+    if !isempty(collected_errors)
+        throw(Base.CompositeException(collected_errors...))
+    else
+        error("Failed to construct LightGBM dataset from the provided feature matrix.")
+    end
 end
 
 """
