@@ -163,18 +163,20 @@ function _create_lightgbm_dataset(
 )
     feature_names = String.(features)
     attempts = (
-        () -> LightGBM.Dataset(; data = feature_matrix, label = labels, feature_name = feature_names),
-        () -> LightGBM.Dataset(feature_matrix; label = labels, feature_name = feature_names),
+        ("keyword-only constructor", () -> LightGBM.Dataset(; data = feature_matrix, label = labels, feature_name = feature_names)),
+        ("positional data with keywords", () -> LightGBM.Dataset(feature_matrix; label = labels, feature_name = feature_names)),
+        ("positional data and label", () -> LightGBM.Dataset(feature_matrix, labels)),
+        ("positional data, label, and feature names", () -> LightGBM.Dataset(feature_matrix, labels, feature_names)),
     )
 
-    collected_errors = MethodError[]
+    collected_errors = Vector{Pair{String, MethodError}}()
 
-    for attempt in attempts
+    for (label, attempt) in attempts
         try
             return attempt()
         catch err
             if err isa MethodError
-                push!(collected_errors, err)
+                push!(collected_errors, label => err)
             else
                 rethrow(err)
             end
@@ -182,7 +184,16 @@ function _create_lightgbm_dataset(
     end
 
     if !isempty(collected_errors)
-        throw(Base.CompositeException(collected_errors...))
+        messages = map(collected_errors) do (label, err)
+            sprint() do io
+                print(io, label, " failed with ")
+                showerror(io, err)
+            end
+        end
+        error(
+            "Failed to construct LightGBM dataset using available constructors.\n" *
+            join(messages, "\n"),
+        )
     else
         error("Failed to construct LightGBM dataset from the provided feature matrix.")
     end
