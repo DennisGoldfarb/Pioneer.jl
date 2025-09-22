@@ -5,7 +5,7 @@ ScoringSearch is the 7th stage in the Pioneer DIA search pipeline, responsible f
 ## Overview
 
 ScoringSearch performs three main functions:
-1. **PSM Scoring**: Machine learning models (XGBoost/EvoTrees or Probit Regression) rescore PSMs
+1. **PSM Scoring**: Machine learning models (LightGBM or Probit Regression) rescore PSMs
 2. **FDR Control**: Calculate q-values and filter PSMs based on false discovery rate thresholds
 3. **Protein Inference**: Group peptides into minimal protein sets and calculate protein-level scores
 
@@ -83,10 +83,10 @@ PSM Count Decision Tree:
 
 | Model | Type | Features | Use Case | Hyperparameters |
 |-------|------|----------|----------|-----------------|
-| **SimpleXGBoost** | XGBoost | REDUCED_FEATURE_SET (40+ features) | Default for small datasets | Conservative (depth=4, eta=0.1) |
-| **AdvancedXGBoost** | XGBoost | ADVANCED_FEATURE_SET (50+ features) | Default for large datasets | Aggressive (depth=10, eta=0.05) |
+| **SimpleXGBoost** | LightGBM | REDUCED_FEATURE_SET (40+ features) | Default for small datasets | Conservative (depth=4, eta=0.1) |
+| **AdvancedXGBoost** | LightGBM | ADVANCED_FEATURE_SET (50+ features) | Default for large datasets | Aggressive (depth=10, eta=0.05) |
 | **ProbitRegression** | Linear | REDUCED_FEATURE_SET | Fast alternative | Linear model (max_iter=30) |
-| **SuperSimplified** | XGBoost | MINIMAL_FEATURE_SET (5 features) | Minimal overfitting | Conservative (depth=4, eta=0.1) |
+| **SuperSimplified** | LightGBM | MINIMAL_FEATURE_SET (5 features) | Minimal overfitting | Conservative (depth=4, eta=0.1) |
 
 ### Feature Sets
 
@@ -148,7 +148,7 @@ score_precursor_isotope_traces()
                         └── Pioneer.ProbitRegression()
 ```
 
-## XGBoost Training Pipeline (percolatorSortOf.jl)
+## LightGBM Training Pipeline (percolatorSortOf.jl)
 
 ### sort_of_percolator_in_memory!() Flow
 
@@ -171,7 +171,7 @@ sort_of_percolator_in_memory!()
 │   │   └── update_mbr_features!() [if match_between_runs]
 │   └── Store fold predictions
 ├── Handle MBR transfer candidates [if match_between_runs]
-└── Return trained models (Dict{UInt8, Vector{EvoTrees.EvoTree}})
+└── Return trained models (Dict{UInt8, Vector{LightGBMModelWrapper}})
 ```
 
 ### Key Training Features
@@ -205,9 +205,9 @@ probit_regression_scoring_cv!()
 └── Clean up temporary columns
 ```
 
-### Probit vs XGBoost Differences
+### Probit vs LightGBM Differences
 
-| Aspect | XGBoost | Probit Regression |
+| Aspect | LightGBM | Probit Regression |
 |--------|---------|------------------|
 | **Model Type** | Gradient boosted trees | Linear logistic model |
 | **Training** | Multi-stage iterative | Single-pass |
@@ -222,7 +222,7 @@ probit_regression_scoring_cv!()
 
 ### PSM Processing Output
 
-Both XGBoost and Probit models produce standardized outputs:
+Both LightGBM and Probit models produce standardized outputs:
 
 ```julia
 # Required columns for downstream processing
@@ -306,7 +306,7 @@ ScoringSearch/
 
 ```
 src/utils/ML/
-└── percolatorSortOf.jl          # Core XGBoost training implementation
+└── percolatorSortOf.jl          # Core LightGBM training implementation
 ```
 
 ## Debugging and Diagnostics

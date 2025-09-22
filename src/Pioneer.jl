@@ -29,7 +29,7 @@ using EzXML
 using FASTX
 using Interpolations
 using JSON, JLD2
-using LinearAlgebra, LoopVectorization, LinearSolve, LightXML, Logging
+using LinearAlgebra, LoopVectorization, LinearSolve, LightGBM, LightXML, Logging
 using Measures
 using NumericalIntegration
 using Optim
@@ -38,8 +38,6 @@ using Tables
 using StatsPlots, SentinelArrays
 using Random
 using StaticArrays, StatsBase, SpecialFunctions, Statistics, SparseArrays
-using EvoTrees
-using MLJModelInterface: fit, predict
 using KernelDensity
 using FastGaussQuadrature
 using LaTeXStrings, Printf

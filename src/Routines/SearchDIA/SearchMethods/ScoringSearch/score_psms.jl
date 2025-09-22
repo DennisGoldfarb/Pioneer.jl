@@ -37,8 +37,8 @@ const MAX_FOR_MODEL_SELECTION_PSMS = MAX_FOR_MODEL_SELECTION
 Main entry point for PSM scoring with automatic model selection based on dataset size.
 
 # Three-Case Logic
-1. PSMs ≥ max_psms_in_memory: Out-of-memory processing with default XGBoost
-2. PSMs < max_psms_in_memory AND ≥ 100K: In-memory with default/advanced XGBoost
+1. PSMs ≥ max_psms_in_memory: Out-of-memory processing with default LightGBM
+2. PSMs < max_psms_in_memory AND ≥ 100K: In-memory with default/advanced LightGBM
 3. PSMs < 100K: In-memory with automatic model comparison
 
 # Arguments
@@ -46,13 +46,13 @@ Main entry point for PSM scoring with automatic model selection based on dataset
 - `file_paths`: Vector of PSM file paths
 - `precursors`: Library precursors
 - `match_between_runs`: Whether to perform match between runs
-- `max_q_value_xgboost_rescore`: Max q-value for EvoTrees/XGBoost rescoring
-- `max_q_value_xgboost_mbr_rescore`: Max q-value for MBR rescoring
-- `min_PEP_neg_threshold_xgboost_rescore`: Min PEP for negative relabeling
+- `max_q_value_xgboost_rescore`: Max q-value for LightGBM rescoring
+- `max_q_value_xgboost_mbr_rescore`: Max q-value for MBR rescoring with LightGBM
+- `min_PEP_neg_threshold_xgboost_rescore`: Min PEP for negative relabeling during LightGBM training
 - `max_psms_in_memory`: Maximum PSMs to keep in memory
 
 # Returns
-- Trained EvoTrees/XGBoost models or nothing for probit regression
+- Trained LightGBM models or nothing for probit regression
 """
 function score_precursor_isotope_traces(
     second_pass_folder::String,
@@ -69,10 +69,10 @@ function score_precursor_isotope_traces(
     psms_count = get_psms_count(file_paths)
     
     if psms_count >= max_psms_in_memory
-        # Case 1: Out-of-memory processing with default XGBoost
+        # Case 1: Out-of-memory processing with default LightGBM
         @user_info "Using out-of-memory processing for $psms_count PSMs (≥ $max_psms_in_memory)"
         best_psms = sample_psms_for_xgboost(second_pass_folder, psms_count, max_psms_in_memory)
-        # Use a ModelConfig (AdvancedXGBoost by default) for OOM path
+        # Use a ModelConfig (AdvancedXGBoost, backed by LightGBM) for OOM path
         model_config = create_default_advanced_xgboost_config()
         models = score_precursor_isotope_traces_out_of_memory!(
             best_psms,
@@ -89,8 +89,8 @@ function score_precursor_isotope_traces(
         best_psms = load_psms_for_xgboost(second_pass_folder)
         
         if psms_count >= MAX_FOR_MODEL_SELECTION  # 100K
-            # Case 2: In-memory with default/advanced XGBoost (no comparison)
-            @user_info "Using in-memory advanced XGBoost for $psms_count PSMs (< $max_psms_in_memory but ≥ 100K)"
+            # Case 2: In-memory with default/advanced LightGBM (no comparison)
+            @user_info "Using in-memory advanced LightGBM for $psms_count PSMs (< $max_psms_in_memory but ≥ 100K)"
             model_config = create_default_advanced_xgboost_config()
         else
             # Case 3: In-memory with automatic model comparison (<100K)
@@ -126,7 +126,7 @@ end
 Selects the appropriate PSM scoring model based on dataset size and characteristics.
 
 # Model Selection Logic
-- ≥100K PSMs: Returns default/advanced XGBoost configuration (no comparison)
+- ≥100K PSMs: Returns default/advanced LightGBM configuration (no comparison)
 - <100K PSMs: Trains each model and selects based on training performance
 
 # Returns
@@ -145,7 +145,7 @@ function select_psm_scoring_model(
     psms_count = size(best_psms, 1)
     
     if psms_count >= MAX_FOR_MODEL_SELECTION
-        @user_info "Using default advanced XGBoost for $psms_count PSMs (≥ 100K)"
+        @user_info "Using default advanced LightGBM for $psms_count PSMs (≥ 100K)"
         return create_default_advanced_xgboost_config()
     else
         # Get model configurations from model_config.jl
@@ -200,10 +200,10 @@ function select_psm_scoring_model(
         
         @user_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
-        # If no model succeeded, fall back to SimpleXGBoost
+        # If no model succeeded, fall back to the Simple LightGBM configuration
         if best_model_config === nothing
-            @user_warn "All models failed, defaulting to SimpleXGBoost"
-            best_model_config = model_configs[1]  # SimpleXGBoost is first
+            @user_warn "All models failed, defaulting to Simple LightGBM (SimpleXGBoost config)"
+            best_model_config = model_configs[1]  # SimpleXGBoost (LightGBM) is first
         else
             @user_info "✓ Selected: $(best_model_config.name) ($(best_target_count) IDs)"
         end
@@ -241,7 +241,7 @@ end
 """
     create_default_advanced_xgboost_config() -> ModelConfig
 
-Creates the default advanced XGBoost configuration for large datasets.
+Creates the default advanced LightGBM configuration for large datasets.
 """
 function create_default_advanced_xgboost_config()
     return ModelConfig(
@@ -270,10 +270,10 @@ Unified in-memory PSM scoring function that executes the specified model.
 - `model_config`: ModelConfig specifying which model to use and its hyperparameters
 
 # Supported Models
-- SimpleXGBoost: Full feature set, standard hyperparameters
-- AdvancedXGBoost: Full feature set, advanced hyperparameters
+- SimpleXGBoost (LightGBM backend): Full feature set, standard hyperparameters
+- AdvancedXGBoost (LightGBM backend): Full feature set, advanced hyperparameters
 - ProbitRegression: Linear probit model with CV folds from library
-- SuperSimplified: Minimal 5-feature XGBoost model
+- SuperSimplified: Minimal 5-feature LightGBM model
 """
 function score_precursor_isotope_traces_in_memory(
     best_psms::DataFrame,
@@ -307,7 +307,7 @@ end
 """
     train_xgboost_model_in_memory(...) -> Models
 
-Trains XGBoost model using configuration from ModelConfig.
+Trains the LightGBM model using configuration from ModelConfig.
 """
 function train_xgboost_model_in_memory(
     best_psms::DataFrame,
@@ -392,7 +392,7 @@ end
 """
      get_psms_count(quant_psms_folder::String)::Integer
 
-Sample PSMs from multiple files for EvoTrees/XGBoost model training.
+Sample PSMs from multiple files for LightGBM model training.
 
 # Arguments
 - `quant_psms_folder`: Folder containing PSM Arrow files
@@ -417,7 +417,7 @@ end
 """
     sample_psms_for_xgboost(quant_psms_folder::String, psms_count::Integer max_psms::Integer) -> DataFrame
 
-Sample PSMs from multiple files for EvoTrees/XGBoost model training.
+Sample PSMs from multiple files for LightGBM model training.
 
 # Arguments
 - `quant_psms_folder`: Folder containing PSM Arrow files
@@ -461,7 +461,7 @@ end
 """
      get_psms_count(quant_psms_folder::String)::Integer
 
-Loads all PSMs from multiple files for EvoTrees/XGBoost model training.
+Loads all PSMs from multiple files for LightGBM model training.
 """
 function load_psms_for_xgboost(quant_psms_folder::String)
     file_paths = [fpath for fpath in readdir(quant_psms_folder, join=true) if endswith(fpath,".arrow")]
@@ -470,9 +470,9 @@ end
 
 """
     score_precursor_isotope_traces_in_memory!(best_psms::DataFrame, file_paths::Vector{String},
-                                  precursors::LibraryPrecursors) -> EvoTreesModels
+                                  precursors::LibraryPrecursors) -> Dict{UInt8, Vector{LightGBMModelWrapper}}
 
-Train EvoTrees/XGBoost models for PSM scoring. All psms are kept in memory
+Train LightGBM models for PSM scoring. All psms are kept in memory
 
 # Arguments
 - `best_psms`: Sample of high-quality PSMs for training
@@ -480,7 +480,7 @@ Train EvoTrees/XGBoost models for PSM scoring. All psms are kept in memory
 - `precursors`: Library precursor information
 
 # Returns
-Trained EvoTrees/XGBoost models or simplified model if insufficient PSMs.
+Trained LightGBM models or simplified model if insufficient PSMs.
 """
 
 """
@@ -493,14 +493,14 @@ Trained EvoTrees/XGBoost models or simplified model if insufficient PSMs.
 
 Alternative PSM scoring using probit regression with cross-validation.
 
-This is a simpler alternative to XGBoost/EvoTrees for small datasets (<100k PSMs).
+This is a simpler alternative to LightGBM for small datasets (<100k PSMs).
 Uses linear probit model with cross-validation, similar to FirstPassSearch but with CV folds.
 No iterative refinement or max_prob updates - single pass training only.
 
 # Arguments
 - `psms`: DataFrame containing PSMs to score
 - `file_paths`: Vector of file paths for CV fold assignment
-- `features`: Feature columns to use for scoring (same as XGBoost)
+- `features`: Feature columns to use for scoring (same as LightGBM)
 - `match_between_runs`: Whether MBR was performed
 - `n_folds`: Number of cross-validation folds (default: 3)
 
@@ -528,7 +528,7 @@ function probit_regression_scoring_cv!(
         @user_warn "Unexpected CV folds: $unique_cv_folds (expected [0, 1] from library)"
     end
     
-    # Step 2: Initialize probability array (like XGBoost does)
+    # Step 2: Initialize probability array (like LightGBM does)
     # Use a separate array instead of directly modifying DataFrame
     prob_estimates = zeros(Float32, size(psms, 1))
     
@@ -655,7 +655,7 @@ function probit_regression_scoring_cv!(
         end
     end
     
-    # Step 5: Assign probabilities to DataFrame (like XGBoost does at line 105 of percolatorSortOf.jl)
+    # Step 5: Assign probabilities to DataFrame (like LightGBM does at line 105 of percolatorSortOf.jl)
     psms[!, :prob] = prob_estimates
     
     # If MBR is enabled, create MBR columns (probit doesn't do separate MBR scoring)
@@ -697,9 +697,9 @@ end
 
 """
     score_precursor_isotope_traces_out_of_memory!(best_psms::DataFrame, file_paths::Vector{String},
-                                  precursors::LibraryPrecursors) -> EvoTreesModels
+                                  precursors::LibraryPrecursors) -> Dict{UInt8, Vector{LightGBMModelWrapper}}
 
-Train EvoTrees/XGBoost models for PSM scoring. Only a subset of psms are kept in memory
+Train LightGBM models for PSM scoring. Only a subset of psms are kept in memory
 
 # Arguments
 - `best_psms`: Sample of high-quality PSMs for training
@@ -707,7 +707,7 @@ Train EvoTrees/XGBoost models for PSM scoring. Only a subset of psms are kept in
 - `precursors`: Library precursor information
 
 # Returns
-Trained EvoTrees/XGBoost models or simplified model if insufficient PSMs.
+Trained LightGBM models or simplified model if insufficient PSMs.
 """
 function score_precursor_isotope_traces_out_of_memory!(
     best_psms::DataFrame,

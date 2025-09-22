@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## ScoringSearch Overview
 
-ScoringSearch is the 7th stage in the Pioneer DIA search pipeline. It performs machine learning-based PSM rescoring, FDR control, and protein group analysis with optional ML-enhanced protein scoring. The module features adaptive model selection for datasets with 1,000-100,000 PSMs, automatically choosing between XGBoost, probit regression, and simplified models based on validation performance.
+ScoringSearch is the 7th stage in the Pioneer DIA search pipeline. It performs machine learning-based PSM rescoring, FDR control, and protein group analysis with optional ML-enhanced protein scoring. The module features adaptive model selection for datasets with 1,000-100,000 PSMs, automatically choosing between LightGBM, probit regression, and simplified models based on validation performance.
 
 ## Module Structure
 
@@ -57,7 +57,7 @@ ScoringSearch implements a comprehensive 23-step pipeline:
 
 **Model Selection Strategy**:
 - **Adaptive Selection**: For 1,000-100,000 PSMs with model comparison enabled
-- **Default XGBoost**: For other dataset sizes or when comparison disabled
+- **Default LightGBM**: For other dataset sizes or when comparison disabled
 - **Cross-validation**: Maintains CV fold consistency for all downstream analysis
 
 **Features**:
@@ -77,7 +77,7 @@ ScoringSearch implements a comprehensive 23-step pipeline:
    - Conservative hyperparameters for robust performance
    - Suitable for datasets with limited PSMs
 
-2. **AdvancedXGBoost** (Default for >100K PSMs)
+2. **AdvancedXGBoost** (Default for >100K PSMs, LightGBM backend)
    - Full ADVANCED_FEATURE_SET (50 features including all available metrics)
    - Aggressive hyperparameters for maximum performance
    - Deeper trees (max_depth=10) and lower learning rate (eta=0.05)
@@ -89,7 +89,7 @@ ScoringSearch implements a comprehensive 23-step pipeline:
 
 4. **SuperSimplified**
    - Minimal feature set (5 core features: spectral contrast, residuals, error norms, intensity explained)
-   - XGBoost with conservative parameters
+   - LightGBM with conservative parameters
    - Fastest training, minimal overfitting risk
 
 **Selection Process** (in select_psm_scoring_model):
@@ -106,14 +106,14 @@ ScoringSearch implements a comprehensive 23-step pipeline:
 
 **Clean Output Design**:
 - Progress bars suppressed during comparison using `show_progress=false` parameter
-- stdout redirected to devnull to suppress EvoTrees output
+- stdout redirected to devnull to suppress LightGBM output
 - Only essential results shown: model name and target count at q-value threshold
 - Final training shows normal progress bars for user feedback
 
 **Integration**:
 - Automatic for datasets with 1,000-100,000 PSMs
 - Uses user-defined q_value_threshold from parameters (not hardcoded 0.01)
-- Falls back to AdvancedXGBoost for >100K PSMs
+- Falls back to AdvancedXGBoost (LightGBM) for >100K PSMs
 - Falls back to SimpleXGBoost if all models fail during comparison
 
 **Performance Evaluation**:
@@ -198,7 +198,7 @@ ScoringSearch implements a comprehensive 23-step pipeline:
   - < 1,000 PSMs: Uses SimpleXGBoost directly (no comparison)
   - 1,000-100,000 PSMs: Automatic model comparison and selection
   - > 100,000 PSMs (in-memory): Uses AdvancedXGBoost directly
-  - > max_psms_in_memory: Out-of-memory processing with default XGBoost
+  - > max_psms_in_memory: Out-of-memory processing with default LightGBM
 - **Q-value Threshold**: Uses the user-defined `q_value_threshold` from global_settings.scoring
 - **Clean Output**: Progress bars and verbose output suppressed during comparison
 
@@ -211,7 +211,7 @@ When enabled via parameters:
 }
 ```
 
-Uses EvoTrees/XGBoost with top N precursor scores as features, implemented in `utils_protein_ml.jl`.
+Uses LightGBM with top N precursor scores as features, implemented in `utils_protein_ml.jl`.
 
 ## Common Issues and Solutions
 
@@ -310,9 +310,9 @@ include("test/UnitTests/ScoringSearch/test_protein_inference.jl")
 - **Advanced Feature Set**: Added ADVANCED_FEATURE_SET with 50 features for maximum performance model
 - **User-Defined Q-value**: Model selection now uses q_value_threshold from parameters instead of hardcoded 0.01
 - **Clean Output Design**: 
-  - Implemented stdout redirection to suppress EvoTrees progress bars
+  - Implemented stdout redirection to suppress LightGBM progress bars
   - Added `show_progress` parameter to control ProgressBar display
-  - Removed `colsample_bynode` parameter (not supported by EvoTrees)
+  - Removed `colsample_bynode` parameter (not supported by LightGBM)
   - Fixed duplicate parameter issues in train_booster calls
 - **Separation of Concerns**: Separated PSM scoring from file I/O operations
   - Removed file writing from `sort_of_percolator_in_memory!`
