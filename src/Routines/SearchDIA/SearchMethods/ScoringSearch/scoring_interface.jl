@@ -27,7 +27,7 @@ abstract type MBRFilterMethod end
 
 struct ThresholdFilter <: MBRFilterMethod end
 struct ProbitFilter <: MBRFilterMethod end 
-struct XGBoostFilter <: MBRFilterMethod end
+struct LightGBMFilter <: MBRFilterMethod end
 
 struct FilterResult
     method_name::String
@@ -72,7 +72,7 @@ end
     apply_mbr_filter!(merged_df, candidate_mask, is_bad_transfer, params)
 
 Apply MBR filtering using automatic method selection.
-Tests threshold, probit, and XGBoost methods, selects the one that passes the most candidates.
+Tests threshold, probit, and LightGBM methods, selecting the one that passes the most candidates.
 """
 function apply_mbr_filter!(
     merged_df::DataFrame,
@@ -93,7 +93,7 @@ function apply_mbr_filter!(
     end
 
     # Test all methods and store results
-    methods = [ThresholdFilter(), ProbitFilter(), XGBoostFilter()]
+    methods = [ThresholdFilter(), ProbitFilter(), LightGBMFilter()]
     results = FilterResult[]
     
     for method in methods
@@ -191,7 +191,7 @@ function train_and_evaluate(method::ProbitFilter, candidate_data::DataFrame, can
     end
 end
 
-function train_and_evaluate(method::XGBoostFilter, candidate_data::DataFrame, candidate_labels::AbstractVector{Bool}, params)
+function train_and_evaluate(method::LightGBMFilter, candidate_data::DataFrame, candidate_labels::AbstractVector{Bool}, params)
     try
         # Handle empty candidate data
         if isempty(candidate_data)
@@ -205,26 +205,26 @@ function train_and_evaluate(method::XGBoostFilter, candidate_data::DataFrame, ca
         
         # Feature preparation
         feature_cols = select_mbr_features(candidate_data)
-        @debug "XGBoostFilter: Selected features: $feature_cols"
-        @debug "XGBoostFilter: Candidate data size: $(size(candidate_data))"
-        @debug "XGBoostFilter: Labels length: $(length(candidate_labels))"
+        @debug "LightGBMFilter: Selected features: $feature_cols"
+        @debug "LightGBMFilter: Candidate data size: $(size(candidate_data))"
+        @debug "LightGBMFilter: Labels length: $(length(candidate_labels))"
 
         # Work directly with DataFrame like FirstPassSearch
         feature_data = candidate_data[:, feature_cols]
-        @debug "XGBoostFilter: Feature data size: $(size(feature_data))"
+        @debug "LightGBMFilter: Feature data size: $(size(feature_data))"
 
         # Cross-validation training using DataFrame
         scores = run_cv_training(method, feature_data, candidate_labels, candidate_data.cv_fold, params)
         
         # Calibrate threshold
         τ = calibrate_ml_threshold(scores, candidate_labels, Float64(params.max_MBR_false_transfer_rate))
-        n_passing = sum(scores .>= τ)  # Higher score = better for XGBoost
-        
-        
-        return FilterResult("XGBoost", scores, τ, n_passing)
+        n_passing = sum(scores .>= τ)  # Higher score = better for LightGBM
+
+
+        return FilterResult("LightGBM", scores, τ, n_passing)
     catch e
         throw(e)
-        #@user_warn "XGBoost method failed with error: $(typeof(e)): $e"
+        #@user_warn "LightGBM method failed with error: $(typeof(e)): $e"
         return nothing
     end
 end
@@ -259,7 +259,7 @@ function run_cv_training(method::ProbitFilter, feature_data::DataFrame, labels::
     return out_of_fold_scores
 end
 
-function run_cv_training(method::XGBoostFilter, feature_data::DataFrame, labels::AbstractVector{Bool}, cv_folds::AbstractVector, params)
+function run_cv_training(method::LightGBMFilter, feature_data::DataFrame, labels::AbstractVector{Bool}, cv_folds::AbstractVector, params)
     out_of_fold_scores = zeros(Float64, length(labels))
 
     for fold in unique(cv_folds)
@@ -272,19 +272,11 @@ function run_cv_training(method::XGBoostFilter, feature_data::DataFrame, labels:
         test_data = feature_data[test_mask, :]
 
         # Train and predict using DataFrames directly
-        model = train_xgboost_model_df(train_data, train_labels, params)
-        test_predictions = EvoTrees.predict(model, test_data)
-        @debug "XGBoost predictions shape: $(size(test_predictions)), type: $(typeof(test_predictions))"
+        model = train_lightgbm_model_df(train_data, train_labels, params)
+        test_predictions = predict(model, test_data)
+        @debug "LightGBM predictions length: $(length(test_predictions)), type: $(typeof(test_predictions))"
 
-        # Handle different prediction formats
-        if isa(test_predictions, Vector)
-            out_of_fold_scores[test_mask] = test_predictions
-        elseif size(test_predictions, 2) >= 2
-            out_of_fold_scores[test_mask] = test_predictions[:, 2]  # Probability of positive class
-        else
-            @warn "Unexpected XGBoost prediction format: $(size(test_predictions))"
-            out_of_fold_scores[test_mask] = vec(test_predictions)
-        end
+        out_of_fold_scores[test_mask] = Float64.(test_predictions)
     end
 
     return out_of_fold_scores
@@ -352,25 +344,26 @@ function predict_probit_model_df(β::Vector{Float64}, feature_data::DataFrame, v
     return scores
 end
 
-function train_xgboost_model_df(feature_data::DataFrame, y::AbstractVector{Bool}, params)
+function train_lightgbm_model_df(feature_data::DataFrame, y::AbstractVector{Bool}, params)
     # Create training DataFrame with target column
     training_df = copy(feature_data)
-    training_df[!, :target] = y .== false  # Invert labels for XGBoost
+    training_df[!, :target] = y .== false  # Invert labels for LightGBM
 
-    # Configure XGBoost
-    config = EvoTreeClassifier(
-        nrounds = 100,
-        max_depth = 3,
-        eta = 0.1,
-        rowsample = 0.5,
+    features = Symbol.(names(feature_data))
+
+    return train_lightgbm_booster(
+        training_df,
+        features,
+        100;
         colsample = 0.8,
-        gamma = 1.0
+        eta = 0.1,
+        min_child_weight = 1,
+        subsample = 0.5,
+        gamma = 1.0,
+        max_depth = 3,
+        target_name = :target,
+        verbosity = 0,
     )
-
-    # Train model directly with DataFrame (no Matrix conversion)
-    model = EvoTrees.fit(config, training_df; target_name=:target)
-
-    return model
 end
 
 #==========================================================
