@@ -932,6 +932,7 @@ function init_summary_columns!(
         (:max_matched_ratio,        Float16)
         (:num_scans,        UInt16)
         (:smoothness,        Float32)
+        (:predicted_signal_overlap, Float32)
         (:weights,        Vector{Float32})
         (:irts,         Vector{Float32})
         ];
@@ -948,6 +949,25 @@ function init_summary_columns!(
             end
         end
         return psms
+end
+
+function compute_signal_overlap_fraction!(psms::DataFrame)
+    if nrow(psms) == 0
+        return psms
+    end
+
+    grouped = groupby(psms, :scan_idx)
+    transform!(grouped, :weight => ((w) -> begin
+        total = sum(w)
+        if total <= 0f0
+            fill(0f0, length(w))
+        else
+            overlap = (total .- w) ./ total
+            Float32.(clamp.(overlap, 0f0, 1f0))
+        end
+    end) => :signal_overlap_fraction)
+
+    return psms
 end
 
 """
@@ -1024,19 +1044,29 @@ function get_summary_scores!(
     
     @inbounds @fastmath for i in range(1, length(weight))
         if length(weight) == 1
-            smoothness = (-2*weight[i] / weight[apex_scan])^2
+            smoothness = (-2 * weight[i] / weight[apex_scan])^2
         else
             if (i == 1)
-                smoothness += (((weight[i+1] - weight[i]) / (psms.rt[i+1] - psms.rt[i]) + (-weight[i]) / (psms.rt[i+1] - psms.rt[i])) / weight[apex_scan]) ^2
+                smoothness += (((weight[i+1] - weight[i]) / (psms.rt[i+1] - psms.rt[i]) + (-weight[i]) / (psms.rt[i+1] - psms.rt[i])) / weight[apex_scan])^2
             elseif (i > 1) & (i < length(weight))
-                smoothness += (((weight[i-1] - weight[i]) / (psms.rt[i] - psms.rt[i-1]) + (weight[i+1]-weight[i]) / (psms.rt[i+1] - psms.rt[i])) / weight[apex_scan]) ^2
+                smoothness += (((weight[i-1] - weight[i]) / (psms.rt[i] - psms.rt[i-1]) + (weight[i+1] - weight[i]) / (psms.rt[i+1] - psms.rt[i])) / weight[apex_scan])^2
             elseif (i == length(weight))
-                smoothness += (((weight[i-1] - weight[i]) / (psms.rt[i] - psms.rt[i-1]) + (-weight[i]) / (psms.rt[i] - psms.rt[i-1])) / weight[apex_scan]) ^2
+                smoothness += (((weight[i-1] - weight[i]) / (psms.rt[i] - psms.rt[i-1]) + (-weight[i]) / (psms.rt[i] - psms.rt[i-1])) / weight[apex_scan])^2
             end
         end
     end
 
-   
+    overlaps = psms[!, :signal_overlap_fraction]
+    total_signal = 0.0f0
+    overlapped_signal = 0.0f0
+    @inbounds @fastmath for i in range(1, length(weight))
+        w = weight[i]
+        total_signal += w
+        overlapped_signal += w * overlaps[i]
+    end
+
+    predicted_overlap = total_signal > 0f0 ? overlapped_signal / total_signal : 0f0
+    predicted_overlap = clamp(Float32(predicted_overlap), 0f0, 1f0)
 
     psms.max_gof[apex_scan] = max_gof
     psms.max_matched_ratio[apex_scan] = max_matched_ratio
@@ -1048,6 +1078,7 @@ function get_summary_scores!(
     psms.max_y_ions[apex_scan] = max_y_ions
     psms.num_scans[apex_scan] = length(weight)
     psms.smoothness[apex_scan] = smoothness
+    psms.predicted_signal_overlap[apex_scan] = predicted_overlap
     psms.weights[apex_scan] = weight
     psms.irts[apex_scan] = irts
     psms.best_scan[apex_scan] = true

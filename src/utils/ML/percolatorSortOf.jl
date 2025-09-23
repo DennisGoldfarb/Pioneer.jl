@@ -727,6 +727,7 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
                 sub_psms.MBR_is_best_decoy[i]           = true
                 sub_psms.MBR_log2_weight_ratio[i]       = -1.0f0
                 sub_psms.MBR_log2_explained_ratio[i]    = -1.0f0
+                sub_psms.MBR_log2_predicted_signal_overlap_ratio[i] = -1.0f0
                 sub_psms.MBR_max_pair_prob[i]           = -1.0f0
                 sub_psms.MBR_is_missing[i]              = true
                 continue
@@ -743,6 +744,10 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
             sub_psms.MBR_rv_coefficient[i] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
             sub_psms.MBR_log2_weight_ratio[i] = log2(sub_psms.weight[i] / sub_psms.weight[best_idx])
             sub_psms.MBR_log2_explained_ratio[i] = sub_psms.log2_intensity_explained[i] - sub_psms.log2_intensity_explained[best_idx]
+            best_overlap = sub_psms.predicted_signal_overlap[best_idx]
+            current_overlap = sub_psms.predicted_signal_overlap[i]
+            ratio = (best_overlap + 1f-6) / (current_overlap + 1f-6)
+            sub_psms.MBR_log2_predicted_signal_overlap_ratio[i] = log2(ratio)
             sub_psms.MBR_is_best_decoy[i] = sub_psms.decoy[best_idx]
         end
     end
@@ -761,6 +766,7 @@ function initialize_prob_group_features!(
         psms[!, :MBR_best_irt_diff]             = zeros(Float32, n)
         psms[!, :MBR_log2_weight_ratio]         = zeros(Float32, n)
         psms[!, :MBR_log2_explained_ratio]      = zeros(Float32, n)
+        psms[!, :MBR_log2_predicted_signal_overlap_ratio] = zeros(Float32, n)
         psms[!, :MBR_rv_coefficient]            = zeros(Float32, n)
         psms[!, :MBR_is_best_decoy]             = trues(n)
         psms[!, :MBR_num_runs]                  = zeros(Int32, n)
