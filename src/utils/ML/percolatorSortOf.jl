@@ -640,8 +640,18 @@ function train_booster(psms::AbstractDataFrame, features, num_round;
         eta = eta,
         gamma = gamma
     )
-    model = fit(config, psms; target_name = :target, feature_names = features, verbosity = 0)
-    return model
+
+    fit_kwargs = (; target_name = :target, feature_names = features, verbosity = 0)
+
+    try
+        return fit!(config, psms; fit_kwargs...)
+    catch e
+        if e isa MethodError
+            return fit(config, psms; fit_kwargs...)
+        else
+            rethrow()
+        end
+    end
 end
 
 function predict_fold!(bst, psms_train::AbstractDataFrame,
