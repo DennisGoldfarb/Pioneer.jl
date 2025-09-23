@@ -188,6 +188,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     unique_cv_folds = unique(psms[!, :cv_fold])
     models = Dict{UInt8, LightGBMModelVector}()
     mbr_start_iter = length(iter_scheme)
+    iterations_per_fold = match_between_runs ? length(iter_scheme) : max(mbr_start_iter - 1, 1)
 
     cv_fold_col = psms[!, :cv_fold]
     fold_indices = Dict(fold => findall(==(fold), cv_fold_col) for fold in unique_cv_folds)
@@ -196,7 +197,8 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     Random.seed!(1776)
     non_mbr_features = [f for f in features if !startswith(String(f), "MBR_")]
 
-    pbar = show_progress ? ProgressBar(total=length(unique_cv_folds) * length(iter_scheme)) : nothing
+    total_progress_steps = length(unique_cv_folds) * iterations_per_fold
+    pbar = show_progress ? ProgressBar(total=total_progress_steps) : nothing
 
     for test_fold_idx in unique_cv_folds
 
@@ -304,7 +306,8 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
         qvals_prev = Vector{Float32}(undef, length(nonMBR_estimates))
         get_qvalues!(nonMBR_estimates, psms.target, qvals_prev)
         pass_mask = (qvals_prev .<= max_q_value_xgboost_rescore)
-        prob_thresh = any(pass_mask) ? minimum(nonMBR_estimates[pass_mask]) : typemax(Float32)
+        has_passing_psms = !isempty(pass_mask) && any(pass_mask)
+        prob_thresh = has_passing_psms ? minimum(nonMBR_estimates[pass_mask]) : typemax(Float32)
         # Label as transfer candidates only those failing the q-value cutoff but
         # whose best matched pair surpassed the passing probability threshold.
         psms[!, :MBR_transfer_candidate] .= .!pass_mask .&
@@ -525,7 +528,10 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
     unique_cv_folds = unique(psms[!, :cv_fold])
     #Train the model for 1:K-1 cross validation folds and apply to the held-out fold
     models = Dictionary{UInt8, LightGBMModelVector}()
-    pbar = ProgressBar(total=length(unique_cv_folds)*length(iter_scheme))
+    mbr_start_iter = length(iter_scheme)
+    iterations_per_fold = match_between_runs ? length(iter_scheme) : max(mbr_start_iter - 1, 1)
+    total_progress_steps = length(unique_cv_folds) * iterations_per_fold
+    pbar = ProgressBar(total=total_progress_steps)
     Random.seed!(1776);
     non_mbr_features = [f for f in features if !startswith(String(f), "MBR_")]
 
@@ -813,36 +819,41 @@ function get_training_data_for_iteration!(
 
         # Also train on top scoring MBR candidates if requested
         if match_between_runs && last_iter
-            # Determine prob threshold for precursors passing the q-value threshold
-            max_prob_threshold = minimum(
-                psms_train_itr.prob[
-                    psms_train_itr.target .& (psms_train_itr.q_value .<= max_q_value_xgboost_rescore)
-                ]
-            )
+            pass_mask = psms_train_itr.target .& (psms_train_itr.q_value .<= max_q_value_xgboost_rescore)
+            if any(pass_mask)
+                # Determine prob threshold for precursors passing the q-value threshold
+                max_prob_threshold = minimum(psms_train_itr.prob[pass_mask])
 
-            # Hacky way to ensure anything passing the initial q-value threshold
-            # will pass the next q-value threshold
-            psms_train_itr.q_value[psms_train_itr.q_value .<= max_q_value_xgboost_rescore] .= 0.0
-            psms_train_itr.q_value[psms_train_itr.q_value .> max_q_value_xgboost_rescore]  .= 1.0
+                # Hacky way to ensure anything passing the initial q-value threshold
+                # will pass the next q-value threshold
+                psms_train_itr.q_value[psms_train_itr.q_value .<= max_q_value_xgboost_rescore] .= 0.0
+                psms_train_itr.q_value[psms_train_itr.q_value .> max_q_value_xgboost_rescore]  .= 1.0
 
-            # Must have at least one precursor passing the q-value threshold,
-            # and the best precursor can't be a decoy
-            psms_train_mbr = subset(
-                psms_train_itr,
-                [:MBR_is_best_decoy, :MBR_max_pair_prob, :prob, :MBR_is_missing] => ByRow((d, mp, p, im) ->
-                    (!im && !d && mp >= max_prob_threshold && p < max_prob_threshold)
-                );
-                view = true
-            )
+                # Must have at least one precursor passing the q-value threshold,
+                # and the best precursor can't be a decoy
+                psms_train_mbr = subset(
+                    psms_train_itr,
+                    [:MBR_is_best_decoy, :MBR_max_pair_prob, :prob, :MBR_is_missing] => ByRow((d, mp, p, im) ->
+                        (!im && !d && mp >= max_prob_threshold && p < max_prob_threshold)
+                    );
+                    view = true
+                )
 
-            # Compute MBR q-values.
-            get_qvalues!(psms_train_mbr[!,:prob], psms_train_mbr[!,:target], psms_train_mbr[!,:q_value])
+                # Compute MBR q-values.
+                get_qvalues!(psms_train_mbr[!,:prob], psms_train_mbr[!,:target], psms_train_mbr[!,:q_value])
 
-            # Take all decoys and targets passing q_thresh (all 0's now) or mbr_q_thresh
-            psms_train_itr = subset(
-                psms_train_itr,
-                [:target, :q_value, :MBR_is_best_decoy, :MBR_is_missing] => ByRow((t, q, MBR_d, im) -> (!t) || (t && !im && !MBR_d && q <= max_q_value_xgboost_mbr_rescore))
-            )
+                # Take all decoys and targets passing q_thresh (all 0's now) or mbr_q_thresh
+                psms_train_itr = subset(
+                    psms_train_itr,
+                    [:target, :q_value, :MBR_is_best_decoy, :MBR_is_missing] => ByRow((t, q, MBR_d, im) -> (!t) || (t && !im && !MBR_d && q <= max_q_value_xgboost_mbr_rescore))
+                )
+            else
+                # Fall back to the standard q-value filtering when no targets pass the threshold.
+                psms_train_itr = subset(
+                    psms_train_itr,
+                    [:target, :q_value] => ByRow((t,q) -> (!t) || (t && q <= max_q_value_xgboost_rescore))
+                )
+            end
         else
             # Take all decoys and targets passing q_thresh
             psms_train_itr = subset(
