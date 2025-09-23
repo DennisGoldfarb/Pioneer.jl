@@ -368,9 +368,16 @@ function train_xgboost_model_df(feature_data::DataFrame, y::AbstractVector{Bool}
     )
 
     # Train model directly with DataFrame (no Matrix conversion)
-    model = EvoTrees.fit(config, training_df; target_name=:target)
-
-    return model
+    kwargs = (; target_name = :target)
+    try
+        return EvoTrees.fit!(config, training_df; kwargs...)
+    catch e
+        if e isa MethodError
+            return EvoTrees.fit(config, training_df; kwargs...)
+        else
+            rethrow()
+        end
+    end
 end
 
 #==========================================================
