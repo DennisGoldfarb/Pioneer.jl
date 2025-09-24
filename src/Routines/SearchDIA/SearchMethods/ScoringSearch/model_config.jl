@@ -168,7 +168,7 @@ function create_model_configurations()
         ModelConfig(
             "SimpleLightGBM",
             :lightgbm,
-            REDUCED_FEATURE_SET,
+            copy(REDUCED_FEATURE_SET),
             Dict(
                 :feature_fraction => 0.8,
                 :min_data_in_leaf => 20,
@@ -185,7 +185,7 @@ function create_model_configurations()
         ModelConfig(
             "AdvancedLightGBM",
             :lightgbm,
-            ADVANCED_FEATURE_SET,
+            copy(ADVANCED_FEATURE_SET),
             Dict(
                 :feature_fraction => 0.5,
                 :min_data_in_leaf => 200,
@@ -231,7 +231,7 @@ function create_model_configurations()
         ModelConfig(
             "SuperSimplified",
             :lightgbm,
-            MINIMAL_FEATURE_SET,
+            copy(MINIMAL_FEATURE_SET),
             Dict(
                 :feature_fraction => 0.8,
                 :min_data_in_leaf => 10,
