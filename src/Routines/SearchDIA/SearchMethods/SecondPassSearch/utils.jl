@@ -18,6 +18,13 @@
 #==========================================================
 Core Search Funtions
 ==========================================================#
+
+const MODIFICATION_PATTERN = r"\(.*?\)"
+
+@inline function strip_modifications(sequence::AbstractString)
+    return replace(String(sequence), MODIFICATION_PATTERN => "")
+end
+
 """
     perform_second_pass_search(spectra::MassSpecData, rt_index::retentionTimeIndex,
                              search_context::SearchContext, params::SecondPassSearchParameters,
@@ -157,6 +164,10 @@ function process_scans!(
     weights = getTempWeights(search_data)
     precursor_weights = getPrecursorWeights(search_data)
     residuals = getResiduals(search_data)
+    precursor_sequences = map(
+        strip_modifications,
+        getSequence(getPrecursors(getSpecLib(search_context))),
+    )
     last_val = 0
     
 
@@ -297,7 +308,8 @@ function process_scans!(
             last_val,
             Hs.n,
             Float32(sum(getIntensityArray(spectra, scan_idx))),
-            scan_idx;
+            scan_idx,
+            precursor_sequences;
             min_spectral_contrast = params.min_spectral_contrast,
             min_log2_matched_ratio = params.min_log2_matched_ratio,
             min_y_count = params.min_y_count,
@@ -979,6 +991,7 @@ function init_summary_columns!(
         (:max_matched_ratio,        Float16)
         (:num_scans,        UInt16)
         (:smoothness,        Float32)
+        (:min_sequence_permutation_count, Float32)
         (:weights,        Vector{Float32})
         (:irts,         Vector{Float32})
         ];
@@ -1028,6 +1041,7 @@ function get_summary_scores!(
     y_ions_sum = 0
     max_y_ions = 0
     smoothness = 0.0f0
+    min_sequence_permutation = minimum(psms.sequence_permutation_count)
 
     apex_scan = argmax(psms[!,:weight])
     #Need to make sure there is not a big gap. 
@@ -1095,6 +1109,7 @@ function get_summary_scores!(
     psms.max_y_ions[apex_scan] = max_y_ions
     psms.num_scans[apex_scan] = length(weight)
     psms.smoothness[apex_scan] = smoothness
+    psms.min_sequence_permutation_count[apex_scan] = min_sequence_permutation
     psms.weights[apex_scan] = weight
     psms.irts[apex_scan] = irts
     psms.best_scan[apex_scan] = true

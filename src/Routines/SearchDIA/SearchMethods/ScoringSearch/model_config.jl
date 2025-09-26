@@ -46,6 +46,8 @@ const ADVANCED_FEATURE_SET = [
     :Mox,
     :prec_mz,
     :sequence_length,
+    :sequence_permutation_count,
+    :min_sequence_permutation_count,
     :charge,
     :irt_pred,
     :irt_error,
@@ -101,6 +103,7 @@ const ADVANCED_FEATURE_SET = [
 const REDUCED_FEATURE_SET = [
     # Core peptide properties
     :missed_cleavage, :Mox, :prec_mz, :sequence_length, :charge,
+    :sequence_permutation_count, :min_sequence_permutation_count,
     # RT features
     :irt_pred, :irt_error, :irt_diff,
     :ms1_ms2_rt_diff,  # MS1-MS2 RT difference in iRT space

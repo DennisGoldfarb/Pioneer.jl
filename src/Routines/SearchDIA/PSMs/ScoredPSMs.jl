@@ -15,6 +15,13 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+using SpecialFunctions: loggamma
+
+const MAX_FLOAT32 = floatmax(Float32)
+const LOG_MAX_FLOAT32 = log(Float64(MAX_FLOAT32))
+const ASCII_A = Int('A')
+const ALPHABET_LENGTH = 26
+
 abstract type ScoredPSM{H,L<:AbstractFloat} <: PSM end
 
 
@@ -78,11 +85,12 @@ struct ComplexScoredPSM{H,L<:AbstractFloat} <: ScoredPSM{H,L}
     max_matched_residual::L
     max_unmatched_residual::L 
     fitted_manhattan_distance::L 
-    matched_ratio::L 
+    matched_ratio::L
     percent_theoretical_ignored::L
     scribe::L
     #entropy_score::L
     weight::H
+    sequence_permutation_count::Float32
 
     #Non-scores/Labels
     precursor_idx::UInt32
@@ -115,6 +123,117 @@ struct Ms1ScoredPSM{H,L<:AbstractFloat} <: ScoredPSM{H,L}
     precursor_idx::UInt32
     ms_file_idx::UInt32
     scan_idx::UInt32
+end
+
+@inline function collect_cleavage_positions(mask::NTuple{4, UInt64}, seq_length::Int, orientation::Symbol)
+    positions = Int[]
+    for (block_idx, block) in enumerate(mask)
+        value = block
+        base_offset = (block_idx - 1) * 64
+        while value != 0
+            tz = trailing_zeros(value)
+            frag_index = base_offset + tz + 1
+            cleavage = orientation === :b ? frag_index : seq_length - frag_index
+            if 1 <= cleavage < seq_length
+                push!(positions, cleavage)
+            end
+            value &= value - 1
+        end
+    end
+    return positions
+end
+
+@inline function log_segment_permutations(seq::AbstractString, start_idx::Int, end_idx::Int)
+    segment_length = end_idx - start_idx + 1
+    if segment_length <= 1
+        return 0.0
+    end
+
+    counts = zeros(Int, ALPHABET_LENGTH)
+    extra_counts = nothing
+
+    for idx in start_idx:end_idx
+        aa = seq[idx]
+        alpha_idx = Int(aa) - ASCII_A + 1
+        if 1 <= alpha_idx <= ALPHABET_LENGTH
+            counts[alpha_idx] += 1
+        else
+            if extra_counts === nothing
+                extra_counts = Dict{Char, Int}()
+            end
+            extra_counts[aa] = get(extra_counts, aa, 0) + 1
+        end
+    end
+
+    log_perm = loggamma(segment_length + 1)
+    for count in counts
+        if count > 1
+            log_perm -= loggamma(count + 1)
+        end
+    end
+
+    if extra_counts !== nothing
+        for count in values(extra_counts)
+            if count > 1
+                log_perm -= loggamma(count + 1)
+            end
+        end
+    end
+
+    return log_perm
+end
+
+@inline function log_to_float32(log_perm::Float64)
+    if log_perm <= 0
+        return Float32(1)
+    elseif log_perm > LOG_MAX_FLOAT32
+        return Float32(MAX_FLOAT32)
+    else
+        return Float32(exp(log_perm))
+    end
+end
+
+@inline function collect_cleavages(
+    b_mask::NTuple{4, UInt64},
+    y_mask::NTuple{4, UInt64},
+    seq_length::Int,
+)
+    cleavages = collect_cleavage_positions(b_mask, seq_length, :b)
+    append!(cleavages, collect_cleavage_positions(y_mask, seq_length, :y))
+    if !isempty(cleavages)
+        sort!(cleavages)
+        unique!(cleavages)
+    end
+    return cleavages
+end
+
+function sequence_permutation_count(
+    b_mask::NTuple{4, UInt64},
+    y_mask::NTuple{4, UInt64},
+    sequence::AbstractString,
+)
+    seq_length = length(sequence)
+    if seq_length <= 1
+        return Float32(1)
+    end
+
+    cleavages = collect_cleavages(b_mask, y_mask, seq_length)
+    log_perm_total = 0.0
+    prev = 0
+
+    for cleavage in cleavages
+        if cleavage <= prev || cleavage >= seq_length
+            continue
+        end
+        log_perm_total += log_segment_permutations(sequence, prev + 1, cleavage)
+        prev = cleavage
+    end
+
+    if prev < seq_length
+        log_perm_total += log_segment_permutations(sequence, prev + 1, seq_length)
+    end
+
+    return log_to_float32(log_perm_total)
 end
 
 function growScoredPSMs!(scored_psms::Vector{SimpleScoredPSM{H,L}}, block_size::Int64) where {L,H<:AbstractFloat}
@@ -214,17 +333,18 @@ function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
     return last_val
 end
 
-function Score!(scored_psms::Vector{ComplexScoredPSM{H, L}}, 
-                unscored_PSMs::Vector{ComplexUnscoredPSM{H}}, 
+function Score!(scored_psms::Vector{ComplexScoredPSM{H, L}},
+                unscored_PSMs::Vector{ComplexUnscoredPSM{H}},
                 spectral_scores::Vector{SpectralScoresComplex{L}},
-                weight::Vector{H}, 
+                weight::Vector{H},
                 IDtoCOL::ArrayDict{UInt32, UInt16},
                 cycle_idx::Int64,
                 expected_matches::Float64,
                 last_val::Int64,
                 n_vals::Int64,
                 spectrum_intensity::H,
-                scan_idx::Int64;
+                scan_idx::Int64,
+                precursor_sequences::AbstractVector{<:AbstractString};
                 min_spectral_contrast::H = 0f0,
                 min_log2_matched_ratio::H = -1f0,
                 min_y_count::Int64,
@@ -286,6 +406,12 @@ function Score!(scored_psms::Vector{ComplexScoredPSM{H, L}},
 
         precursor_idx = UInt32(unscored_PSMs[i].precursor_idx)
         scores_idx = IDtoCOL[precursor_idx]
+        sequence = precursor_sequences[Int(precursor_idx)]
+        seq_perm = sequence_permutation_count(
+            unscored_PSMs[i].b_series_mask,
+            unscored_PSMs[i].y_series_mask,
+            sequence,
+        )
         scored_psms[start_idx + i - skipped] = ComplexScoredPSM(
             unscored_PSMs[i].best_rank,
             unscored_PSMs[i].best_rank_iso,
@@ -314,9 +440,10 @@ function Score!(scored_psms::Vector{ComplexScoredPSM{H, L}},
             spectral_scores[scores_idx].scribe,
             #spectral_scores[scores_idx].entropy_score,
             weight[scores_idx],
+            seq_perm,
 
-            
-            UInt32(unscored_PSMs[i].precursor_idx),
+
+            precursor_idx,
             #UInt32(unscored_PSMs[i].ms_file_idx),
             UInt32(cycle_idx),
             UInt32(scan_idx)
