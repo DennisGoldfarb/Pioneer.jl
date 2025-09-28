@@ -837,6 +837,15 @@ Plotting Helpers
 ==========================================================#
 
 """
+    sanitize_filename(name::AbstractString)
+
+Replace characters that are invalid on most filesystems with underscores.
+"""
+function sanitize_filename(name::AbstractString)
+    return replace(String(name), r"[\\/:*?\"<>|]" => "_")
+end
+
+"""
     generate_rt_plot(results::ParameterTuningSearchResults, plot_path::String, title::String)
 
 Generates retention time alignment visualization plot.
@@ -870,6 +879,68 @@ function generate_rt_plot(
     return p
 end
 
+
+"""
+    write_rt_alignment_csv(results, folder, run_label, ms_file_idx, iteration_state)
+
+Persist the RT alignment scatter data used for PDF generation as a CSV file.
+
+Writes columns for the run label, ms file index, observed iRT (model applied to
+empirical RT) and predicted iRT (library values).
+"""
+function write_rt_alignment_csv(
+    results::ParameterTuningSearchResults,
+    folder::AbstractString,
+    run_label::AbstractString,
+    ms_file_idx::Integer,
+    iteration_state::Union{Nothing, IterationState}
+)
+    rt_data = nothing
+    predicted_irt = nothing
+    model::Union{Nothing, RtConversionModel} = nothing
+
+    if !isempty(results.rt) && !isempty(results.irt)
+        rt_data = results.rt
+        predicted_irt = results.irt
+        model = getRtToIrtModel(results)
+    elseif iteration_state !== nothing && iteration_state.best_rt_model !== nothing
+        model_tuple = iteration_state.best_rt_model
+        if length(model_tuple) >= 3
+            rt_data = model_tuple[2]
+            predicted_irt = model_tuple[3]
+            model = model_tuple[1]
+        end
+    end
+
+    if rt_data === nothing || predicted_irt === nothing || model === nothing
+        return
+    end
+
+    n_points = length(rt_data)
+    if n_points == 0 || length(predicted_irt) != n_points
+        return
+    end
+
+    observed_irt = Vector{Float32}(undef, n_points)
+    for (i, rt_val) in enumerate(rt_data)
+        observed_irt[i] = Float32(model(rt_val))
+    end
+
+    run_column = fill(String(run_label), n_points)
+    file_idx_column = fill(Int64(ms_file_idx), n_points)
+    predicted_column = Float32.(predicted_irt)
+
+    csv_df = DataFrame(
+        run = run_column,
+        ms_file_idx = file_idx_column,
+        observed_irt = observed_irt,
+        predicted_irt = predicted_column,
+    )
+
+    file_name = sanitize_filename("$(run_label)_rt_alignment.csv")
+    csv_path = joinpath(folder, file_name)
+    CSV.write(csv_path, csv_df)
+end
 
 """
     generate_mass_error_plot(results::ParameterTuningSearchResults, fname::String, plot_path::String)

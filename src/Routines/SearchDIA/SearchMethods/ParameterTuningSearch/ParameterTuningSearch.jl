@@ -1019,7 +1019,19 @@ function process_search_results!(
                 push!(results.rt_plots, fallback_plot)  # Store for combined PDF
             end
         end
-        
+
+        try
+            write_rt_alignment_csv(
+                results,
+                rt_alignment_folder,
+                parsed_fname,
+                ms_file_idx,
+                iteration_state,
+            )
+        catch e
+            @user_warn "Failed to write RT alignment CSV for file $ms_file_idx" exception=(e, catch_backtrace())
+        end
+
         # Generate mass error plot (only store in memory, no individual files)
         m = getMassErrorModel(search_context, ms_file_idx)
         #buffered_model = MassErrorModel(
