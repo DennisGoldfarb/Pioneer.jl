@@ -54,7 +54,7 @@ using Pioneer: get_proteome, get_sequence, get_structural_mods  # For FastaDiges
 using Pioneer: get_isotopic_mods, get_description, get_id  # For FastaDigestTests.jl
 using Pioneer: get_entrapment_pair_id  # For FastaDigestTests.jl
 using Pioneer: get_gene, get_protein, get_organism  # For FastaEntryConstructorsTests.jl
-using Pioneer: filter_by_threshold, filter_by_multiple_thresholds  # For file operations tests
+using Pioneer: filter_by_threshold, filter_by_multiple_thresholds, keep_best_by_group  # For file operations tests
 using Pioneer: getDetailedFrags, getSeqSet, getSimpleFrags, getMZ  # For BuildPionLibTest.jl
 using Pioneer: getIRT, getPrecCharge, getPrecID, getPrecMZ, getScore  # For BuildPionLibTest.jl
 using Pioneer: is_decoy, SplineDetailedFrag  # For FastaDigestTests.jl and BuildPionLibTest.jl
