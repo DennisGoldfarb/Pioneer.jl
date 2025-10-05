@@ -275,6 +275,10 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
                                     frag_mz_min;
                                     trace=trace
                                     )
+    matched_lower = zero(UInt32)
+    matched_upper = zero(UInt32)
+    last_examined_bin = zero(UInt32)
+    bins_examined = zero(UInt32)
     @inbounds @fastmath begin
         #No fragment bins contain the fragment m/z
         if iszero(frag_bin_idx)
@@ -286,11 +290,11 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
         end
 
         #Search subsequent frag bins until no more bins or untill a bin is outside the fragment tolerance
-        bins_examined = zero(UInt32)
         while (frag_bin_idx <= frag_bin_max_idx)
             #Fragment bin is outside the fragment tolerance
             current_bin_idx = frag_bin_idx
             frag_bin = frag_bins[current_bin_idx]#getFragmentBin(frag_index, frag_bin_idx)
+            last_examined_bin = current_bin_idx
             #This and all subsequent fragment bins cannot match the fragment,
             #so exit the loop
             if (getLow(frag_bin) > frag_mz_max)
@@ -311,6 +315,10 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
                                     prec_mz_max;
                                     trace=trace
                                 )
+                if matched_lower == zero(UInt32)
+                    matched_lower = current_bin_idx
+                end
+                matched_upper = current_bin_idx
                 #Advance to the next fragment bin
                 frag_bin_idx += 1
                 bins_examined += one(UInt32)
@@ -321,11 +329,22 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
         end
     end
 
-    #Only reach this point if frag_bin exceeds length(frag_index)
+    next_lower_bound = lower_bound_guess
+    next_upper_bound = upper_bound_guess
+    if matched_lower != zero(UInt32)
+        next_lower_bound = matched_lower
+        next_upper_bound = matched_upper
+    elseif last_examined_bin != zero(UInt32)
+        next_lower_bound = last_examined_bin
+        next_upper_bound = last_examined_bin
+    end
+
     if trace !== nothing
+        trace.final_lower = next_lower_bound
+        trace.final_upper = next_upper_bound
         log_exponential_search_metrics(trace)
     end
-    return lower_bound_guess, upper_bound_guess
+    return next_lower_bound, next_upper_bound
 end
 
 function searchScan!(prec_id_to_score::Counter{UInt32, UInt8}, 
