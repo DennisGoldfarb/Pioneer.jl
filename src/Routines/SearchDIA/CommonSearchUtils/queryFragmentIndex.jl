@@ -56,16 +56,12 @@ function exponentialFragmentBinSearch(frag_index_bins::AbstractArray{FragIndexBi
     n = zero(UInt8)
     step = one(UInt32)
     exp_steps = zero(UInt16)
-    max_checked_idx = upper_bound_guess
     #exponential search for new upper and lower bounds
     while (getHigh(frag_index_bins[upper_bound_guess]) < frag_mz_max) #Need a new upper and lower bound guess
         lower_bound_guess = upper_bound_guess
         step = step_size << n
         upper_bound_guess += step #Exponentially increasing guess
         exp_steps += one(UInt16)
-        if upper_bound_guess > max_checked_idx
-            max_checked_idx = upper_bound_guess
-        end
         if upper_bound_guess > frag_bin_max_idx #If guess exceeds limits
             upper_bound_guess = frag_bin_max_idx #then set to maximum
             #This was a mistake
@@ -100,7 +96,6 @@ function exponentialFragmentBinSearch(frag_index_bins::AbstractArray{FragIndexBi
     #println("lower_bound_guess $lower_bound_guess upper_bound_guess $upper_bound_guess")
     if trace !== nothing
         trace.exp_steps = exp_steps
-        trace.max_checked_idx = max_checked_idx
         trace.final_lower = lower_bound_guess
         trace.final_upper = upper_bound_guess
     end
@@ -144,8 +139,7 @@ function findFirstFragmentBin(frag_index_bins::AbstractArray{FragIndexBin},
             steps += one(UInt16)
         end
         if trace !== nothing
-            trace.first_bin_idx = base
-            trace.first_bin_steps = steps
+            trace.binary_steps += UInt32(steps)
         end
     end
     return base
@@ -219,8 +213,7 @@ function searchFragmentBin!(prec_id_to_score::Counter{UInt32, UInt8},
         #If these conditions are met, there is no fragment in the query 
         #range that matches the precursor tolerance. 
         if trace !== nothing
-            trace.binary_window_start_steps = window_start_steps
-            trace.binary_window_stop_steps = window_stop_steps
+            trace.binary_steps += UInt32(window_start_steps) + UInt32(window_stop_steps)
             trace.window_start_idx = window_start
             trace.window_stop_idx = window_stop
             trace.fragments_examined = window_stop >= window_start ? window_stop - window_start + one(UInt32) : zero(UInt32)
@@ -287,7 +280,6 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
         if iszero(frag_bin_idx)
             if trace !== nothing
                 trace.bins_examined = zero(UInt32)
-                trace.last_bin_idx = zero(UInt32)
                 log_exponential_search_metrics(trace)
             end
             return lower_bound_guess, upper_bound_guess
@@ -295,7 +287,6 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
 
         #Search subsequent frag bins until no more bins or untill a bin is outside the fragment tolerance
         bins_examined = zero(UInt32)
-        last_bin_idx = zero(UInt32)
         while (frag_bin_idx <= frag_bin_max_idx)
             #Fragment bin is outside the fragment tolerance
             current_bin_idx = frag_bin_idx
@@ -303,12 +294,10 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
             #This and all subsequent fragment bins cannot match the fragment,
             #so exit the loop
             if (getLow(frag_bin) > frag_mz_max)
-                last_bin_idx = current_bin_idx
                 break
             else
                 if frag_bin_max_idx === frag_bin_idx
                     if getHigh(frag_bin) < frag_mz_min
-                        last_bin_idx = current_bin_idx
                         break
                     end
                 end
@@ -325,12 +314,10 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
                 #Advance to the next fragment bin
                 frag_bin_idx += 1
                 bins_examined += one(UInt32)
-                last_bin_idx = current_bin_idx
             end
         end
         if trace !== nothing
             trace.bins_examined = bins_examined
-            trace.last_bin_idx = last_bin_idx
         end
     end
 
@@ -404,10 +391,6 @@ function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
                     upper_bound_guess,
                     UInt32(2048),
                     Float32(corrected_mz),
-                    Float32(frag_min),
-                    Float32(frag_max),
-                    Float32(prec_min),
-                    Float32(prec_max),
                     density,
                     remaining_peaks,
                     Int32(total_valid_peaks)

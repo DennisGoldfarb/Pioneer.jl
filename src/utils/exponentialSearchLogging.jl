@@ -72,29 +72,16 @@ const EXP_SEARCH_LOG_HEADER = (
     "final_upper_index",
     "distance_from_prev_lower",
     "distance_from_prev_upper",
-    "distance_from_prev_checked_max",
-    "max_checked_index",
     "exp_search_steps",
-    "first_bin_index",
-    "first_bin_binary_steps",
-    "binary_window_start_steps",
-    "binary_window_stop_steps",
     "total_binary_steps",
     "window_start_index",
     "window_stop_index",
     "fragments_examined",
     "bins_examined",
-    "last_bin_index",
     "target_mz",
-    "frag_min",
-    "frag_max",
-    "precursor_min",
-    "precursor_max",
     "peak_density",
     "peaks_remaining",
-    "total_peaks",
-    "frag_window_width",
-    "prec_window_width"
+    "total_peaks"
 )
 
 mutable struct ExponentialSearchLogger
@@ -108,31 +95,21 @@ mutable struct ExponentialSearchTrace
     prev_upper::UInt32
     step_size::UInt32
     exp_steps::UInt16
-    max_checked_idx::UInt32
     final_lower::UInt32
     final_upper::UInt32
-    first_bin_idx::UInt32
-    first_bin_steps::UInt16
-    binary_window_start_steps::UInt16
-    binary_window_stop_steps::UInt16
     window_start_idx::UInt32
     window_stop_idx::UInt32
     fragments_examined::UInt32
     bins_examined::UInt32
-    last_bin_idx::UInt32
     target_mz::Float32
-    frag_min::Float32
-    frag_max::Float32
-    prec_min::Float32
-    prec_max::Float32
     peak_density::Float32
     peaks_remaining::Int32
     total_peaks::Int32
+    binary_steps::UInt32
 end
 
 function ExponentialSearchTrace(prev_lower::UInt32, prev_upper::UInt32, step_size::UInt32,
-                                target_mz::Float32, frag_min::Float32, frag_max::Float32,
-                                prec_min::Float32, prec_max::Float32,
+                                target_mz::Float32,
                                 peak_density::Float32, peaks_remaining::Int32,
                                 total_peaks::Int32)
     ExponentialSearchTrace(
@@ -140,26 +117,17 @@ function ExponentialSearchTrace(prev_lower::UInt32, prev_upper::UInt32, step_siz
         prev_upper,
         step_size,
         UInt16(0),
-        prev_upper,
         prev_lower,
         prev_upper,
-        UInt32(0),
-        UInt16(0),
-        UInt16(0),
-        UInt16(0),
-        UInt32(0),
         UInt32(0),
         UInt32(0),
         UInt32(0),
         UInt32(0),
         target_mz,
-        frag_min,
-        frag_max,
-        prec_min,
-        prec_max,
         peak_density,
         peaks_remaining,
-        total_peaks
+        total_peaks,
+        UInt32(0)
     )
 end
 
@@ -175,9 +143,6 @@ function log_exponential_search_metrics(trace::ExponentialSearchTrace)
             println(io, join(EXP_SEARCH_LOG_HEADER, '\t'))
             logger.header_written = true
         end
-        total_binary_steps = Int(trace.first_bin_steps) + Int(trace.binary_window_start_steps) + Int(trace.binary_window_stop_steps)
-        frag_window_width = trace.frag_max - trace.frag_min
-        prec_window_width = trace.prec_max - trace.prec_min
         row = (
             trace.step_size,
             trace.prev_lower,
@@ -186,29 +151,16 @@ function log_exponential_search_metrics(trace::ExponentialSearchTrace)
             trace.final_upper,
             Int64(trace.final_lower) - Int64(trace.prev_lower),
             Int64(trace.final_upper) - Int64(trace.prev_upper),
-            Int64(trace.max_checked_idx) - Int64(trace.prev_upper),
-            trace.max_checked_idx,
             trace.exp_steps,
-            trace.first_bin_idx,
-            trace.first_bin_steps,
-            trace.binary_window_start_steps,
-            trace.binary_window_stop_steps,
-            total_binary_steps,
+            trace.binary_steps,
             trace.window_start_idx,
             trace.window_stop_idx,
             trace.fragments_examined,
             trace.bins_examined,
-            trace.last_bin_idx,
             trace.target_mz,
-            trace.frag_min,
-            trace.frag_max,
-            trace.prec_min,
-            trace.prec_max,
             trace.peak_density,
             trace.peaks_remaining,
-            trace.total_peaks,
-            frag_window_width,
-            prec_window_width
+            trace.total_peaks
         )
         println(io, join(row, '\t'))
         flush(io)
