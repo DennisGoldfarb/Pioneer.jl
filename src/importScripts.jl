@@ -159,6 +159,7 @@ function importScripts()
             "maxLFQ.jl",
             "writeArrow.jl",
             "safeFileOps.jl",
+            "exponentialSearchLogging.jl",
             "proteinInference.jl",
             "profile.jl",
             "pdfUtils.jl"
