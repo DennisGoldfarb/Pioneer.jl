@@ -208,6 +208,18 @@ jobs:
         run: |
           set -o pipefail
 
+          if [[ -z "${CODESIGN_IDENTITY}" ]]; then
+            echo "Error: CODESIGN_IDENTITY is not set or empty."
+            exit 1
+          fi
+
+          if [[ -z "${PKG_SIGN_IDENTITY}" ]]; then
+            echo "Error: PKG_SIGN_IDENTITY is not set or empty."
+            exit 1
+          fi
+
+          security find-identity -v -p installer || true
+
           # Helper function: retry codesign with exponential backoff
           codesign_with_retry() {
             local target="$1"
