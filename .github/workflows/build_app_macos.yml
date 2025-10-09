@@ -218,7 +218,11 @@ jobs:
             exit 1
           fi
 
-          security find-identity -v -p installer || true
+          # `security find-identity` does not support an `installer` policy. Using it
+          # emits a usage banner and masks the actual identities we care about. Query
+          # with the `codesigning` policy instead so the log shows both app and
+          # installer identities when present.
+          security find-identity -v -p codesigning || true
 
           # Helper function: retry codesign with exponential backoff
           codesign_with_retry() {
@@ -282,7 +286,10 @@ jobs:
           echo "About to run productsign at $(date)"
           ls -l PioneerUnsigned.pkg || true
 
-          productsign --sign "$PKG_SIGN_IDENTITY" \
+          # Disable timestamping to prevent productsign from hanging when Apple's
+          # TSA service is unreachable; notarization will still validate the
+          # package signature.
+          productsign --timestamp=none --sign "$PKG_SIGN_IDENTITY" \
                       PioneerUnsigned.pkg \
                       Pioneer-${{ steps.get_version.outputs.version }}-${{ matrix.identifier }}.pkg
 
