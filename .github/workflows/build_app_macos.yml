@@ -67,7 +67,9 @@ jobs:
       - name: Setup Julia
         uses: julia-actions/setup-julia@v2
         with:
-          version: '1.12'
+          # Revert to Julia 1.11 due to PackageCompiler failures when
+          # building the sysimage with Julia 1.12.
+          version: '1.11'
           arch: ${{ matrix.arch }}
 
       - name: Cache Julia packages
