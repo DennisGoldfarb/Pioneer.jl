@@ -157,8 +157,7 @@ jobs:
                 "BuildSpecLib"=>"main_BuildSpecLib",
                 "SearchDIA"=>"main_SearchDIA",
                 "convertMzML"=>"main_convertMzML"
-              ],
-              precompile_execution_file="src/build/snoop.jl"
+              ]
             );
           '
 
