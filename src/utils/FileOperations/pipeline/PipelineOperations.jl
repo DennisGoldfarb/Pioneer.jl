@@ -111,6 +111,96 @@ function filter_rows(predicate::Function; desc::String="filter")
 end
 
 """
+    keep_best_by_group(group_cols::Vector{Symbol}, score_col::Symbol;
+                       prefer_target::Bool = true, desc::String = "keep_best_by_group")
+
+Retain only the highest-scoring row within each group defined by `group_cols`.
+
+* `group_cols` – Columns used to define grouping (e.g., `[:ms_file_idx, :pair_id]`).
+* `score_col`  – Column containing the score used for comparison (e.g., `:prec_prob`).
+* `prefer_target` – When `true`, ties are broken by preferring rows with `target == true`.
+
+Groups that are missing the specified columns or have `missing` `pair_id` values are
+left unchanged to avoid discarding unpaired precursors.
+"""
+function keep_best_by_group(
+    group_cols::Vector{Symbol},
+    score_col::Symbol;
+    prefer_target::Bool = true,
+    desc::String = "keep_best_by_group"
+)
+    op = function(df)
+        n_rows = nrow(df)
+        if n_rows == 0
+            return df
+        end
+
+        # Ensure all required columns exist
+        available_cols = propertynames(df)
+        if !(score_col in available_cols) || any(col -> col ∉ available_cols, group_cols)
+            return df
+        end
+
+        keep_mask = falses(n_rows)
+        grouped = groupby(df, group_cols, sort=false)
+        target_available = prefer_target && (:target in available_cols)
+        pair_id_in_groups = :pair_id in group_cols
+
+        for subdf in grouped
+            rows = parentindices(subdf)[1]
+            isempty(rows) && continue
+
+            # Preserve all rows when pair_id is missing
+            if pair_id_in_groups && ismissing(df[rows[1], :pair_id])
+                keep_mask[rows] .= true
+                continue
+            end
+
+            best_row = rows[1]
+            best_score = -Inf
+            best_target = -1
+            found_valid_score = false
+
+            for row_idx in rows
+                score_val = df[row_idx, score_col]
+                if ismissing(score_val)
+                    continue
+                end
+
+                found_valid_score = true
+                score = Float64(score_val)
+                target_rank = if target_available
+                    val = df[row_idx, :target]
+                    (val === missing || val == false) ? 0 : 1
+                else
+                    0
+                end
+
+                if (score > best_score) || (score == best_score && target_rank > best_target)
+                    best_score = score
+                    best_target = target_rank
+                    best_row = row_idx
+                end
+            end
+
+            if !found_valid_score
+                # When all scores are missing, keep the first row to avoid dropping data
+                keep_mask[rows[1]] = true
+            else
+                keep_mask[best_row] = true
+            end
+        end
+
+        df_filtered = df[keep_mask, :]
+        empty!(df)
+        append!(df, df_filtered)
+        return df
+    end
+
+    return desc => op
+end
+
+"""
     sort_by(cols::Vector{Symbol}; rev::Vector{Bool}=fill(false, length(cols)))
 
 Sort DataFrame by specified columns. Includes post-action to update FileReference sort state.

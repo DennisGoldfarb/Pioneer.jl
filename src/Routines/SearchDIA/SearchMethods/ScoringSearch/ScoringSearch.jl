@@ -402,7 +402,11 @@ function summarize_results!(
                 filter_by_multiple_thresholds([
                     (:global_qval, params.q_value_threshold),
                     (:qval, params.q_value_threshold)
-                ])
+                ]) |>
+                keep_best_by_group([
+                    :ms_file_idx,
+                    :pair_id
+                ], :prec_prob; desc="keep_best_precursor_per_pair")
                 
             
             passing_refs = apply_pipeline_batch(

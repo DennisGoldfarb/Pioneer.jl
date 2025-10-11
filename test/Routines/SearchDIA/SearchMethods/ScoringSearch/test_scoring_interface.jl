@@ -279,7 +279,50 @@ using Pioneer: ProbitRegression, ModelPredict!
         result_lightgbm = train_and_evaluate(lightgbm_method, df_no_cv, labels_no_cv, params)
         @test result_lightgbm === nothing
     end
-    
+
+    @testset "Target-Decoy Pair Competition" begin
+        df = DataFrame(
+            ms_file_idx = Int64[1, 1, 1, 1, 2, 2, 3, 3],
+            pair_id = Union{Missing, UInt32}[
+                UInt32(1), UInt32(1), UInt32(1), UInt32(2),
+                missing, missing, UInt32(4), UInt32(4)
+            ],
+            prec_prob = Union{Missing, Float32}[
+                0.75f0, 0.90f0, 0.90f0, 0.40f0,
+                0.70f0, 0.60f0, missing, missing
+            ],
+            target = Union{Missing, Bool}[
+                true, false, true, false,
+                true, false, true, false
+            ]
+        )
+
+        desc, operation = keep_best_by_group([
+            :ms_file_idx,
+            :pair_id
+        ], :prec_prob)
+
+        @test desc == "keep_best_by_group"
+
+        result_df = copy(df)
+        operation(result_df)
+
+        pair_one_rows = result_df[(result_df.ms_file_idx .== 1) .& (result_df.pair_id .== UInt32(1)), :]
+        @test nrow(pair_one_rows) == 1
+        @test pair_one_rows[1, :target] === true
+        @test pair_one_rows[1, :prec_prob] ≈ 0.90f0
+
+        pair_two_rows = result_df[(result_df.ms_file_idx .== 1) .& (result_df.pair_id .== UInt32(2)), :]
+        @test nrow(pair_two_rows) == 1
+
+        missing_pairs = result_df[ismissing.(result_df.pair_id), :]
+        @test nrow(missing_pairs) == 2
+
+        pair_four_rows = result_df[(result_df.ms_file_idx .== 3) .& (result_df.pair_id .== UInt32(4)), :]
+        @test nrow(pair_four_rows) == 1
+        @test pair_four_rows[1, :target] === true
+    end
+
     @testset "Integration Test Components" begin
         # Test individual components work together
         n_samples = 20
