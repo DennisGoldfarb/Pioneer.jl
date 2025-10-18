@@ -198,7 +198,7 @@ function process_scans!(
                 RTIndexedTransitionSelection(),
                 params.prec_estimation,
                 getFragmentLookupTable(getSpecLib(search_context)),
-                getPrecIds(search_data),
+                sort(getPrecIds(search_data)),
                 getMz(getPrecursors(getSpecLib(search_context))),#[:mz],
                 getCharge(getPrecursors(getSpecLib(search_context))),#[:prec_charge],
                 getSulfurCount(getPrecursors(getSpecLib(search_context))),#[:sulfur_count],
@@ -247,12 +247,16 @@ function process_scans!(
             getIdToCol(search_data)
         )
 
+        zero_weight = zero(eltype(weights))
+        
         # Handle weights
         if getIdToCol(search_data).size > length(weights)
             resize_arrays!(search_data, weights)
         end
 
-        initialize_weights!(search_data, weights, precursor_weights)
+        #initialize_weights!(search_data, weights, precursor_weights)
+        reset_precursor_weights!(search_data, precursor_weights, zero_weight)
+        initialize_weights!(search_data, weights, zero_weight)
         
         # Solve deconvolution problem
         initResiduals!(residuals, Hs, weights)
@@ -503,6 +507,12 @@ function process_scans!(
                 end
             end
 
+            reset_precursor_weights!(
+                search_data,
+                precursor_weights,
+                zero(eltype(precursor_weights))
+            )
+
             # Ensure arrays are sized for the number of grouped columns
             if mz_grouping.current_col > length(weights)
                 new_entries = Int(mz_grouping.current_col) - length(weights) + 1000
@@ -608,11 +618,26 @@ Initialize weights for deconvolution from precursor weights.
 function initialize_weights!(
     search_data::SearchDataStructures,
     weights::Vector{Float32},
-    precursor_weights::Vector{Float32}
+    zero_weight::Float32
 )
     for i in 1:getIdToCol(search_data).size
-        weights[getIdToCol(search_data)[getIdToCol(search_data).keys[i]]] = 
-            precursor_weights[getIdToCol(search_data).keys[i]]
+        col_idx = getIdToCol(search_data)[getIdToCol(search_data).keys[i]]
+        weights[col_idx] = zero_weight
+    end
+end
+"""
+    reset_precursor_weights!(search_data::SearchDataStructures, precursor_weights::Vector{Float32},
+                             zero_weight::Float32)
+
+Clear stored precursor weights so subsequent solves do not reuse prior solutions.
+"""
+function reset_precursor_weights!(
+    search_data::SearchDataStructures,
+    precursor_weights::Vector{Float32},
+    zero_weight::Float32
+)
+    for i in 1:getIdToCol(search_data).size
+        precursor_weights[getIdToCol(search_data).keys[i]] = zero_weight
     end
 end
 

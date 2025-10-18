@@ -327,9 +327,17 @@ function build_chromatograms(
             end
 
             # Initialize weights
+            zero_weight = zero(eltype(weights))
+
+            # Reset precursor weights and initialize working weights
             for i in 1:getIdToCol(search_data).size
-                weights[getIdToCol(search_data)[getIdToCol(search_data).keys[i]]] = 
-                    precursor_weights[getIdToCol(search_data).keys[i]]
+                precursor_id = getIdToCol(search_data).keys[i]
+                precursor_weights[precursor_id] = zero_weight
+            end
+
+            for i in 1:getIdToCol(search_data).size
+                col_idx = getIdToCol(search_data)[getIdToCol(search_data).keys[i]]
+                weights[col_idx] = zero_weight
             end
 
             # Solve deconvolution
@@ -562,9 +570,17 @@ function build_chromatograms(
             end
 
             # Initialize weights
+            zero_weight = zero(eltype(weights))
+
+            # Reset precursor weights and initialize working weights
             for i in 1:getIdToCol(search_data).size
-                weights[getIdToCol(search_data)[getIdToCol(search_data).keys[i]]] = 
-                    precursor_weights[getIdToCol(search_data).keys[i]]
+                precursor_id = getIdToCol(search_data).keys[i]
+                precursor_weights[precursor_id] = zero_weight
+            end
+
+            for i in 1:getIdToCol(search_data).size
+                col_idx = getIdToCol(search_data)[getIdToCol(search_data).keys[i]]
+                weights[col_idx] = zero_weight
             end
 
             # Solve deconvolution

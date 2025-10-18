@@ -307,7 +307,7 @@ function select_transitions_for_huber!(
         RTIndexedTransitionSelection(),
         params.prec_estimation,
         getFragmentLookupTable(getSpecLib(search_context)),
-        getPrecIds(search_data),
+        sort(getPrecIds(search_data)),
         getMz(getPrecursors(getSpecLib(search_context))),#[:mz],
         getCharge(getPrecursors(getSpecLib(search_context))),#[:prec_charge],
         getSulfurCount(getPrecursors(getSpecLib(search_context))),#[:sulfur_count],
@@ -401,6 +401,13 @@ function process_delta_values!(
         nmisses,
         getIdToCol(search_data)
     )
+
+    zero_weight = zero(eltype(weights))
+
+    # Reset precursor weights to avoid reusing previous solutions as hot starts
+    for i in 1:getIdToCol(search_data).size
+        precursor_weights[getIdToCol(search_data).keys[i]] = zero_weight
+    end
     
     # Process each delta value
     for δ in delta_grid
@@ -414,8 +421,10 @@ function process_delta_values!(
         
         # Initialize weights
         for i in 1:getIdToCol(search_data).size
-            weights[getIdToCol(search_data)[getIdToCol(search_data).keys[i]]] = 
-                precursor_weights[getIdToCol(search_data).keys[i]]
+            #weights[getIdToCol(search_data)[getIdToCol(search_data).keys[i]]] = 
+            #    precursor_weights[getIdToCol(search_data).keys[i]]
+            col_idx = getIdToCol(search_data)[getIdToCol(search_data).keys[i]]
+            weights[col_idx] = zero_weight
         end
         
         # Solve deconvolution problem
