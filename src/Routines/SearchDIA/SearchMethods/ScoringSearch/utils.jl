@@ -729,7 +729,7 @@ end
                                     max_psms_in_memory::Int64,
                                     qc_folder::String,
                                     precursors::LibraryPrecursors;
-                                    protein_to_cv_fold::Union{Nothing, Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8}}} = nothing,
+                                    protein_to_cv_fold::Union{Nothing, Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8, precursor_idx::UInt32}}} = nothing,
                                     ms1_scoring::Bool = true)
 
 Perform probit regression on protein groups.
@@ -747,7 +747,7 @@ function perform_protein_probit_regression(
     max_psms_in_memory::Int64,
     qc_folder::String,
     precursors::LibraryPrecursors;
-    protein_to_cv_fold::Union{Nothing, Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8}}} = nothing,
+    protein_to_cv_fold::Union{Nothing, Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8, precursor_idx::UInt32}}} = nothing,
     ms1_scoring::Bool = true
 )
     # Extract paths for compatibility with existing code
@@ -1681,7 +1681,7 @@ end
 
 """
     build_protein_cv_fold_mapping(psm_paths::Vector{String}, precursors::LibraryPrecursors)
-    -> Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8}}
+    -> Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8, precursor_idx::UInt32}}
 
 Build a mapping from protein names to their CV fold assignments based on highest-scoring peptides.
 
@@ -1690,7 +1690,7 @@ Build a mapping from protein names to their CV fold assignments based on highest
 - `precursors`: Library precursors containing cv_fold information
 
 # Returns
-- Dictionary mapping protein_name to named tuple with best_score and cv_fold
+- Dictionary mapping protein_name to named tuple with best_score, cv_fold, and precursor_idx
 
 # Process
 1. Scans PSM files to find peptides for each protein
@@ -1701,8 +1701,8 @@ function build_protein_cv_fold_mapping(
     psm_paths::Vector{String},
     precursors::LibraryPrecursors
 )
-    # Create mapping: protein_name -> (best_score=score, cv_fold=fold)
-    protein_to_cv_fold = Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8}}()
+    # Create mapping: protein_name -> (best_score=score, cv_fold=fold, precursor_idx=index)
+    protein_to_cv_fold = Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8, precursor_idx::UInt32}}()
     
     # Process each PSM file
     for psm_path in psm_paths
@@ -1743,11 +1743,14 @@ function build_protein_cv_fold_mapping(
             cv_fold = getCvFold(precursors, precursor_idx)
             
             # Update if this is the best score for this protein
-            value = (best_score = best_score, cv_fold = cv_fold)
+            value = (best_score = best_score, cv_fold = cv_fold, precursor_idx = precursor_idx)
             if !haskey(protein_to_cv_fold, protein_name)
                 insert!(protein_to_cv_fold, protein_name, value)
-            elseif best_score > protein_to_cv_fold[protein_name].best_score
-                protein_to_cv_fold[protein_name] = value
+            else
+                existing = protein_to_cv_fold[protein_name]
+                if best_score > existing.best_score || (best_score == existing.best_score && precursor_idx < existing.precursor_idx)
+                    protein_to_cv_fold[protein_name] = value
+                end
             end
         end
     end
@@ -1756,8 +1759,8 @@ function build_protein_cv_fold_mapping(
 end
 
 """
-    assign_protein_group_cv_folds!(all_protein_groups::DataFrame, 
-                                  protein_to_cv_fold::Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8}})
+    assign_protein_group_cv_folds!(all_protein_groups::DataFrame,
+                                  protein_to_cv_fold::Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8, precursor_idx::UInt32}})
 
 Assign CV fold to each protein group based on a pre-built mapping.
 
@@ -1770,7 +1773,7 @@ Adds cv_fold column to protein groups DataFrame based on the mapping
 """
 function assign_protein_group_cv_folds!(
     all_protein_groups::DataFrame,
-    protein_to_cv_fold::Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8}}
+    protein_to_cv_fold::Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8, precursor_idx::UInt32}}
 )
     # Assign cv_fold to protein groups using the pre-built mapping
     cv_folds = Vector{UInt8}(undef, nrow(all_protein_groups))
@@ -1795,7 +1798,7 @@ end
 
 """
     apply_probit_scores_multifold!(pg_refs::Vector{ProteinGroupFileReference},
-                                  protein_to_cv_fold::Dict{String, @NamedTuple{best_score::Float32, cv_fold::UInt8}},
+                                  protein_to_cv_fold::Dict{String, @NamedTuple{best_score::Float32, cv_fold::UInt8, precursor_idx::UInt32}},
                                   models::Dict{UInt8, Vector{Float64}},
                                   feature_names::Vector{Symbol})
 
@@ -1809,7 +1812,7 @@ Apply probit models to protein group files based on their CV fold.
 """
 function apply_probit_scores_multifold!(
     pg_refs::Vector{ProteinGroupFileReference},
-    protein_to_cv_fold::Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8}},
+    protein_to_cv_fold::Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8, precursor_idx::UInt32}},
     models::Dict{UInt8, Vector{Float64}},
     feature_names::Vector{Symbol};
     skip_scoring = false
@@ -1864,7 +1867,7 @@ end
                                      qc_folder::String,
                                      pg_refs::Vector{ProteinGroupFileReference},
                                      precursors::LibraryPrecursors;
-                                     protein_to_cv_fold::Union{Nothing, Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8}}} = nothing,
+                                     protein_to_cv_fold::Union{Nothing, Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8, precursor_idx::UInt32}}} = nothing,
                                      show_improvement = true,
                                      skip_scoring = false)
 
@@ -1890,7 +1893,7 @@ function perform_probit_analysis_multifold(
     qc_folder::String,
     pg_refs::Vector{ProteinGroupFileReference},
     precursors::LibraryPrecursors;
-    protein_to_cv_fold::Union{Nothing, Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8}}} = nothing,
+    protein_to_cv_fold::Union{Nothing, Dictionary{String, @NamedTuple{best_score::Float32, cv_fold::UInt8, precursor_idx::UInt32}}} = nothing,
     show_improvement = true,
     skip_scoring = false,
     ms1_scoring::Bool = true
