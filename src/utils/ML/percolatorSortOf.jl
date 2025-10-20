@@ -280,24 +280,8 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             end
 
             init_scores = nothing
-            if match_between_runs && itr == mbr_start_iter
-                if hasproperty(psms_train_itr, :MBR_transfer_candidate)
-                    candidate_mask_itr = psms_train_itr.MBR_transfer_candidate
-                    if any(candidate_mask_itr)
-                        control_idx = findall(.!candidate_mask_itr)
-                        candidate_idx = findall(candidate_mask_itr)
-                        n_control = min(length(control_idx), length(candidate_idx))
-                        selected_controls = n_control > 0 ? begin
-                            Random.shuffle!(control_idx)
-                            control_idx[1:n_control]
-                        end : Int[]
-                        selected_idx = sort!(vcat(candidate_idx, selected_controls))
-                        psms_train_itr = psms_train_itr[selected_idx, :]
-                    end
-                end
-                if nrow(psms_train_itr) > 0
-                    init_scores = logit.(clamp!(copy(psms_train_itr.prob), PROBABILITY_EPS, 1 - PROBABILITY_EPS))
-                end
+            if match_between_runs && itr == mbr_start_iter && nrow(psms_train_itr) > 0
+                init_scores = logit.(clamp!(copy(psms_train_itr.prob), PROBABILITY_EPS, 1 - PROBABILITY_EPS))
             end
 
             bst = train_booster(psms_train_itr, train_feats, num_round;
