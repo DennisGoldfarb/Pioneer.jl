@@ -21,6 +21,15 @@
 
 const PAIRING_RANDOM_SEED = 1844  # Fixed seed for reproducible pairing
 const IRT_BIN_SIZE = 1000
+const PROBABILITY_EPS = eps(Float32)
+
+@inline function logit(p::Real)
+    return log(p / (one(p) - p))
+end
+
+@inline function σ(x::Real)
+    return one(x) / (one(x) + exp(-x))
+end
 
 #############################################################################
 # Running Statistics Helper Functions
@@ -201,8 +210,9 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
 
     prob_test   = zeros(Float32, nrow(psms))  # final CV predictions
     prob_train  = zeros(Float32, nrow(psms))  # temporary, used during training
-    MBR_estimates = zeros(Float32, nrow(psms)) # optional MBR layer
     nonMBR_estimates  = zeros(Float32, nrow(psms)) # keep track of last nonMBR test scores
+    logit_base = zeros(Float32, nrow(psms))
+    boost_mask = zeros(Float32, nrow(psms))
 
     unique_cv_folds = unique(psms[!, :cv_fold])
     models = Dict{UInt8, LightGBMModelVector}()
@@ -269,6 +279,11 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
                 end
             end
 
+            init_scores = nothing
+            if match_between_runs && itr == mbr_start_iter && nrow(psms_train_itr) > 0
+                init_scores = logit.(clamp!(copy(psms_train_itr.prob), PROBABILITY_EPS, 1 - PROBABILITY_EPS))
+            end
+
             bst = train_booster(psms_train_itr, train_feats, num_round;
                                feature_fraction=feature_fraction,
                                learning_rate=learning_rate,
@@ -276,7 +291,8 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
                                bagging_fraction=bagging_fraction,
                                min_gain_to_split=min_gain_to_split,
                                max_depth=max_depth,
-                               num_leaves=num_leaves)
+                               num_leaves=num_leaves,
+                               init_score=init_scores)
                                
             fold_models[itr] = bst
 
@@ -298,22 +314,37 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
 
             #predict_fold!(bst, psms_train, psms_test, train_feats)
             # **temporary predictions for training only**
-            prob_train[train_idx] = predict(bst, psms_train)
-            psms_train[!,:prob] = prob_train[train_idx]
+            train_predictions = predict(bst, psms_train)
+            prob_train[train_idx] = train_predictions
+            psms_train[!,:prob] = train_predictions
             get_qvalues!(psms_train.prob, psms_train.target, psms_train.q_value)
 
             # **predict held-out fold**
-            prob_test[test_idx] = predict(bst, psms_test)
-            psms_test[!,:prob] = prob_test[test_idx]
+            test_predictions = predict(bst, psms_test)
+            prob_test[test_idx] = test_predictions
+            psms_test[!,:prob] = test_predictions
 
             if itr == (mbr_start_iter - 1)
-			    nonMBR_estimates[test_idx] = prob_test[test_idx]
+                nonMBR_estimates[test_idx] = test_predictions
+                clamped_base = clamp!(copy(test_predictions), PROBABILITY_EPS, 1 - PROBABILITY_EPS)
+                logit_base[test_idx] = logit.(clamped_base)
+            elseif match_between_runs && itr == mbr_start_iter
+                candidate_mask_test = hasproperty(psms_test, :MBR_transfer_candidate) ? psms_test.MBR_transfer_candidate : falses(length(test_predictions))
+                if any(candidate_mask_test)
+                    candidate_indices = findall(candidate_mask_test)
+                    clamped_boost = clamp!(copy(test_predictions[candidate_indices]), PROBABILITY_EPS, 1 - PROBABILITY_EPS)
+                    boost_mask[test_idx[candidate_indices]] = logit.(clamped_boost)
+                end
             end
 
             if match_between_runs
                 update_mbr_features!(psms_train, psms_test, prob_test,
                                      test_idx, itr, mbr_start_iter,
                                      max_q_value_lightgbm_rescore)
+                if itr == mbr_start_iter - 1
+                    mark_transfer_candidates!(psms_train, max_q_value_lightgbm_rescore)
+                    mark_transfer_candidates!(psms_test, max_q_value_lightgbm_rescore)
+                end
             end
 
             show_progress && update(pbar)
@@ -323,9 +354,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             end
         end
         # Make predictions on hold out data.
-        if match_between_runs
-            MBR_estimates[test_idx] = psms_test.prob
-        else
+        if !match_between_runs
             prob_test[test_idx] = psms_test.prob
         end
         # Store models for this fold
@@ -333,19 +362,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     end
 
     if match_between_runs
-        # Determine which precursors failed the q-value cutoff prior to MBR
-        qvals_prev = Vector{Float32}(undef, length(nonMBR_estimates))
-        get_qvalues!(nonMBR_estimates, psms.target, qvals_prev)
-        pass_mask = (qvals_prev .<= max_q_value_lightgbm_rescore)
-        has_passing_psms = !isempty(pass_mask) && any(pass_mask)
-        prob_thresh = has_passing_psms ? minimum(nonMBR_estimates[pass_mask]) : typemax(Float32)
-        # Label as transfer candidates only those failing the q-value cutoff but
-        # whose best matched pair surpassed the passing probability threshold.
-        psms[!, :MBR_transfer_candidate] .= .!pass_mask .&
-                                            (psms.MBR_max_pair_prob .>= prob_thresh)
-
-        # Use the final MBR probabilities for all precursors
-        psms[!, :prob] = MBR_estimates
+        apply_mbr_boost!(psms, nonMBR_estimates, logit_base, boost_mask, max_q_value_lightgbm_rescore)
     else
         psms[!, :prob] = prob_test
     end
@@ -698,7 +715,9 @@ function train_booster(psms::AbstractDataFrame, features, num_round;
                        bagging_fraction::Float64,
                        min_gain_to_split::Float64,
                        max_depth::Int,
-                       num_leaves::Int)
+                       num_leaves::Int,
+                       init_score = nothing,
+                       sample_weight = nothing)
 
     classifier = build_lightgbm_classifier(
         num_iterations = num_round,
@@ -712,7 +731,10 @@ function train_booster(psms::AbstractDataFrame, features, num_round;
         min_gain_to_split = min_gain_to_split,
     )
     feature_frame = psms[:, features]
-    return fit_lightgbm_model(classifier, feature_frame, psms.target; positive_label=true)
+    return fit_lightgbm_model(classifier, feature_frame, psms.target;
+                              positive_label=true,
+                              init_score=init_score,
+                              sample_weight=sample_weight)
 end
 
 function predict_fold!(bst, psms_train::AbstractDataFrame,
@@ -853,6 +875,16 @@ function initialize_prob_group_features!(
     return psms
 end
 
+function mark_transfer_candidates!(psms::AbstractDataFrame, qval_thresh::Float32)
+    qvals_prev = similar(psms.prob)
+    get_qvalues!(psms.prob, psms.target, qvals_prev)
+    pass_mask = (qvals_prev .<= qval_thresh) .& psms.target
+    prob_thresh = any(pass_mask) ? minimum(psms.prob[pass_mask]) : typemax(Float32)
+    psms[!, :MBR_transfer_candidate] = (qvals_prev .> qval_thresh) .&
+                                       (psms.MBR_max_pair_prob .>= prob_thresh)
+    return psms
+end
+
 function get_training_data_for_iteration!(
     psms_train::AbstractDataFrame,
     itr::Int,
@@ -973,6 +1005,32 @@ function update_mbr_probs!(
                                      (df.MBR_max_pair_prob .>= prob_thresh)
     df[!, :prob] = probs
     return df
+end
+
+function apply_mbr_boost!(
+    psms::AbstractDataFrame,
+    nonMBR_estimates::AbstractVector{Float32},
+    logit_base::AbstractVector{Float32},
+    boost_mask::AbstractVector{Float32},
+    qval_thresh::Float32,
+)
+    qvals_prev = similar(nonMBR_estimates)
+    get_qvalues!(nonMBR_estimates, psms.target, qvals_prev)
+    pass_mask = (qvals_prev .<= qval_thresh) .& psms.target
+    prob_thresh = any(pass_mask) ? minimum(nonMBR_estimates[pass_mask]) : typemax(Float32)
+    candidate_mask = (qvals_prev .> qval_thresh) .&
+                     (psms.MBR_max_pair_prob .>= prob_thresh)
+    psms[!, :MBR_transfer_candidate] = candidate_mask
+
+    boost_effect = boost_mask .* Float32.(candidate_mask)
+    logit_final = logit_base .+ boost_effect
+    final_probs = σ.(logit_final)
+    if any(.!candidate_mask)
+        final_probs[.!candidate_mask] .= nonMBR_estimates[.!candidate_mask]
+    end
+
+    psms[!, :prob] = final_probs
+    return final_probs
 end
 
 """

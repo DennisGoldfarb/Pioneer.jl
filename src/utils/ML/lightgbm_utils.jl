@@ -111,7 +111,9 @@ end
 function fit_lightgbm_model(model::LightGBM.LGBMClassification,
                             feature_data::AbstractDataFrame,
                             labels::AbstractVector;
-                            positive_label = true)
+                            positive_label = true,
+                            init_score = nothing,
+                            sample_weight = nothing)
     features = Symbol.(names(feature_data))
     X = feature_matrix(feature_data, features)
     y_int = _prepare_labels(labels)
@@ -122,7 +124,19 @@ function fit_lightgbm_model(model::LightGBM.LGBMClassification,
         return LightGBMModel(nothing, features, constant_prob)
     end
 
-    LightGBM.fit!(model, X, y_int; verbosity = -1)
+    kwargs = (verbosity = -1,)
+    if init_score !== nothing
+        init_vec = Float64.(collect(init_score))
+        length(init_vec) == size(X, 1) || throw(ArgumentError("init_score length must match number of rows"))
+        kwargs = merge(kwargs, (init_score = init_vec,))
+    end
+    if sample_weight !== nothing
+        weight_vec = Float64.(collect(sample_weight))
+        length(weight_vec) == size(X, 1) || throw(ArgumentError("sample_weight length must match number of rows"))
+        kwargs = merge(kwargs, (weight = weight_vec,))
+    end
+
+    LightGBM.fit!(model, X, y_int; kwargs...)
     return LightGBMModel(model, features, nothing)
 end
 

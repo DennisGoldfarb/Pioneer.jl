@@ -26,6 +26,7 @@ using Pioneer: FilterResult, train_and_evaluate, apply_filtering
 using Pioneer: select_mbr_features, prepare_mbr_features, logodds
 using Pioneer: ProbitRegression, ModelPredict!
 using Pioneer: summarize_precursors!
+using Pioneer: apply_mbr_boost!
 
 
 @testset "Scoring Interface Tests" begin
@@ -239,7 +240,27 @@ using Pioneer: summarize_precursors!
         @test filtered_probs_ml[5] == 0.5f0  # Score 0.9 >= 0.5, not filtered (good transfer)
         @test filtered_probs_ml[6] == 0.4f0  # Not a candidate, not filtered
     end
-    
+
+    @testset "MBR Probability Combination" begin
+        psms = DataFrame(
+            target = Bool[true, false, true, false],
+            MBR_max_pair_prob = Float32[0.95, 0.3, 0.92, 0.2]
+        )
+
+        nonMBR = Float32[0.9, 0.6, 0.4, 0.3]
+        logit_base = Float32.(log.(nonMBR ./ (1 .- nonMBR)))
+        boost_mask = zeros(Float32, length(nonMBR))
+        boost_mask[3] = 0.5f0
+        max_q = 0.4f0
+
+        final_probs = apply_mbr_boost!(psms, nonMBR, logit_base, boost_mask, max_q)
+        expected_boosted = Float32(1 / (1 + exp(-(logit_base[3] + boost_mask[3]))))
+
+        @test final_probs[3] ≈ expected_boosted atol=1e-6
+        @test all(final_probs[[1, 2, 4]] .≈ nonMBR[[1, 2, 4]])
+        @test psms.MBR_transfer_candidate == [false, false, true, false]
+    end
+
     @testset "Logodds Function" begin
         # Test single probability
         @test logodds([0.8], 1) == 0.8
