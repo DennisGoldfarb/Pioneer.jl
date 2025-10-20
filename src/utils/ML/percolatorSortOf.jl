@@ -22,6 +22,34 @@
 const PAIRING_RANDOM_SEED = 1844  # Fixed seed for reproducible pairing
 const IRT_BIN_SIZE = 1000
 
+# Blend coefficient that controls how strongly the MBR model influences the
+# final probability estimate relative to the base (non-MBR) model.
+const MBR_PROB_BLEND_ALPHA = 1.0f0
+
+# Guard rails for combining probabilities; prevents logit/σ blowups.
+const MBR_PROB_CLAMP_EPS = Float32(eps(Float32))
+const MBR_PROB_CLAMP_MAX = one(Float32) - MBR_PROB_CLAMP_EPS
+
+@inline function safe_logit(p::Float32)
+    return log(p) - log1p(-p)
+end
+@inline safe_logit(p::Real) = safe_logit(Float32(p))
+
+@inline function sigmoid32(x::Float32)
+    return inv(one(Float32) + exp(-x))
+end
+@inline sigmoid32(x::Real) = sigmoid32(Float32(x))
+
+@inline function blend_probabilities(base_probs::AbstractVector{<:Real},
+                                     mbr_probs::AbstractVector{<:Real},
+                                     alpha::Real)
+    base_clamped = clamp.(Float32.(base_probs), MBR_PROB_CLAMP_EPS, MBR_PROB_CLAMP_MAX)
+    mbr_clamped  = clamp.(Float32.(mbr_probs), MBR_PROB_CLAMP_EPS, MBR_PROB_CLAMP_MAX)
+    logit_base = safe_logit.(base_clamped)
+    logit_mbr  = safe_logit.(mbr_clamped)
+    return sigmoid32.(logit_base .+ Float32(alpha) .* logit_mbr)
+end
+
 #############################################################################
 # Running Statistics Helper Functions
 #############################################################################
@@ -176,12 +204,15 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
                   iter_scheme::Vector{Int} = [100, 200, 200],
                   print_importance::Bool = false,
                   show_progress::Bool = true,
-                  verbose_logging::Bool = false)
+                  verbose_logging::Bool = false,
+                  prob_blend_alpha = MBR_PROB_BLEND_ALPHA)
     
     save_training_df_path = "/Users/nathanwamsley/Desktop/xgboost_training_data.arrow"  # Set to `nothing` to disable saving
 
     # Apply random target-decoy pairing before ML training
     assign_random_target_decoy_pairs!(psms)
+
+    psms[!, :prob_base] = fill(0f0, nrow(psms))
     
     #Faster if sorted first (handle missing pair_id values)
     sort!(psms, [:pair_id, :isotopes_captured])
@@ -215,6 +246,17 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
 
     Random.seed!(1776)
     non_mbr_features = [f for f in features if !startswith(String(f), "MBR_")]
+    requested_mbr_features = Symbol[
+        :prob_base,
+        :MBR_max_pair_prob,
+        :MBR_best_irt_diff,
+        :MBR_rv_coefficient,
+        :MBR_log2_weight_ratio,
+        :MBR_log2_explained_ratio,
+        :MBR_num_runs,
+        :MBR_is_missing,
+    ]
+    mbr_feature_subset = [f for f in requested_mbr_features if f in propertynames(psms)]
 
     total_progress_steps = length(unique_cv_folds) * iterations_per_fold
     pbar = show_progress ? ProgressBar(total=total_progress_steps) : nothing
@@ -259,7 +301,13 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
                                                               min_PEP_neg_threshold_itr,
                                                               itr >= mbr_start_iter)
 
-            train_feats = itr < mbr_start_iter ? non_mbr_features : features
+            train_feats = if itr < mbr_start_iter
+                non_mbr_features
+            elseif itr == mbr_start_iter
+                mbr_feature_subset
+            else
+                features
+            end
             
             # If saving requested and this is the final iteration, capture training data
             if save_training_df_path !== nothing
@@ -307,7 +355,10 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             psms_test[!,:prob] = prob_test[test_idx]
 
             if itr == (mbr_start_iter - 1)
-			    nonMBR_estimates[test_idx] = prob_test[test_idx]
+                psms_train[!, :prob_base] = psms_train.prob
+                base_probs_fold = prob_test[test_idx]
+                nonMBR_estimates[test_idx] = base_probs_fold
+                psms_test[!, :prob_base] = base_probs_fold
             end
 
             if match_between_runs
@@ -325,6 +376,10 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
         # Make predictions on hold out data.
         if match_between_runs
             MBR_estimates[test_idx] = psms_test.prob
+            blended_probs = blend_probabilities(nonMBR_estimates[test_idx],
+                                                MBR_estimates[test_idx],
+                                                prob_blend_alpha)
+            psms_test[!, :prob] = blended_probs
         else
             prob_test[test_idx] = psms_test.prob
         end
@@ -344,8 +399,12 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
         psms[!, :MBR_transfer_candidate] .= .!pass_mask .&
                                             (psms.MBR_max_pair_prob .>= prob_thresh)
 
-        # Use the final MBR probabilities for all precursors
-        psms[!, :prob] = MBR_estimates
+        psms[!, :prob_base] = nonMBR_estimates
+        # Use the blended base+MBR probabilities for all precursors.
+        # Downstream consumers (e.g., apply_mbr_filter!) continue to read :prob,
+        # while :prob_base preserves the pre-MBR estimate for diagnostics.
+        final_probs = blend_probabilities(nonMBR_estimates, MBR_estimates, prob_blend_alpha)
+        psms[!, :prob] = final_probs
     else
         psms[!, :prob] = prob_test
     end
@@ -963,7 +1022,8 @@ the corresponding probability cutoff.
 function update_mbr_probs!(
     df::AbstractDataFrame,
     probs::AbstractVector{Float32},
-    qval_thresh::Float32,
+    qval_thresh::Float32;
+    blend_alpha = MBR_PROB_BLEND_ALPHA,
 )
     prev_qvals = similar(df.prob)
     get_qvalues!(df.prob, df.target, prev_qvals)
@@ -971,7 +1031,10 @@ function update_mbr_probs!(
     prob_thresh = any(pass_mask) ? minimum(df.prob[pass_mask]) : typemax(Float32)
     df[!, :MBR_transfer_candidate] = (prev_qvals .> qval_thresh) .&
                                      (df.MBR_max_pair_prob .>= prob_thresh)
-    df[!, :prob] = probs
+    base_probs = Float32.(df.prob)
+    df[!, :prob_base] = base_probs
+    final_probs = blend_probabilities(base_probs, probs, blend_alpha)
+    df[!, :prob] = final_probs
     return df
 end
 
