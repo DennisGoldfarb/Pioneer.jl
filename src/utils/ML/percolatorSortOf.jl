@@ -300,6 +300,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
 
     Random.seed!(1776)
     non_mbr_features = [f for f in features if !startswith(String(f), "MBR_")]
+    mbr_features = [f for f in features if startswith(String(f), "MBR_")]
 
     total_progress_steps = length(unique_cv_folds) * iterations_per_fold
     pbar = show_progress ? ProgressBar(total=total_progress_steps) : nothing
@@ -352,7 +353,14 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
                                                               min_PEP_neg_threshold_itr,
                                                               itr >= mbr_start_iter)
 
-            train_feats = itr < mbr_start_iter ? non_mbr_features : features
+            # Force the third iteration to train only on MBR_* features for target/decoy prediction.
+            train_feats = if itr == 3 && !isempty(mbr_features)
+                mbr_features
+            elseif itr < mbr_start_iter
+                non_mbr_features
+            else
+                features
+            end
             
             # If saving requested and this is the final iteration, capture training data
             if save_training_df_path !== nothing
@@ -706,6 +714,7 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
     pbar = ProgressBar(total=total_progress_steps)
     Random.seed!(1776);
     non_mbr_features = [f for f in features if !startswith(String(f), "MBR_")]
+    mbr_features = [f for f in features if startswith(String(f), "MBR_")]
 
     for test_fold_idx in unique_cv_folds#(0, 1)#range(1, n_folds)
         #Clear prob stats 
@@ -724,7 +733,14 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                                                                 itr >= length(iter_scheme))
             ###################
             #Train a model on the n-1 training folds.
-            train_feats = itr < length(iter_scheme) ? non_mbr_features : features
+            # Force the third iteration to train only on MBR_* features for target/decoy prediction.
+            train_feats = if itr == 3 && !isempty(mbr_features)
+                mbr_features
+            elseif itr < length(iter_scheme)
+                non_mbr_features
+            else
+                features
+            end
             bst = train_booster(psms_train_itr, train_feats, num_round;
                                feature_fraction=feature_fraction,
                                learning_rate=learning_rate,
