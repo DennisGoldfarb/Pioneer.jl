@@ -883,37 +883,47 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
         # single pass: record the best PSM index & prob per run
         offset = Int(minimum(sub_psms.ms_file_idx))
         range_len = Int(maximum(sub_psms.ms_file_idx)) - offset + 1
-        best_i = zeros(Int, range_len)
-        best_p = fill(-Inf, range_len)
+        best_any_indices = zeros(Int, range_len)
+        best_any_probs = fill(-Inf, range_len)
+        best_target_indices = zeros(Int, range_len)
+        best_target_probs = fill(-Inf, range_len)
         for (i, run) in enumerate(sub_psms.ms_file_idx)
             idx = Int(run) - offset + 1
             p = sub_psms.prob[i]
-            if p > best_p[idx]
-                best_p[idx] = p
-                best_i[idx] = i
+            if p > best_any_probs[idx]
+                best_any_probs[idx] = p
+                best_any_indices[idx] = i
+            end
+            if !sub_psms.decoy[i] && p > best_target_probs[idx]
+                best_target_probs[idx] = p
+                best_target_indices[idx] = i
             end
         end
 
-        # if more than one run, find the global top-2 runs by their best-PSM prob
-        run_best_indices = zeros(Int, range_len)
-        runs = findall(!=(0), best_i)
+        run_best_any_indices = zeros(Int, range_len)
+        run_best_target_indices = zeros(Int, range_len)
+        runs = findall(!=(0), best_any_indices)
         if length(runs) > 1
-            # track top two runs (r1 > r2)
-            r1 = 0; p1 = -Inf
-            r2 = 0; p2 = -Inf
             for r in runs
-                p = best_p[r]
-                if p > p1
-                    r2, p2 = r1, p1
-                    r1, p1 = r, p
-                elseif p > p2
-                    r2, p2 = r, p
+                best_any_idx = 0
+                best_any_prob = -Inf
+                best_target_idx = 0
+                best_target_prob = -Inf
+                for s in runs
+                    if s == r
+                        continue
+                    end
+                    if best_any_indices[s] != 0 && best_any_probs[s] > best_any_prob
+                        best_any_prob = best_any_probs[s]
+                        best_any_idx = best_any_indices[s]
+                    end
+                    if best_target_indices[s] != 0 && best_target_probs[s] > best_target_prob
+                        best_target_prob = best_target_probs[s]
+                        best_target_idx = best_target_indices[s]
+                    end
                 end
-            end
-
-            # assign, for each run, the best index in “any other” run
-            for r in runs
-                run_best_indices[r] = (r == r1 ? best_i[r2] : best_i[r1])
+                run_best_any_indices[r] = best_any_idx
+                run_best_target_indices[r] = best_target_idx
             end
         end
 
@@ -923,7 +933,11 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
             sub_psms.MBR_num_runs[i] = num_runs_passing - (sub_psms.q_value[i] .<= q_cutoff)
 
             idx = Int(sub_psms.ms_file_idx[i]) - offset + 1
-            best_idx = run_best_indices[idx]
+            if sub_psms.decoy[i]
+                best_idx = run_best_any_indices[idx]
+            else
+                best_idx = run_best_target_indices[idx]
+            end
             if best_idx == 0 || sub_psms.MBR_num_runs[i] == 0
                 sub_psms.MBR_best_irt_diff[i]           = -1.0f0
                 sub_psms.MBR_rv_coefficient[i]          = -1.0f0
