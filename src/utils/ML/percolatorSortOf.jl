@@ -111,12 +111,18 @@ end
 function set_mbr_base_features!(df::AbstractDataFrame,
                                 base_probs::AbstractVector{<:Real},
                                 logit_threshold::Float32)
-    @inbounds for i in eachindex(base_probs)
-        prob = Float32(base_probs[i])
+    base_prob_col = df.MBR_base_prob
+    base_logit_col = df.MBR_base_logit
+    delta_col = df.MBR_logit_delta_to_thresh
+
+    Threads.@threads for idx in eachindex(base_probs)
+        prob = Float32(base_probs[idx])
         logit = safe_logit(prob)
-        df.MBR_base_prob[i] = prob
-        df.MBR_base_logit[i] = logit
-        df.MBR_logit_delta_to_thresh[i] = logit - logit_threshold
+        @inbounds begin
+            base_prob_col[idx] = prob
+            base_logit_col[idx] = logit
+            delta_col[idx] = logit - logit_threshold
+        end
     end
     return df
 end
