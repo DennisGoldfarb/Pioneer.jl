@@ -21,6 +21,7 @@
 
 const PAIRING_RANDOM_SEED = 1844  # Fixed seed for reproducible pairing
 const IRT_BIN_SIZE = 1000
+const LOGIT_EPS = 1f-6
 
 #############################################################################
 # Running Statistics Helper Functions
@@ -88,6 +89,84 @@ end
 function getIrtBins!(psms::AbstractDataFrame)
     psms[!, :irt_bin_idx] = getIrtBins(psms.irt_pred)
     return psms
+end
+
+
+@inline function clamp_probability(prob::Float32)
+    return clamp(prob, LOGIT_EPS, 1f0 - LOGIT_EPS)
+end
+
+
+@inline function safe_logit(prob::Float32)
+    p = clamp_probability(prob)
+    return log(p / (1f0 - p))
+end
+
+
+@inline function sigmoid(logit::Float32)
+    return inv(1f0 + exp(-logit))
+end
+
+
+function set_mbr_base_features!(df::AbstractDataFrame,
+                                base_probs::AbstractVector{<:Real},
+                                logit_threshold::Float32)
+    @inbounds for i in eachindex(base_probs)
+        prob = Float32(base_probs[i])
+        logit = safe_logit(prob)
+        df.MBR_base_prob[i] = prob
+        df.MBR_base_logit[i] = logit
+        df.MBR_logit_delta_to_thresh[i] = logit - logit_threshold
+    end
+    return df
+end
+
+
+function compute_train_prob_threshold(psms::AbstractDataFrame,
+                                      max_q_value_lightgbm_rescore::Float32)
+    pass_mask = (psms.q_value .<= max_q_value_lightgbm_rescore) .& psms.target
+    if any(pass_mask)
+        return minimum(psms.prob[pass_mask])
+    else
+        return 0.5f0
+    end
+end
+
+
+function prepare_mbr_offset_features!(psms_train::AbstractDataFrame,
+                                      psms_test::AbstractDataFrame,
+                                      non_mbr_probs::AbstractVector{Float32},
+                                      test_idx,
+                                      max_q_value_lightgbm_rescore::Float32)
+    thresh_prob = compute_train_prob_threshold(psms_train, max_q_value_lightgbm_rescore)
+    logit_threshold = safe_logit(thresh_prob)
+
+    set_mbr_base_features!(psms_train, psms_train.prob, logit_threshold)
+
+    if isempty(test_idx)
+        test_probs = psms_test.prob
+    else
+        test_probs = non_mbr_probs[test_idx]
+    end
+    set_mbr_base_features!(psms_test, test_probs, logit_threshold)
+
+    return logit_threshold
+end
+
+
+function apply_mbr_offset!(df::AbstractDataFrame,
+                           predicted_probs::AbstractVector{Float32})
+    adjusted_probs = similar(predicted_probs)
+    base_logits = df.MBR_base_logit
+    delta_store = df.MBR_logit_delta
+    @inbounds for i in eachindex(predicted_probs)
+        pred_logit = safe_logit(predicted_probs[i])
+        base_logit = base_logits[i]
+        delta = pred_logit - base_logit
+        delta_store[i] = delta
+        adjusted_probs[i] = sigmoid(base_logit + delta)
+    end
+    return adjusted_probs
 end
 
 
@@ -251,6 +330,14 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
         fold_models = LightGBMModelVector(undef, length(iter_scheme))
 
         for (itr, num_round) in enumerate(iter_scheme)
+            if match_between_runs && itr == mbr_start_iter
+                prepare_mbr_offset_features!(psms_train,
+                                             psms_test,
+                                             nonMBR_estimates,
+                                             test_idx,
+                                             max_q_value_lightgbm_rescore)
+            end
+
             psms_train_itr = get_training_data_for_iteration!(psms_train,
                                                               itr,
                                                               match_between_runs,
@@ -298,16 +385,30 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
 
             #predict_fold!(bst, psms_train, psms_test, train_feats)
             # **temporary predictions for training only**
-            prob_train[train_idx] = predict(bst, psms_train)
-            psms_train[!,:prob] = prob_train[train_idx]
+            train_pred = predict(bst, psms_train)
+            if match_between_runs && itr >= mbr_start_iter
+                adjusted_train = apply_mbr_offset!(psms_train, train_pred)
+                prob_train[train_idx] = adjusted_train
+                psms_train[!,:prob] = adjusted_train
+            else
+                prob_train[train_idx] = train_pred
+                psms_train[!,:prob] = train_pred
+            end
             get_qvalues!(psms_train.prob, psms_train.target, psms_train.q_value)
 
             # **predict held-out fold**
-            prob_test[test_idx] = predict(bst, psms_test)
-            psms_test[!,:prob] = prob_test[test_idx]
+            test_pred = predict(bst, psms_test)
+            if match_between_runs && itr >= mbr_start_iter
+                adjusted_test = apply_mbr_offset!(psms_test, test_pred)
+                prob_test[test_idx] = adjusted_test
+                psms_test[!,:prob] = adjusted_test
+            else
+                prob_test[test_idx] = test_pred
+                psms_test[!,:prob] = test_pred
+            end
 
             if itr == (mbr_start_iter - 1)
-			    nonMBR_estimates[test_idx] = prob_test[test_idx]
+                            nonMBR_estimates[test_idx] = prob_test[test_idx]
             end
 
             if match_between_runs
@@ -339,6 +440,17 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
         pass_mask = (qvals_prev .<= max_q_value_lightgbm_rescore)
         has_passing_psms = !isempty(pass_mask) && any(pass_mask)
         prob_thresh = has_passing_psms ? minimum(nonMBR_estimates[pass_mask]) : typemax(Float32)
+        psms[!, :MBR_base_prob] .= nonMBR_estimates
+        base_logits = psms[!, :MBR_base_logit]
+        delta_to_thresh = psms[!, :MBR_logit_delta_to_thresh]
+        for i in eachindex(nonMBR_estimates)
+            base_logits[i] = safe_logit(nonMBR_estimates[i])
+        end
+        thresh_prob = (isfinite(prob_thresh) && prob_thresh != typemax(Float32)) ? prob_thresh : 0.5f0
+        logit_thresh = safe_logit(Float32(thresh_prob))
+        for i in eachindex(delta_to_thresh)
+            delta_to_thresh[i] = base_logits[i] - logit_thresh
+        end
         # Label as transfer candidates only those failing the q-value cutoff but
         # whose best matched pair surpassed the passing probability threshold.
         psms[!, :MBR_transfer_candidate] .= .!pass_mask .&
@@ -346,6 +458,10 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
 
         # Use the final MBR probabilities for all precursors
         psms[!, :prob] = MBR_estimates
+        logit_deltas = psms[!, :MBR_logit_delta]
+        for i in eachindex(MBR_estimates)
+            logit_deltas[i] = safe_logit(MBR_estimates[i]) - base_logits[i]
+        end
     else
         psms[!, :prob] = prob_test
     end
@@ -848,6 +964,10 @@ function initialize_prob_group_features!(
         psms[!, :MBR_num_runs]                  = zeros(Int32, n)
         psms[!, :MBR_transfer_candidate]        = falses(n)
         psms[!, :MBR_is_missing]                = falses(n)
+        psms[!, :MBR_base_prob]                 = zeros(Float32, n)
+        psms[!, :MBR_base_logit]                = zeros(Float32, n)
+        psms[!, :MBR_logit_delta_to_thresh]     = zeros(Float32, n)
+        psms[!, :MBR_logit_delta]               = zeros(Float32, n)
     end
 
     return psms
