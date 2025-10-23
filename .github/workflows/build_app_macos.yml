@@ -10,6 +10,10 @@ on:
       - main
       - develop
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version string to build (use v* to enable codesigning)"
+        required: false
   workflow_call:
     outputs:
       version:
@@ -63,6 +67,8 @@ jobs:
       - name: Setup Julia
         uses: julia-actions/setup-julia@v2
         with:
+          # Revert to Julia 1.11 due to PackageCompiler failures when
+          # building the sysimage with Julia 1.12.
           version: '1.11'
           arch: ${{ matrix.arch }}
 
@@ -159,8 +165,7 @@ jobs:
                 "BuildSpecLib"=>"main_BuildSpecLib",
                 "SearchDIA"=>"main_SearchDIA",
                 "convertMzML"=>"main_convertMzML"
-              ],
-              precompile_execution_file="src/build/snoop.jl"
+              ]
             );
           '
 
@@ -202,12 +207,24 @@ jobs:
           chmod +x build/Pioneer_${{ matrix.identifier }}/Applications/Pioneer/pioneer
 
       - name: Codesign & package macOS app (release tags only)
-        if: github.event_name != 'pull_request' && env.MACOS_CERT_P12 != '' && startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name != 'pull_request' && env.MACOS_CERT_P12 != '' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(format('{0}', github.event.inputs.tag), 'v')))
         env:
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
           PKG_SIGN_IDENTITY: ${{ secrets.PKG_SIGN_IDENTITY }}
         run: |
           set -o pipefail
+
+          if [[ -z "${CODESIGN_IDENTITY}" ]]; then
+            echo "Error: CODESIGN_IDENTITY is not set or empty."
+            exit 1
+          fi
+
+          if [[ -z "${PKG_SIGN_IDENTITY}" ]]; then
+            echo "Error: PKG_SIGN_IDENTITY is not set or empty."
+            exit 1
+          fi
+
+          security find-identity -v -p installer || true
 
           # Helper function: retry codesign with exponential backoff
           codesign_with_retry() {
@@ -265,15 +282,30 @@ jobs:
                   --version "$VERSION" \
                   --install-location / PioneerUnsigned.pkg
 
+          echo "Listing signing identities before productsign:"
+          security find-identity -v -p codesigning || true
+
+          echo "About to run productsign at $(date)"
+          ls -l PioneerUnsigned.pkg || true
+
           productsign --sign "$PKG_SIGN_IDENTITY" \
                       PioneerUnsigned.pkg \
                       Pioneer-${{ steps.get_version.outputs.version }}-${{ matrix.identifier }}.pkg
+
+          PROD_SIGN_STATUS=$?
+          echo "productsign exited with status $PROD_SIGN_STATUS at $(date)"
+
+          if [[ "$PROD_SIGN_STATUS" -ne 0 ]]; then
+            echo "productsign failed, dumping pkgutil diagnostics"
+            pkgutil --check-signature PioneerUnsigned.pkg || true
+            exit "$PROD_SIGN_STATUS"
+          fi
 
           rm PioneerUnsigned.pkg
 
 
       - name: Notarize macOS package (release tags only)
-        if: github.event_name != 'pull_request' && env.MACOS_CERT_P12 != '' && startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name != 'pull_request' && env.MACOS_CERT_P12 != '' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(format('{0}', github.event.inputs.tag), 'v')))
         timeout-minutes: 240
         env:
           AC_USERNAME: ${{ secrets.NOTARIZE_APPLE_ID }}
@@ -309,7 +341,7 @@ jobs:
           echo "Notarization successful at $(date)"
 
       - name: Staple notarization ticket (release tags only)
-        if: github.event_name != 'pull_request' && env.MACOS_CERT_P12 != '' && startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name != 'pull_request' && env.MACOS_CERT_P12 != '' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(format('{0}', github.event.inputs.tag), 'v')))
         run: |
           xcrun stapler staple \
             Pioneer-${{ steps.get_version.outputs.version }}-${{ matrix.identifier }}.pkg
@@ -320,7 +352,7 @@ jobs:
           zip -qr ../../../Pioneer-${{ steps.get_version.outputs.version }}-${{ matrix.identifier }}.zip Pioneer
 
       - name: Validate signed pkg (release tags only)
-        if: github.event_name != 'pull_request' && env.MACOS_CERT_P12 != '' && startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name != 'pull_request' && env.MACOS_CERT_P12 != '' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(format('{0}', github.event.inputs.tag), 'v')))
         run: |
           PKG="Pioneer-${{ steps.get_version.outputs.version }}-${{ matrix.identifier }}.pkg"
           echo "Validating pkg with spctl: $PKG"
@@ -342,7 +374,7 @@ jobs:
           path: Pioneer-${{ steps.get_version.outputs.version }}-${{ matrix.identifier }}.zip
 
       - name: Upload signed package (release tags only)
-        if: github.event_name != 'pull_request' && env.MACOS_CERT_P12 != '' && startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name != 'pull_request' && env.MACOS_CERT_P12 != '' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(format('{0}', github.event.inputs.tag), 'v')))
         uses: actions/upload-artifact@v4
         with:
           name: Pioneer-${{ matrix.identifier }}-pkg
