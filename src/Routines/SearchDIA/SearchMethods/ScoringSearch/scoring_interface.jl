@@ -36,6 +36,34 @@ struct FilterResult
     n_passing::Int
 end
 
+function compute_ftr_scale_factor(df::AbstractDataFrame)
+    if !hasproperty(df, :precursor_idx)
+        return 1.0
+    end
+
+    target_mask = hasproperty(df, :target) ? coalesce.(df.target, false) : falses(nrow(df))
+    decoy_mask = if hasproperty(df, :decoy)
+        coalesce.(df.decoy, false)
+    else
+        .!target_mask
+    end
+
+    precursor_idx_col = df.precursor_idx
+    valid_target_mask = target_mask .& .!ismissing.(precursor_idx_col)
+    valid_decoy_mask = decoy_mask .& .!ismissing.(precursor_idx_col)
+
+    unique_target_count = length(unique(precursor_idx_col[valid_target_mask]))
+    unique_decoy_count = length(unique(precursor_idx_col[valid_decoy_mask]))
+
+    if unique_decoy_count == 0
+        return 1.0
+    end
+
+    scale = unique_target_count / unique_decoy_count
+    @debug "Computed FTR scale factor" scale unique_target_count unique_decoy_count
+    return scale
+end
+
 #==========================================================
 Main MBR Filtering Interface
 ==========================================================#
@@ -84,6 +112,7 @@ function apply_mbr_filter!(
     # Extract candidate data once
     candidate_data = merged_df[candidate_mask, :]
     candidate_labels = is_bad_transfer[candidate_mask]
+    ftr_scale_factor = compute_ftr_scale_factor(merged_df)
 
     n_candidates = length(candidate_labels)
     
@@ -98,7 +127,7 @@ function apply_mbr_filter!(
     results = FilterResult[]
     
     for method in methods
-        result = train_and_evaluate(method, candidate_data, candidate_labels, params)
+        result = train_and_evaluate(method, candidate_data, candidate_labels, params, ftr_scale_factor)
         if result !== nothing
             push!(results, result)
         end
@@ -125,7 +154,7 @@ function apply_mbr_filter!(
         # Use is_bad_transfer as numerator flag; denominator counts all candidates at threshold
         candidate_qvals = Vector{Float32}(undef, length(scores))
         # get_ftr! expects placeholders for targets; it accumulates total candidates internally
-        get_ftr!(scores, trues(length(scores)), candidate_labels, candidate_qvals)
+        get_ftr!(scores, trues(length(scores)), candidate_labels, candidate_qvals; scale_factor=ftr_scale_factor)
 
         # Map back to full dataframe rows (only when candidates exist)
         full_qvals = Vector{Union{Missing, Float32}}(missing, nrow(merged_df))
@@ -154,7 +183,7 @@ Method-Specific Training and Evaluation
 
 Train a filtering method and evaluate performance. Returns FilterResult with scores and threshold.
 """
-function train_and_evaluate(method::ThresholdFilter, candidate_data::DataFrame, candidate_labels::AbstractVector{Bool}, params)
+function train_and_evaluate(method::ThresholdFilter, candidate_data::DataFrame, candidate_labels::AbstractVector{Bool}, params, ftr_scale_factor)
     # Handle empty candidate data
     if isempty(candidate_data) || !hasproperty(candidate_data, :prob)
         return nothing
@@ -164,7 +193,8 @@ function train_and_evaluate(method::ThresholdFilter, candidate_data::DataFrame, 
     τ = get_ftr_threshold(
         candidate_data.prob,
         candidate_labels,
-        params.max_MBR_false_transfer_rate
+        params.max_MBR_false_transfer_rate;
+        scale_factor=ftr_scale_factor
     )
 
     # Handle edge case where threshold is infinite (no valid threshold found)
@@ -177,7 +207,7 @@ function train_and_evaluate(method::ThresholdFilter, candidate_data::DataFrame, 
     return FilterResult("Threshold", candidate_data.prob, τ, n_passing)
 end
 
-function train_and_evaluate(method::ProbitFilter, candidate_data::DataFrame, candidate_labels::AbstractVector{Bool}, params)
+function train_and_evaluate(method::ProbitFilter, candidate_data::DataFrame, candidate_labels::AbstractVector{Bool}, params, ftr_scale_factor)
     try
         # Handle empty candidate data
         if isempty(candidate_data)
@@ -203,7 +233,7 @@ function train_and_evaluate(method::ProbitFilter, candidate_data::DataFrame, can
         scores = run_cv_training(method, feature_data, candidate_labels, candidate_data.cv_fold, params)
         
         # Calibrate threshold
-        τ = calibrate_ml_threshold(scores, candidate_labels, Float64(params.max_MBR_false_transfer_rate))
+        τ = calibrate_ml_threshold(scores, candidate_labels, Float64(params.max_MBR_false_transfer_rate), ftr_scale_factor)
         n_passing = sum(scores .>= τ)  # Higher score = better for probit
         
         
@@ -215,7 +245,7 @@ function train_and_evaluate(method::ProbitFilter, candidate_data::DataFrame, can
     end
 end
 
-function train_and_evaluate(method::LightGBMFilter, candidate_data::DataFrame, candidate_labels::AbstractVector{Bool}, params)
+function train_and_evaluate(method::LightGBMFilter, candidate_data::DataFrame, candidate_labels::AbstractVector{Bool}, params, ftr_scale_factor)
     try
         # Handle empty candidate data
         if isempty(candidate_data)
@@ -241,7 +271,7 @@ function train_and_evaluate(method::LightGBMFilter, candidate_data::DataFrame, c
         scores = run_cv_training(method, feature_data, candidate_labels, candidate_data.cv_fold, params)
 
         # Calibrate threshold
-        τ = calibrate_ml_threshold(scores, candidate_labels, Float64(params.max_MBR_false_transfer_rate))
+        τ = calibrate_ml_threshold(scores, candidate_labels, Float64(params.max_MBR_false_transfer_rate), ftr_scale_factor)
         n_passing = sum(scores .>= τ)  # Higher score = better for LightGBM
 
 
@@ -463,9 +493,9 @@ function prepare_mbr_features(df::DataFrame)
     return X, feature_names
 end
 
-function calibrate_ml_threshold(scores::AbstractVector, is_bad_transfer::AbstractVector{Bool}, target_ftr::Float64)
+function calibrate_ml_threshold(scores::AbstractVector, is_bad_transfer::AbstractVector{Bool}, target_ftr::Float64, scale_factor::Real=1.0)
     """Find score threshold that achieves target FTR."""
-    return get_ftr_threshold(scores, is_bad_transfer, target_ftr)
+    return get_ftr_threshold(scores, is_bad_transfer, target_ftr; scale_factor=scale_factor)
 end
 
 

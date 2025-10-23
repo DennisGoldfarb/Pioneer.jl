@@ -15,7 +15,7 @@ match-between-runs workflows using transfer decoys.
 Return the minimum score threshold `τ` such that
 
 ```
-FTR(τ) = (# of transfer decoys with score ≥ τ) / (# of targets with score ≥ τ)
+FTR(τ) = scale_factor × (# of transfer decoys with score ≥ τ) / (# of targets with score ≥ τ)
 ```
 
 is less than or equal to `alpha`.  The input vectors must be of equal
@@ -24,7 +24,8 @@ length and correspond element-wise to candidate precursor–run pairs.
 function get_ftr_threshold(scores::AbstractVector{U},
                            is_bad_transfer::AbstractVector{Bool},
                            alpha::Real; doSort::Bool = true,
-                           mask::Union{Nothing,AbstractVector{Bool}} = nothing) where {U<:Real}
+                           mask::Union{Nothing,AbstractVector{Bool}} = nothing,
+                           scale_factor::Real = 1) where {U<:Real}
     @assert length(scores) == length(is_bad_transfer)
 
     if mask === nothing
@@ -40,13 +41,14 @@ function get_ftr_threshold(scores::AbstractVector{U},
     end
 
     num_transfers = 0
-    num_bad_transfers = 0
+    num_bad_transfers = 0.0
+    scale = Float64(scale_factor)
     τ = maximum(scores)
     best_count = 0
     for idx in order
         num_transfers += 1
-        num_bad_transfers += is_bad_transfer[idx] ? 1 : 0
-        
+        num_bad_transfers += is_bad_transfer[idx] ? scale : 0.0
+
         if (num_transfers > 0) && ((num_bad_transfers / num_transfers) <= alpha)
             τ = scores[idx]
             best_count = num_transfers
@@ -63,14 +65,15 @@ end
              ftrs::AbstractVector{T}; doSort::Bool = true,
              mask::Union{Nothing,AbstractVector{Bool}} = nothing) where {U<:Real,T<:Real}
 
-Compute the empirical FTR curve.  `ftrs[i]` contains the FTR for the
-candidate at `scores[i]`.
+Compute the empirical FTR curve using the scaled transfer counts.
+`ftrs[i]` contains the FTR for the candidate at `scores[i]`.
 """
 function get_ftr!(scores::AbstractVector{U},
                   is_target::AbstractVector{Bool},
                   is_transfer_decoy::AbstractVector{Bool},
                   ftrs::AbstractVector{T}; doSort::Bool = true,
-                  mask::Union{Nothing,AbstractVector{Bool}} = nothing) where {U<:Real,T<:Real}
+                  mask::Union{Nothing,AbstractVector{Bool}} = nothing,
+                  scale_factor::Real = 1) where {U<:Real,T<:Real}
     @assert length(scores) == length(is_target) == length(is_transfer_decoy) == length(ftrs)
 
     if mask === nothing
@@ -81,10 +84,11 @@ function get_ftr!(scores::AbstractVector{U},
     end
 
     target_cum = 0
-    transfer_cum = 0
+    transfer_cum = 0.0
+    scale = Float64(scale_factor)
     for idx in order
         target_cum += 1  # Count ALL candidates at this threshold level
-        transfer_cum += is_transfer_decoy[idx] ? 1 : 0
+        transfer_cum += is_transfer_decoy[idx] ? scale : 0.0
         ftrs[idx] = target_cum > 0 ? (transfer_cum / target_cum) : Inf
     end
     return ftrs

@@ -105,6 +105,8 @@ function assign_random_target_decoy_pairs!(psms::DataFrame)
     for (irt_bin_idx, sub_psms) in pairs(irt_bin_groups)
         last_pair_id = assignPairIds!(sub_psms, last_pair_id)
     end
+
+    print_pairing_summary(psms)
 end
 
 
@@ -113,6 +115,52 @@ function assignPairIds!(psms::AbstractDataFrame, last_pair_id::UInt32)
         psms.target, psms.decoy, psms.precursor_idx, psms.irt_bin_idx, last_pair_id
     )
     return last_pair_id
+end
+
+function print_pairing_summary(psms::AbstractDataFrame)
+    if nrow(psms) == 0
+        println("Pairing summary: targets=0, decoys=0, target-target pairs=0, target-decoy pairs=0, decoy-decoy pairs=0, unpaired targets=0, unpaired decoys=0")
+        println()
+        return
+    end
+
+    target_mask = coalesce.(psms.target, false)
+    decoy_mask = coalesce.(psms.decoy, false)
+    total_targets = length(unique(psms.precursor_idx[target_mask]))
+    total_decoys = length(unique(psms.precursor_idx[decoy_mask]))
+
+    pair_groups = groupby(psms, :pair_id)
+    target_target_pairs = 0
+    target_decoy_pairs = 0
+    decoy_decoy_pairs = 0
+    unpaired_targets = 0
+    unpaired_decoys = 0
+
+    for group in pair_groups
+        group_target_mask = coalesce.(collect(group.target), false)
+        group_decoy_mask = coalesce.(collect(group.decoy), false)
+
+        unique_target_precursors = unique(group.precursor_idx[group_target_mask])
+        unique_decoy_precursors = unique(group.precursor_idx[group_decoy_mask])
+
+        n_targets = length(unique_target_precursors)
+        n_decoys = length(unique_decoy_precursors)
+
+        paired = min(n_targets, n_decoys)
+        target_decoy_pairs += paired
+
+        remaining_targets = n_targets - paired
+        remaining_decoys = n_decoys - paired
+
+        target_target_pairs += remaining_targets ÷ 2
+        unpaired_targets += remaining_targets % 2
+
+        decoy_decoy_pairs += remaining_decoys ÷ 2
+        unpaired_decoys += remaining_decoys % 2
+    end
+
+    println("Pairing summary: targets=$(total_targets), decoys=$(total_decoys), target-target pairs=$(target_target_pairs), target-decoy pairs=$(target_decoy_pairs), decoy-decoy pairs=$(decoy_decoy_pairs), unpaired targets=$(unpaired_targets), unpaired decoys=$(unpaired_decoys)")
+    println()
 end
 
 function assign_pair_ids(
