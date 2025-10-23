@@ -359,6 +359,10 @@ function process_file!(
 
         # Plot charge states
         push!(results.quad_data_plots, plot_charge_distributions(total_psms, results, getFileIdToName(getMSData(search_context), ms_file_idx)))
+
+        params_fit = fitted_model.params
+        fname = getFileIdToName(getMSData(search_context), ms_file_idx)
+        @user_info "Quad fit parameters for $fname: al=$(params_fit.al), ar=$(params_fit.ar), bl=$(params_fit.bl), br=$(params_fit.br)\n"
         
         # Fit quad model
         window_width = parse(Float64, first(window_widths))

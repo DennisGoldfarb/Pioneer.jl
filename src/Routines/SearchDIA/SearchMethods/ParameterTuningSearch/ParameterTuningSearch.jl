@@ -163,6 +163,15 @@ function set_rt_to_irt_model!(
     
     #parsed_fname = getParsedFileName(search_context, ms_file_idx)
     getIrtErrors(search_context)[ms_file_idx] = model[4] * params.irt_tol_sd
+
+    fname = getFileIdToName(getMSData(search_context), ms_file_idx)
+    if model[1] isa SplineRtConversionModel
+        spline = model[1].model
+        coeffs = collect(spline.coeffs)
+        @user_info "RT fit parameters for $fname: degree=$(spline.degree), knots=$(length(coeffs)), first=$(spline.first), last=$(spline.last), bin_width=$(spline.bin_width), coeffs=$(coeffs)\n"
+    else
+        @user_info "RT fit parameters for $fname: IdentityModel (pass-through retention time mapping)"
+    end
 end
 
 

@@ -257,6 +257,8 @@ function process_file!(
             )
 
             fname = getFileIdToName(getMSData(search_context), ms_file_idx)
+
+            @user_info "NCE fit parameters for $fname: breakpoint=$(nce_model.breakpoint), left_slope=$(nce_model.left_slope), left_intercept=$(nce_model.left_intercept), right_value=$(nce_model.right_value), charge_slope=$(nce_model.charge_slope)\n"
             # Create the main plot
             p = plot(
                 title = "NCE calibration for $fname",
