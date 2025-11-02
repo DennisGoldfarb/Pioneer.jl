@@ -43,6 +43,7 @@ function perform_second_pass_search(
     search_context::SearchContext,
     params::SecondPassSearchParameters,
     ms_file_idx::Int64,
+    iteration_hist::HuberIterationHistogram,
     ::MS2CHROM
 )
     thread_tasks = partition_scans(spectra, Threads.nthreads())
@@ -60,6 +61,7 @@ function perform_second_pass_search(
                 search_data,
                 params,
                 ms_file_idx,
+                iteration_hist,
                 MS2CHROM()
             )
         end
@@ -88,6 +90,7 @@ function perform_second_pass_search(
     ms_file_idx::Int64,
     precursors_passing::Set{UInt32},
     isotopes_dict::UnorderedDictionary{UInt32, Vector{Isotope{T}}},
+    iteration_hist::HuberIterationHistogram,
     ::MS1CHROM
 ) where {T<:AbstractFloat}
     thread_tasks = partition_scans(spectra, Threads.nthreads(), ms_order_select = 1)
@@ -106,6 +109,7 @@ function perform_second_pass_search(
                 ms_file_idx,
                 precursors_passing,
                 isotopes_dict,
+                iteration_hist,
                 MS1CHROM()
             )
         end
@@ -150,6 +154,7 @@ function process_scans!(
     search_data::SearchDataStructures,
     params::SecondPassSearchParameters,
     ms_file_idx::Int64,
+    iteration_hist::HuberIterationHistogram,
     ::MS2CHROM
 )
     # Get working arrays
@@ -256,7 +261,7 @@ function process_scans!(
         
         # Solve deconvolution problem
         initResiduals!(residuals, Hs, weights)
-        solveHuber!(
+        huber_iters = solveHuber!(
             Hs,
             residuals,
             weights,
@@ -270,6 +275,7 @@ function process_scans!(
             params.max_diff,
             params.reg_type
         )
+        record_huber_iterations!(iteration_hist, huber_iters)
 
         # Update precursor weights
         update_precursor_weights!(search_data, weights, precursor_weights)
@@ -338,6 +344,7 @@ function process_scans!(
     ms_file_idx::Int64,
     precursors_passing::Set{UInt32},
     isotopes_dict::UnorderedDictionary{UInt32, Vector{Isotope{T}}},
+    iteration_hist::HuberIterationHistogram,
     ::MS1CHROM
 ) where {T<:AbstractFloat}
     #######
@@ -518,7 +525,7 @@ function process_scans!(
 
             # Solve deconvolution
             initResiduals!(residuals, Hs, weights)
-            solveHuber!(
+            huber_iters = solveHuber!(
                 Hs,
                 residuals,
                 weights,
@@ -532,6 +539,7 @@ function process_scans!(
                 params.max_diff,
                 params.ms1_reg_type
             )
+            record_huber_iterations!(iteration_hist, huber_iters)
 
             # NEW: Distribute grouped coefficients back to individual precursors
             distribute_ms1_coefficients!(

@@ -37,6 +37,8 @@ Results container for chromatogram integration search.
 """
 struct IntegrateChromatogramSearchResults <: SearchResults
     psms::Base.Ref{DataFrame}  # Chromatogram data per file
+    huber_iterations_ms2::Base.Ref{HuberIterationHistogram}
+    huber_iterations_ms1::Base.Ref{HuberIterationHistogram}
 end
 
 """
@@ -164,7 +166,9 @@ get_parameters(::IntegrateChromatogramSearch, params::Any) = IntegrateChromatogr
 
 function init_search_results(::IntegrateChromatogramSearchParameters, search_context::SearchContext)
     return IntegrateChromatogramSearchResults(
-        Ref(DataFrame())
+        Ref(DataFrame()),
+        Ref(HuberIterationHistogram()),
+        Ref(HuberIterationHistogram())
     )
 end
 
@@ -233,6 +237,9 @@ function process_file!(
             passing_psms[!, :ms1_best_scan] = zeros(UInt32, nrow(passing_psms))
             passing_psms[!, :ms1_points_integrated] = zeros(UInt32, nrow(passing_psms))
         end
+        ms2_iteration_hist = HuberIterationHistogram()
+        ms1_iteration_hist = HuberIterationHistogram()
+
         # Extract chromatograms for all passing PSMs
         # Builds chromatograms using parallel processing across scan ranges
         chromatograms = extract_chromatograms(
@@ -242,6 +249,7 @@ function process_file!(
             search_context,
             params,
             ms_file_idx,
+            ms2_iteration_hist,
             MS2CHROM(),
         )
         #sort!(chromatograms, :rt)
@@ -256,6 +264,7 @@ function process_file!(
                 search_context,
                 params,
                 ms_file_idx,
+                ms1_iteration_hist,
                 MS1CHROM(),
             )
             sort!(ms1_chromatograms, :rt)
@@ -322,6 +331,8 @@ function process_file!(
 
         # Store processed PSMs in results
         results.psms[] = passing_psms
+        results.huber_iterations_ms2[] = ms2_iteration_hist
+        results.huber_iterations_ms1[] = ms1_iteration_hist
     catch e
         # Handle failures gracefully using helper function
         handle_search_error!(search_context, ms_file_idx, "IntegrateChromatogramSearch", e, createFallbackResults!, results)
@@ -350,6 +361,8 @@ function createFallbackResults!(results::IntegrateChromatogramSearchResults, ms_
     
     # Set empty results (don't append since this file failed)
     results.psms[] = empty_psms
+    results.huber_iterations_ms2[] = HuberIterationHistogram()
+    results.huber_iterations_ms1[] = HuberIterationHistogram()
 end
 
 function process_search_results!(
@@ -367,6 +380,12 @@ function process_search_results!(
 
     try
         passing_psms = results.psms[]
+        parsed_fname = getFileIdToName(getMSData(search_context), ms_file_idx)
+        hist_dir = joinpath(getDataOutDir(search_context), "temp_data", "chromatogram_integration_huber_iterations")
+        ms2_hist_counts = snapshot(results.huber_iterations_ms2[])
+        write_huber_histogram(joinpath(hist_dir, parsed_fname * "_ms2.tsv"), ms2_hist_counts)
+        ms1_hist_counts = snapshot(results.huber_iterations_ms1[])
+        write_huber_histogram(joinpath(hist_dir, parsed_fname * "_ms1.tsv"), ms1_hist_counts)
 
         # Skip processing if no PSMs (empty DataFrame from failed search)
         if nrow(passing_psms) == 0 || ncol(passing_psms) == 0
@@ -374,7 +393,6 @@ function process_search_results!(
             return nothing
         end
 
-        parsed_fname = getFileIdToName(getMSData(search_context), ms_file_idx)
         # Process final PSMs
         process_final_psms!(
             passing_psms,
@@ -393,6 +411,8 @@ end
 
 function reset_results!(results::IntegrateChromatogramSearchResults)
     results.psms[] = DataFrame()
+    results.huber_iterations_ms2[] = HuberIterationHistogram()
+    results.huber_iterations_ms1[] = HuberIterationHistogram()
     GC.gc()
     return nothing
 end
