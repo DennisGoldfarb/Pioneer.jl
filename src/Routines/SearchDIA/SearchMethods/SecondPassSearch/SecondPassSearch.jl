@@ -353,9 +353,9 @@ function process_file!(
                     search_context,
                     params,
                     ms_file_idx,
-                    ms1_iteration_hist,
                     precursors_passing,
                     isotopes_dict,
+                    ms1_iteration_hist,
                     MS1CHROM()
                 )
                 pair_idx = getPairIdx(precursors);
