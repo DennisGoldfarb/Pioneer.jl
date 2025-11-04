@@ -49,14 +49,46 @@ using InlineStrings
 using HTTP
 
 
-# Silence LightGBM initialization logging so the module loads cleanly.
+# Dedicated logger that suppresses LightGBM's startup banner while delegating
+# all other messages to the standard console logger. This ensures Pioneer loads
+# quietly even if LightGBM emits informational messages about library discovery.
+const LIGHTGBM_INFO_BANNER = "lib_lightgbm found in system dirs!"
+
+struct PioneerConsoleLogger{L<:AbstractLogger} <: AbstractLogger
+    logger::L
+end
+
+PioneerConsoleLogger() = PioneerConsoleLogger(ConsoleLogger())
+
+Logging.min_enabled_level(logger::PioneerConsoleLogger) =
+    Logging.min_enabled_level(logger.logger)
+
+Logging.shouldlog(logger::PioneerConsoleLogger, level, _module, group, id, file, line) =
+    Logging.shouldlog(logger.logger, level, _module, group, id, file, line)
+
+Logging.catch_exceptions(logger::PioneerConsoleLogger) =
+    Logging.catch_exceptions(logger.logger)
+
+Logging.isdisabled(logger::PioneerConsoleLogger) =
+    Logging.isdisabled(logger.logger)
+
+Logging.handle_message(logger::PioneerConsoleLogger, level, message, _module, group, id, file, line; kwargs...) =
+    if level == Logging.Info && occursin(LIGHTGBM_INFO_BANNER, string(message))
+        return
+    end
+    Logging.handle_message(logger.logger, level, message, _module, group, id, file, line; kwargs...)
+
+
+# Install the filtered console logger before loading LightGBM so its
+# initialization output is also filtered when the package is imported.
+const PIONEER_LOGGER = PioneerConsoleLogger()
+global_logger(PIONEER_LOGGER)
+
+
+# Silence LightGBM initialization logging entirely while importing the module.
 Logging.with_logger(NullLogger()) do
     @eval using LightGBM
 end
-
-
-# Simple console logger - detailed logging handled by custom logging system
-global_logger(ConsoleLogger())
 
 
 """
