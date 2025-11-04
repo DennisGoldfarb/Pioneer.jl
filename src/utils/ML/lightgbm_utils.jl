@@ -1,9 +1,9 @@
 # Utility helpers for working with LightGBM directly through its native API.
 
 struct LightGBMModel
-    booster::Union{LightGBM.LGBMClassification, Nothing}
+    booster::Union{Nothing, Any}          # hold the booster; no LightGBM type here
     features::Vector{Symbol}
-    constant_prediction::Union{Float32, Nothing}
+    constant_prediction::Union{Nothing, Float32}
 end
 
 const LightGBMModelVector = Vector{LightGBMModel}
@@ -111,7 +111,7 @@ function _prepare_labels(labels)
     return label_vec
 end
 
-function fit_lightgbm_model(model::LightGBM.LGBMClassification,
+function fit_lightgbm_model(model,
                             feature_data::AbstractDataFrame,
                             labels::AbstractVector;
                             positive_label = true)

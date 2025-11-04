@@ -40,7 +40,6 @@ using Random
 import RobustModels: rlm, TauEstimator, TukeyLoss
 import StatsModels: @formula
 using StaticArrays, StatsBase, SpecialFunctions, Statistics, SparseArrays
-using LightGBM
 import MLJModelInterface: fit, predict
 using KernelDensity
 using FastGaussQuadrature
@@ -479,6 +478,32 @@ end
 # Export the macros for use throughout the codebase
 export @user_info, @user_warn, @user_error, @user_print, @debug_l1, @debug_l2, @debug_l3, @trace
 
+# Workaround to load lightGBM without getting a message about finding the libraries
+const _lgbm_loaded = Ref(false)
+
+function _load_lightgbm_quiet!()
+    if !_lgbm_loaded[]
+        # quiet load
+        let prev = global_logger()
+            try
+                global_logger(NullLogger())
+                redirect_stdout(devnull) do
+                    redirect_stderr(devnull) do
+                        Base.require(@__MODULE__, :LightGBM)
+                    end
+                end
+            finally
+                global_logger(prev)
+            end
+        end
+        # make LightGBM name available in Pioneer
+        @eval import LightGBM
+        # include AFTER LightGBM is present
+        include(joinpath(@__DIR__, "utils", "ML", "lightgbm_utils.jl"))
+        _lgbm_loaded[] = true
+    end
+end
+
 #Set Seed 
 Random.seed!(1776);
 
@@ -533,6 +558,8 @@ const KOINA_URLS = Dict(
 function __init__()
     # Don't initialize gr() immediately - let it be initialized when first used
     ENV["PLOTS_DEFAULT_BACKEND"] = "GR"
+    # Pre-load quietly so the compiled app never shows the init banner
+    _load_lightgbm_quiet!()
 end
 
 export SearchDIA, BuildSpecLib, GetSearchParams, GetBuildLibParams, convertMzML, # ParseSpecLib, GetParseSpecLibParams, # COMMENTED OUT: ParseSpecLib has loading issues
