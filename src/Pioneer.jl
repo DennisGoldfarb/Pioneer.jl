@@ -54,7 +54,7 @@ using HTTP
 # logger that would intercept every log message.
 const LightGBM = begin
     Logging.with_logger(NullLogger()) do
-        Base.require(:LightGBM)
+        Base.require(Pioneer, :LightGBM)
     end
 end
 
