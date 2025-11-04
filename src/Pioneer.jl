@@ -40,7 +40,6 @@ using Random
 import RobustModels: rlm, TauEstimator, TukeyLoss
 import StatsModels: @formula
 using StaticArrays, StatsBase, SpecialFunctions, Statistics, SparseArrays
-using LightGBM
 import MLJModelInterface: fit, predict
 using KernelDensity
 using FastGaussQuadrature
@@ -48,6 +47,12 @@ using LaTeXStrings, Printf
 using Dates
 using InlineStrings
 using HTTP
+
+
+# Silence LightGBM initialization logging so the module loads cleanly.
+Logging.with_logger(NullLogger()) do
+    @eval using LightGBM
+end
 
 
 # Simple console logger - detailed logging handled by custom logging system
