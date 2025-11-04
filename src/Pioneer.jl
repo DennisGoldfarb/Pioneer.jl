@@ -40,7 +40,6 @@ using Random
 import RobustModels: rlm, TauEstimator, TukeyLoss
 import StatsModels: @formula
 using StaticArrays, StatsBase, SpecialFunctions, Statistics, SparseArrays
-using LightGBM
 import MLJModelInterface: fit, predict
 using KernelDensity
 using FastGaussQuadrature
@@ -49,6 +48,14 @@ using Dates
 using InlineStrings
 using HTTP
 
+# Silence all logs originating from LightGBM during import
+let old = Base.CoreLogging.disable_logging(Logging.Error)
+    try
+        @eval using LightGBM
+    finally
+        Base.CoreLogging.disable_logging(old)  # restore previous threshold
+    end
+end
 
 # Simple console logger - detailed logging handled by custom logging system
 global_logger(ConsoleLogger())
