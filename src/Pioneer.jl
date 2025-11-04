@@ -52,9 +52,11 @@ using HTTP
 # Load LightGBM once under a `NullLogger` so its startup banner does not reach
 # the console. Keeping a direct module reference avoids introducing a custom
 # logger that would intercept every log message.
-const LightGBM = begin
-    Logging.with_logger(NullLogger()) do
+const LightGBM = let previous_logger = Logging.global_logger(NullLogger())
+    try
         Base.require(Pioneer, :LightGBM)
+    finally
+        Logging.global_logger(previous_logger)
     end
 end
 
