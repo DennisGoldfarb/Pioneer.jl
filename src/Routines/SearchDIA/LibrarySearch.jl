@@ -139,7 +139,8 @@ function getPSMS(
             Float32(rt_to_irt_spline(getRetentionTime(spectra, scan_idx))),
             Float32(irt_tol),
             (getLowMz(spectra, scan_idx), getHighMz(spectra, scan_idx));
-            isotope_err_bounds = getIsotopeErrBounds(params)
+            isotope_err_bounds = getIsotopeErrBounds(params),
+            min_fraction_transmitted = getMinFractionTransmitted(params),
         )
 
         ion_idx < 2 && continue
