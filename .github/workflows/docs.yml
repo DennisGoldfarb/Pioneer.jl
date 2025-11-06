@@ -42,6 +42,8 @@ jobs:
         run: |
           using Pkg
           Pkg.develop(path=pwd())
+          Pkg.develop(PackageSpec(url="https://github.com/DennisGoldfarb/LightGBM.jl", rev="codex/add-log_library_discovery-constant"))
+          Pkg.resolve()
           Pkg.instantiate()
 
       - name: Build docs
