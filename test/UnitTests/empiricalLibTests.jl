@@ -273,33 +273,19 @@ end
         @test rev_seq == "DITPEPE"
         @test rev_mods == "(1,n,mymod-nterm)(3,T,Phospho)(6,P,mymod)(7,E,Acetyl)(7,c,mymod-cterm)"
     end
-    #=
-    @testset "shuffleSequence" begin
-        using Random
-        # Ensure deterministic results for testing
-        Random.seed!(1844)
-        
-        # Test with terminal modifications
+    @testset "mutateTerminalSequence" begin
         sequence = "PEPTIDE"
-        mods = "(1,n,mymod-nterm)(1,P,mymod)(4,T,Phospho)(7,E,Acetyl)(7,c,mymod-cterm)"
-        shuffled_seq, shuffled_mods = shuffleSequence(sequence, mods)
-        
-        # With this seed, sequence should be "DPTPIEE"
-        @test shuffled_seq == "DPTPIEE"
-        @test shuffled_mods == "(1,n,mymod-nterm)(2,P,mymod)(3,T,Phospho)(7,E,Acetyl)(7,c,mymod-cterm)"
-        
-        # Reset seed for consistency
-        Random.seed!(1844)
-        
-        # Test with no modifications
-        sequence = "ABCDEF"
-        mods = ""
-        shuffled_seq, shuffled_mods = shuffleSequence(sequence, mods)
-        @test length(shuffled_seq) == length(sequence)
-        @test last(shuffled_seq) == last(sequence)  # Last character should be preserved
-        @test shuffled_mods == ""  # No mods
+        mods = "(1,n,Acetyl)(1,P,mymod)(4,T,Phospho)(7,E,Acetyl)(7,c,cterm)"
+        decoy_seq, decoy_mods = mutateTerminalSequence(sequence, mods)
+        @test decoy_seq == "PDPTIEE"
+        @test decoy_mods == "(1,n,Acetyl)(2,P,mymod)(4,T,Phospho)(7,E,Acetyl)(7,c,cterm)"
+
+        sequence = "PC(cam)PTIDE"
+        mods = "(2,C,Carbamidomethyl)"
+        decoy_seq, decoy_mods = mutateTerminalSequence(sequence, mods)
+        @test decoy_seq == "PC(cam)LTIEE"
+        @test decoy_mods == "(2,L,Carbamidomethyl)"
     end
-    =#
 
     @testset "get_aa_masses!" begin
         # Test for a simple tripeptide

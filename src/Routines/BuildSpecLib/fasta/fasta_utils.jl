@@ -80,6 +80,219 @@ function in(seq_charge::Tuple{String, UInt8}, pss::PeptideSequenceSet)
     return (replace(first(seq_charge), 'I' => 'L'), last(seq_charge)) ∈ getSeqSet(pss)
 end
 
+const TERMINAL_MUTATION_SOURCE = collect("GAVLIFMPWSCTYHKRQEND")
+const TERMINAL_MUTATION_TARGET = collect("LLLVVLLLLTSSSSLLNDQE")
+const TERMINAL_MUTATION_MAP = Dict(zip(TERMINAL_MUTATION_SOURCE, TERMINAL_MUTATION_TARGET))
+
+struct MutationContext
+    modified_positions::Set{Int}
+    n_term_modified::Bool
+    c_term_modified::Bool
+end
+
+MutationContext() = MutationContext(Set{Int}(), false, false)
+
+function _add_mods!(ctx::MutationContext, mods::Union{Missing,Vector{PeptideMod}})
+    if mods === missing
+        return ctx
+    end
+    for mod in mods
+        aa = getAA(mod)
+        if aa == 'n'
+            ctx.n_term_modified = true
+        elseif aa == 'c'
+            ctx.c_term_modified = true
+        else
+            push!(ctx.modified_positions, Int(getPosition(mod)))
+        end
+    end
+    return ctx
+end
+
+function MutationContext(structural_mods::Union{Missing,Vector{PeptideMod}}, isotopic_mods::Union{Missing,Vector{PeptideMod}})
+    ctx = MutationContext()
+    _add_mods!(ctx, structural_mods)
+    _add_mods!(ctx, isotopic_mods)
+    return ctx
+end
+
+struct MutationCandidate
+    idx::Int
+    force::Bool
+end
+
+function _candidate_order(side::Symbol, n::Int, ctx::MutationContext)
+    base = side === :N ? 2 : n - 1
+    fallback = side === :N ? 3 : n - 2
+    terminal = side === :N ? 1 : n
+
+    candidates = MutationCandidate[
+        MutationCandidate(base, false),
+        MutationCandidate(fallback, false),
+        MutationCandidate(terminal, false),
+    ]
+
+    terminal_modified = if side === :N
+        ctx.n_term_modified || (terminal >= 1 && terminal <= n && terminal in ctx.modified_positions)
+    else
+        ctx.c_term_modified || (terminal >= 1 && terminal <= n && terminal in ctx.modified_positions)
+    end
+
+    if terminal_modified && base >= 1 && base <= n
+        push!(candidates, MutationCandidate(base, true))
+    end
+
+    filtered = MutationCandidate[]
+    for cand in candidates
+        if cand.idx < 1 || cand.idx > n
+            continue
+        end
+        push!(filtered, cand)
+    end
+    return filtered
+end
+
+function _apply_candidate(seq_chars::Vector{Char}, cand::MutationCandidate, ctx::MutationContext)
+    idx = cand.idx
+    if idx < 1 || idx > length(seq_chars)
+        return nothing
+    end
+    if idx in ctx.modified_positions && !cand.force
+        return nothing
+    end
+    aa = seq_chars[idx]
+    new_aa = get(TERMINAL_MUTATION_MAP, aa, nothing)
+    if new_aa === nothing || new_aa == aa
+        return nothing
+    end
+    mutated = copy(seq_chars)
+    mutated[idx] = new_aa
+    return mutated, Dict(idx => new_aa)
+end
+
+function _merge_mutations(m1::Dict{Int,Char}, m2::Dict{Int,Char})
+    if isempty(m1)
+        return copy(m2)
+    end
+    merged = copy(m1)
+    for (k, v) in m2
+        merged[k] = v
+    end
+    return merged
+end
+
+function generate_terminal_decoy(
+    sequence::AbstractString,
+    ctx::MutationContext,
+    exists_fn::Function;
+    allow_skip_c_term::Bool = true,
+)
+    n = length(sequence)
+    if n == 0
+        return nothing
+    end
+    seq_chars = collect(sequence)
+    n_candidates = _candidate_order(:N, n, ctx)
+    c_candidates = _candidate_order(:C, n, ctx)
+    if allow_skip_c_term && isempty(c_candidates)
+        c_candidates = [MutationCandidate(0, true)]
+    elseif allow_skip_c_term
+        push!(c_candidates, MutationCandidate(0, true))
+    end
+
+    for n_cand in n_candidates
+        n_result = _apply_candidate(seq_chars, n_cand, ctx)
+        if n_result === nothing
+            continue
+        end
+        n_chars, n_mut = n_result
+        for c_cand in c_candidates
+            if c_cand.idx != 0 && c_cand.idx == n_cand.idx
+                continue
+            end
+            if c_cand.idx == 0
+                final_chars = n_chars
+                final_mut = copy(n_mut)
+            else
+                c_result = _apply_candidate(n_chars, c_cand, ctx)
+                if c_result === nothing
+                    continue
+                end
+                final_chars, c_mut = c_result
+                final_mut = _merge_mutations(n_mut, c_mut)
+            end
+            if isempty(final_mut)
+                continue
+            end
+            final_seq = String(final_chars)
+            if exists_fn(final_seq)
+                continue
+            end
+            return final_seq, final_mut
+        end
+    end
+    return nothing
+end
+
+function update_mods(mods::Union{Missing,Vector{PeptideMod}}, mutated_positions::Dict{Int,Char})
+    if mods === missing || isempty(mods)
+        return mods
+    end
+    updated = Vector{PeptideMod}(undef, length(mods))
+    changed = false
+    for (idx, mod) in enumerate(mods)
+        aa = getAA(mod)
+        pos = Int(getPosition(mod))
+        if (aa == 'n') || (aa == 'c') || !(pos in mutated_positions)
+            updated[idx] = mod
+        else
+            updated[idx] = PeptideMod(mod.position, mutated_positions[pos], mod.mod_name)
+            changed = true
+        end
+    end
+    return changed ? sort!(updated) : mods
+end
+
+const MOD_STRING_REGEX = r"\((\d+),([A-Za-z]),([^,\)]+)\)"
+
+function mutation_context_from_string(mod_string::AbstractString)
+    ctx = MutationContext()
+    if isempty(mod_string)
+        return ctx
+    end
+    for m in eachmatch(MOD_STRING_REGEX, mod_string)
+        pos = parse(Int, m.captures[1])
+        aa = first(m.captures[2])
+        if aa == 'n'
+            ctx.n_term_modified = true
+        elseif aa == 'c'
+            ctx.c_term_modified = true
+        else
+            push!(ctx.modified_positions, pos)
+        end
+    end
+    return ctx
+end
+
+function update_mod_string(mod_string::AbstractString, mutated_positions::Dict{Int,Char})
+    if isempty(mod_string) || isempty(mutated_positions)
+        return mod_string
+    end
+    parts = String[]
+    last_index = 1
+    for m in eachmatch(MOD_STRING_REGEX, mod_string)
+        push!(parts, mod_string[last_index:m.offset-1])
+        pos = parse(Int, m.captures[1])
+        aa = first(m.captures[2])
+        name = m.captures[3]
+        new_aa = (aa == 'n' || aa == 'c') ? aa : get(mutated_positions, pos, aa)
+        push!(parts, "($(pos),$(new_aa),$(name))")
+        last_index = m.offset + length(m.match)
+    end
+    push!(parts, mod_string[last_index:end])
+    return join(parts)
+end
+
 """
     add_entrapment_sequences(
         target_fasta_entries::Vector{FastaEntry}, 
@@ -672,162 +885,75 @@ end
 """
     add_decoy_sequences(target_fasta_entries::Vector{FastaEntry}; max_shuffle_attempts::Int64 = 20)
 
-Creates decoy sequences for target peptides by reversing all but the last amino acid.
-If reversal creates a duplicate sequence, falls back to shuffling.
+Create terminal-mutation decoys by mutating residues adjacent to the peptide termini.
 
 # Parameters
-- `target_fasta_entries::Vector{FastaEntry}`: Vector of target peptide entries to generate decoys for
-- `max_shuffle_attempts::Int64`: Maximum attempts to generate unique shuffled sequence when reversal creates a duplicate (default: 20)
+- `target_fasta_entries::Vector{FastaEntry}`: Target peptide entries to generate decoys for
+- `max_shuffle_attempts::Int64`: (Unused; maintained for API compatibility)
 
 # Returns
 - `Vector{FastaEntry}`: Sorted vector containing both original entries and their decoys
 
 # Details
 For each target peptide:
-1. Reverses the sequence keeping the last amino acid fixed
-2. If the resulting sequence already exists, tries shuffling instead
-3. Updates modification positions to match the reversed/shuffled sequence
-4. Sets is_decoy=true for decoy entries
-5. Maintains original metadata (base_pep_id, entrapment_group_id) for tracking
-6. Returns a combined list of target and decoy sequences, sorted by sequence
+1. Mutates the residue adjacent to the N-terminus using the predefined substitution map
+2. Mutates the residue adjacent to the C-terminus using the same map (with fallbacks when modified)
+3. Avoids residues with modifications unless required by the fallback rules
+4. Skips candidate sequences that already exist in the target set
+5. Updates modification annotations when a mutated residue carries a modification
+6. Preserves peptide metadata while marking decoys with `is_decoy = true`
 
-# Examples
-```julia
-# Add reverse decoys to a set of target entries
-all_entries = add_decoy_sequences(target_entries)
-
-# Add decoys with more shuffle attempts
-all_entries = add_decoy_sequences(target_entries, max_shuffle_attempts=50)
-```
-
-# Notes
-- Preserves C-terminal amino acid to maintain enzymatic cleavage properties
-- Correctly handles modifications, updating their positions to match the reversed sequence
-- Uses I/L equivalence when checking for sequence uniqueness
-- Entries are sorted by sequence in the output for efficient lookup
+Decoy sequences are considered unique using I/L equivalence as in `PeptideSequenceSet`.
 """
 function add_decoy_sequences(
-    target_fasta_entries::Vector{FastaEntry}; 
-    max_shuffle_attempts::Int64 = 20,
-    fixed_chars::Vector{Char} = Vector{Char}(),
-    decoy_method::String = "shuffle"
+    target_fasta_entries::Vector{FastaEntry};
+    _max_shuffle_attempts::Int64 = 20,
+    _fixed_chars::Vector{Char} = Vector{Char}(),
+    _decoy_method::String = "shuffle"
     )
-    # Pre-allocate space for decoy entries
     decoy_fasta_entries = Vector{FastaEntry}(undef, length(target_fasta_entries))
-    
-    # Set to track unique sequences
     sequences_set = PeptideSequenceSet(target_fasta_entries)
-    
-    # Counters for tracking fallback to shuffle
-    total_sequences = length(target_fasta_entries)
-    fallback_to_shuffle_count = 0
-    
-    # Initialize position tracking vector (max peptide length of 255 should be sufficient)
-    #positions = Vector{UInt8}(undef, 255)
-    
-    shuffle_seq = ShuffleSeq(
-        "",
-        Vector{Char}(undef, 255),
-        Vector{UInt8}(undef, 255),
-        Vector{UInt8}(undef, 255),
-        zero(UInt8),
-        zero(UInt8),
-        fixed_chars#['R','K']#Vector{Char}()
-    )
+
     n = 1
     for target_entry in target_fasta_entries
         target_sequence = get_sequence(target_entry)
         charge = get_charge(target_entry)
-        seq_length = UInt8(length(target_sequence))
+        ctx = MutationContext(get_structural_mods(target_entry), get_isotopic_mods(target_entry))
+        exists_fn = seq -> (seq, charge) ∈ sequences_set
 
-        # Create decoy sequence using the specified method
-        decoy_sequence = shuffle_sequence!(shuffle_seq, target_sequence; method=decoy_method)
-                
-        n_shuffle_attempts = 0
-        
-        # If the decoy creates a duplicate, need to handle differently based on method
-        if (decoy_sequence, charge) ∈ sequences_set
-            if decoy_method == "reverse"
-                # If reverse creates a duplicate, fall back to shuffle
-                # (reverse is deterministic, so retrying won't help)
-                @debug_l2 "Reverse created duplicate for $target_sequence, falling back to shuffle"
-                fallback_to_shuffle_count += 1
-                while n_shuffle_attempts < max_shuffle_attempts
-                    decoy_sequence = shuffle_sequence!(shuffle_seq, target_sequence; method="shuffle")
-                    
-                    if (decoy_sequence, charge) ∉ sequences_set
-                        break
-                    end
-                    n_shuffle_attempts += 1
-                end
-            else
-                # For shuffle, keep trying with shuffle
-                while n_shuffle_attempts < max_shuffle_attempts
-                    decoy_sequence = shuffle_sequence!(shuffle_seq, target_sequence; method="shuffle")
-                    
-                    if (decoy_sequence, charge) ∉ sequences_set
-                        break
-                    end
-                    n_shuffle_attempts += 1
-                end
-            end
+        result = generate_terminal_decoy(target_sequence, ctx, exists_fn)
+
+        if result === nothing
+            @user_warn "Unable to generate decoy via terminal mutations for $(target_sequence)"
+            continue
         end
-        
-        if n_shuffle_attempts >= max_shuffle_attempts
-            @user_warn "Exceeded max shuffle attempts for $(get_sequence(target_entry))"
-        else
-            # Adjust modification positions based on sequence manipulation
-            adjusted_structural_mods = adjust_mod_positions(
-                get_structural_mods(target_entry),
-                shuffle_seq.new_positions,
-                seq_length
-            )
-            
-            adjusted_isotopic_mods = adjust_mod_positions(
-                get_isotopic_mods(target_entry),
-                shuffle_seq.new_positions,
-                seq_length
-            )
-            
-            # Create decoy entry with adjusted modifications
-            decoy_fasta_entries[n] = FastaEntry(
-                get_id(target_entry),
-                get_description(target_entry),
-                get_gene(target_entry),
-                get_protein(target_entry),
-                get_organism(target_entry),
-                get_proteome(target_entry),
-                decoy_sequence,
-                get_start_idx(target_entry),
-                adjusted_structural_mods,
-                adjusted_isotopic_mods,
-                get_charge(target_entry),
-                get_base_target_id(target_entry), # inherit base_target_id for tracking
-                get_base_pep_id(target_entry),  # inherit base_pep_id for pairing
-                get_entrapment_pair_id(target_entry),
-                true  # This is a decoy sequence
-            )
-            
-            n += 1
-            push!(sequences_set, decoy_sequence, get_charge(target_entry))
-        end
+
+        decoy_sequence, mutated_positions = result
+        adjusted_structural_mods = update_mods(get_structural_mods(target_entry), mutated_positions)
+        adjusted_isotopic_mods = update_mods(get_isotopic_mods(target_entry), mutated_positions)
+
+        decoy_fasta_entries[n] = FastaEntry(
+            get_id(target_entry),
+            get_description(target_entry),
+            get_gene(target_entry),
+            get_protein(target_entry),
+            get_organism(target_entry),
+            get_proteome(target_entry),
+            decoy_sequence,
+            get_start_idx(target_entry),
+            adjusted_structural_mods,
+            adjusted_isotopic_mods,
+            get_charge(target_entry),
+            get_base_target_id(target_entry),
+            get_base_pep_id(target_entry),
+            get_entrapment_pair_id(target_entry),
+            true
+        )
+
+        n += 1
+        push!(sequences_set, decoy_sequence, charge)
     end
-    
-    # Report statistics if using reverse method
-    #=
-    if decoy_method == "reverse"
-        if fallback_to_shuffle_count > 0
-            @user_warn "Decoy generation statistics for REVERSE method:"
-            @user_warn "  Total sequences attempted: $total_sequences"
-            @user_warn "  Sequences where reverse created duplicates: $fallback_to_shuffle_count"
-            @user_warn "  Sequences successfully reversed: $(total_sequences - fallback_to_shuffle_count)"
-            @user_warn "  Fallback rate: $(round(100.0 * fallback_to_shuffle_count / total_sequences, digits=1))%"
-        else
-            @user_info "Successfully reversed all $total_sequences sequences without duplicates"
-        end
-    end
-    =#
-    # Sort the peptides by sequence
+
     return sort(vcat(target_fasta_entries, decoy_fasta_entries[1:n-1]), by = x -> get_sequence(x))
 end
 
@@ -839,47 +965,35 @@ end
         decoy_method::String = "shuffle"
     )::Vector{FastaEntry}
 
-Group-aware decoy generation that ensures all modification variants of the same
-base peptide sequence share a single decoy sequence and mod position mapping.
+Generate terminal-mutation decoys for groups of peptides sharing the same base
+sequence while respecting modification constraints across all variants.
 
 # Parameters
-- `target_fasta_entries::Vector{FastaEntry}`: Peptide entries to generate decoys for (typically includes targets and entrapments)
-- `max_shuffle_attempts::Int64`: Max attempts to find a unique shuffled sequence
-- `fixed_chars::Vector{Char}`: Optional set of characters kept fixed when shuffling
-- `decoy_method::String`: "shuffle" or "reverse" (reverse may fall back to shuffle)
+- `target_fasta_entries::Vector{FastaEntry}`: Peptide entries (targets and/or entrapments)
+- `max_shuffle_attempts::Int64`: (Unused; preserved for compatibility)
+- `fixed_chars::Vector{Char}`: (Unused with terminal mutations)
+- `decoy_method::String`: (Unused; maintained for compatibility)
 
 # Returns
 - `Vector{FastaEntry}`: Sorted vector with both original entries and their decoys
 
 # Details
-Algorithm:
-1. Group by base sequence (ignoring modifications)
-2. For each base sequence, generate one decoy sequence once (respect I/L equivalence and charges)
-3. Apply the same position mapping to all modification variants in the group
-4. Preserve metadata and set `is_decoy = true`
+1. Groups peptides by unmodified base sequence
+2. Aggregates modification context across all variants in the group
+3. Generates a single decoy sequence per group using terminal mutations
+4. Applies the resulting amino-acid substitutions to all modification variants
+5. Updates modification annotations when mutated residues carry modifications
+6. Ensures decoy uniqueness using `PeptideSequenceSet`
 """
 function add_decoy_sequences_grouped(
     target_fasta_entries::Vector{FastaEntry};
-    max_shuffle_attempts::Int64 = 20,
-    fixed_chars::Vector{Char} = Vector{Char}(),
-    decoy_method::String = "shuffle"
+    _max_shuffle_attempts::Int64 = 20,
+    _fixed_chars::Vector{Char} = Vector{Char}(),
+    _decoy_method::String = "shuffle"
 )::Vector{FastaEntry}
 
-    # Track sequences (I/L equivalence) with charge awareness
     sequences_set = PeptideSequenceSet(target_fasta_entries)
 
-    # Prepare shuffler/reverser
-    shuffle_seq = ShuffleSeq(
-        "",
-        Vector{Char}(undef, 255),
-        Vector{UInt8}(undef, 255),
-        Vector{UInt8}(undef, 255),
-        zero(UInt8),
-        zero(UInt8),
-        fixed_chars
-    )
-
-    # Group entries by base sequence (sequence only, ignore mods)
     groups = Dict{String, Vector{Int}}()
     for (idx, entry) in enumerate(target_fasta_entries)
         base_seq = get_sequence(entry)
@@ -889,64 +1003,36 @@ function add_decoy_sequences_grouped(
         push!(groups[base_seq], idx)
     end
 
-    # High-level diagnostics
-    n_entries = length(target_fasta_entries)
-    n_groups = length(groups)
-    avg_variants = n_groups == 0 ? 0.0 : round(n_entries / n_groups, digits=2)
     decoy_entries = Vector{FastaEntry}()
-    fallback_to_shuffle_count = 0
-    total_groups = length(groups)
 
-    sample_logged = 0
-    exhausted_groups = 0
     for (base_seq, idxs) in groups
-        # Unique charges across variants in this group
         charges = unique([get_charge(target_fasta_entries[i]) for i in idxs])
 
-        # Generate a single decoy sequence for this base_seq
-        n_shuffle_attempts = 0
-        decoy_sequence = shuffle_sequence!(shuffle_seq, base_seq; method=decoy_method)
-
-        # Handle duplicates: reverse may fall back to shuffle; shuffle keeps trying
-        needs_retry = any(((decoy_sequence, c) ∈ sequences_set) for c in charges)
-        if needs_retry && decoy_method == "reverse"
-            @user_warn "Reverse duplicate for decoy of $base_seq; fallback to shuffle"
-            fallback_to_shuffle_count += 1
-        end
-        while needs_retry && n_shuffle_attempts < max_shuffle_attempts
-            decoy_sequence = shuffle_sequence!(shuffle_seq, base_seq; method="shuffle")
-            needs_retry = any(((decoy_sequence, c) ∈ sequences_set) for c in charges)
-            n_shuffle_attempts += 1
+        ctx = MutationContext()
+        for idx in idxs
+            entry = target_fasta_entries[idx]
+            _add_mods!(ctx, get_structural_mods(entry))
+            _add_mods!(ctx, get_isotopic_mods(entry))
         end
 
-        if needs_retry
-            exhausted_groups += 1
+        exists_fn = seq -> any(((seq, c) ∈ sequences_set) for c in charges)
+        result = generate_terminal_decoy(base_seq, ctx, exists_fn)
+
+        if result === nothing
+            @user_warn "Unable to generate grouped decoy via terminal mutations for $(base_seq)"
             continue
         end
 
-        # Snapshot positions for consistent mod adjustment across all variants
-        positions_copy = Vector{UInt8}(shuffle_seq.new_positions)
-        seq_length = UInt8(length(base_seq))
+        decoy_sequence, mutated_positions = result
 
-        # Reserve the decoy sequence across all charges
         for c in charges
             push!(sequences_set, decoy_sequence, c)
         end
 
-        # Build decoys for each variant in this group using the same mapping
         for idx in idxs
             target_entry = target_fasta_entries[idx]
-
-            adjusted_structural_mods = adjust_mod_positions(
-                get_structural_mods(target_entry),
-                positions_copy,
-                seq_length
-            )
-            adjusted_isotopic_mods = adjust_mod_positions(
-                get_isotopic_mods(target_entry),
-                positions_copy,
-                seq_length
-            )
+            adjusted_structural_mods = update_mods(get_structural_mods(target_entry), mutated_positions)
+            adjusted_isotopic_mods = update_mods(get_isotopic_mods(target_entry), mutated_positions)
 
             push!(decoy_entries, FastaEntry(
                 get_id(target_entry),
@@ -968,20 +1054,6 @@ function add_decoy_sequences_grouped(
         end
     end
 
-    # Report statistics if using reverse method
-    #=
-    if decoy_method == "reverse" && total_groups > 0
-        if fallback_to_shuffle_count > 0
-            @user_warn "Decoy generation (GROUPED) stats for REVERSE:"
-            @user_warn "  Total base sequences attempted: $total_groups"
-            @user_warn "  Reverse duplicates: $fallback_to_shuffle_count"
-            @user_warn "  Fallback rate: $(round(100.0 * fallback_to_shuffle_count / total_groups, digits=1))%"
-        else
-            @user_info "Successfully reversed all $total_groups base sequences without duplicates"
-        end
-    end
-    =#
-    # General summary
     return sort(vcat(target_fasta_entries, decoy_entries), by = x -> get_sequence(x))
 end
 

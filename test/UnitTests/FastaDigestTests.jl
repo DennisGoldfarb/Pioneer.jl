@@ -289,37 +289,26 @@
     end
     
     @testset "add_decoy_sequences" begin
-        # Create test entries
         entries = [
             FastaEntry("P1", "", "", "", "human", "test", "PEPTIDEK", UInt32(1), missing, missing, UInt8(0), UInt32(1), UInt32(1), UInt8(0), false),
             FastaEntry("P2", "", "", "", "human", "test", "MAKEPROTEIN", UInt32(1), missing, missing, UInt8(0), UInt32(2), UInt32(2), UInt8(0), false)
-   ]
-        
-        # Test basic reversal
+        ]
+
         result = add_decoy_sequences(entries)
-        
-        @test length(result) == 4  # 2 original + 2 decoy
-        
-        # Identify decoys
-        decoys = filter(is_decoy, result)
-        @test length(decoys) == 2
-        
-        # Check decoy sequences are reversed except last AA
-        sort!(decoys, by = x -> get_base_pep_id(x))
-        sort!(entries, by = x -> get_base_pep_id(x))
-        for i in 1:2
-            
-            target_seq = get_sequence(entries[i])
-            decoy = decoys[i]
-            decoy_seq = get_sequence(decoy)
-            @test decoy_seq[end] == target_seq[end]  # Last AA preserved
-            @test all(decoy_seq .== target_seq) == false
-            @test Set(decoy_seq[1:end-1]) == Set(target_seq[1:end-1])  # Rest is reversed
-            
-            # Check metadata preserved
-            @test get_base_pep_id(decoy) == get_base_pep_id(entries[i])
-            @test get_base_pep_id(decoy) == get_base_pep_id(entries[i])
-            @test get_entrapment_pair_id(decoy) == get_entrapment_pair_id(entries[i])
+
+        @test length(result) == 4
+
+        decoys = sort(filter(is_decoy, result), by = x -> get_base_pep_id(x))
+        targets = sort(copy(entries), by = x -> get_base_pep_id(x))
+
+        expected = ["PDPTIDDK", "MLKEPROTEVN"]
+
+        @test length(decoys) == length(expected)
+        for (idx, decoy) in enumerate(decoys)
+            @test get_sequence(decoy) == expected[idx]
+            @test get_entrapment_pair_id(decoy) == get_entrapment_pair_id(targets[idx])
+            @test get_base_pep_id(decoy) == get_base_pep_id(targets[idx])
+            @test get_base_target_id(decoy) == get_base_target_id(targets[idx])
         end
     end
     
