@@ -108,7 +108,7 @@ function collect_modification_flags(
     structural_mods::Union{Missing, Vector{PeptideMod}},
     isotopic_mods::Union{Missing, Vector{PeptideMod}},
 )
-    modified_positions = falses(seq_length)
+    modified_positions = fill(false, seq_length)
     n_term_modded = Ref(false)
     c_term_modded = Ref(false)
 
@@ -1108,7 +1108,7 @@ function add_decoy_sequences_grouped(
     for (base_seq, idxs) in groups
         charges = unique([get_charge(target_fasta_entries[i]) for i in idxs])
         seq_length = length(base_seq)
-        modified_positions = falses(seq_length)
+        modified_positions = fill(false, seq_length)
         n_term_modded = Ref(false)
         c_term_modded = Ref(false)
 
