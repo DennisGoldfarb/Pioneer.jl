@@ -165,6 +165,23 @@ function merge_modification_flags!(
     mark_mods!(isotopic_mods)
 end
 
+function append_candidate!(
+    candidates::Vector{Int},
+    seen::Vector{Bool},
+    pos::Int,
+    seq_length::Int,
+    is_blocked::Function,
+)
+    if pos < 1 || pos > seq_length
+        return
+    end
+    if is_blocked(pos) || seen[pos]
+        return
+    end
+    push!(candidates, pos)
+    seen[pos] = true
+end
+
 function n_term_candidate_positions(
     seq_length::Int,
     modified_positions::Vector{Bool},
@@ -174,62 +191,26 @@ function n_term_candidate_positions(
     if seq_length <= 0
         return candidates
     elseif seq_length == 1
-        push!(candidates, 1)
+        if !(modified_positions[1] || n_term_modded)
+            push!(candidates, 1)
+        end
         return candidates
     end
 
-    pos2_modded = modified_positions[2]
-    pos3_exists = seq_length >= 3
-    pos3_modded = pos3_exists ? modified_positions[3] : false
-    terminal_modded = modified_positions[1] || n_term_modded
+    seen = fill(false, seq_length)
+    is_blocked = pos -> (
+        modified_positions[pos] || (pos == 1 && n_term_modded)
+    )
 
-    if !pos2_modded
-        push!(candidates, 2)
-        if pos3_exists && !pos3_modded
-            push!(candidates, 3)
-        end
-        if !terminal_modded
-            push!(candidates, 1)
-        end
-    else
-        if pos3_exists
-            push!(candidates, 3)
-            if pos3_modded
-                if !terminal_modded
-                    push!(candidates, 1)
-                end
-            else
-                if !terminal_modded
-                    push!(candidates, 1)
-                end
-            end
-        else
-            if !terminal_modded
-                push!(candidates, 1)
-            end
-        end
-        if terminal_modded
-            push!(candidates, 2)
-        end
+    append_candidate!(candidates, seen, 2, seq_length, is_blocked)
+    append_candidate!(candidates, seen, 3, seq_length, is_blocked)
+    append_candidate!(candidates, seen, 1, seq_length, is_blocked)
+
+    for pos in 4:seq_length
+        append_candidate!(candidates, seen, pos, seq_length, is_blocked)
     end
 
-    if !pos2_modded && !terminal_modded
-        # allow fallback to position 1 if duplicate occurs
-        if !(1 in candidates)
-            push!(candidates, 1)
-        end
-    elseif pos2_modded && !(2 in candidates)
-        push!(candidates, 2)
-    end
-
-    # Remove duplicates while preserving order and ensure indices in bounds
-    unique_candidates = Int[]
-    for pos in candidates
-        if 1 <= pos <= seq_length && !(pos in unique_candidates)
-            push!(unique_candidates, pos)
-        end
-    end
-    return unique_candidates
+    return candidates
 end
 
 function c_term_candidate_positions(
@@ -241,59 +222,27 @@ function c_term_candidate_positions(
     if seq_length <= 0
         return candidates
     elseif seq_length == 1
-        push!(candidates, 1)
+        if !(modified_positions[1] || c_term_modded)
+            push!(candidates, 1)
+        end
         return candidates
     end
 
-    primary = seq_length - 1
-    primary = max(primary, 1)
-    before_primary = primary - 1
-    before_exists = before_primary >= 1
-    before_modded = before_exists ? modified_positions[before_primary] : false
-    primary_modded = modified_positions[primary]
-    terminal_modded = modified_positions[seq_length] || c_term_modded
+    seen = fill(false, seq_length)
+    is_blocked = pos -> (
+        modified_positions[pos] || (pos == seq_length && c_term_modded)
+    )
 
-    if !primary_modded
-        push!(candidates, primary)
-        if before_exists && !before_modded
-            push!(candidates, before_primary)
-        end
-        if !terminal_modded
-            push!(candidates, seq_length)
-        end
-    else
-        if before_exists
-            push!(candidates, before_primary)
-            if !before_modded && !terminal_modded
-                push!(candidates, seq_length)
-            elseif before_modded && !terminal_modded
-                push!(candidates, seq_length)
-            end
-        else
-            if !terminal_modded
-                push!(candidates, seq_length)
-            end
-        end
-        if terminal_modded
-            push!(candidates, primary)
-        end
+    primary = max(seq_length - 1, 1)
+    append_candidate!(candidates, seen, primary, seq_length, is_blocked)
+    append_candidate!(candidates, seen, primary - 1, seq_length, is_blocked)
+    append_candidate!(candidates, seen, seq_length, seq_length, is_blocked)
+
+    for pos in (seq_length - 2):-1:1
+        append_candidate!(candidates, seen, pos, seq_length, is_blocked)
     end
 
-    if !primary_modded && !terminal_modded
-        if !(seq_length in candidates)
-            push!(candidates, seq_length)
-        end
-    elseif primary_modded && !(primary in candidates)
-        push!(candidates, primary)
-    end
-
-    unique_candidates = Int[]
-    for pos in candidates
-        if 1 <= pos <= seq_length && !(pos in unique_candidates)
-            push!(unique_candidates, pos)
-        end
-    end
-    return unique_candidates
+    return candidates
 end
 
 function attempt_mutation!(
