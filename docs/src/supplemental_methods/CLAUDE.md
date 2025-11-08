@@ -27,7 +27,7 @@ The document is formatted for Nature journal submission (`sn-nature` document cl
 
 3. **Spectral Library Generation** (Lines 175-184)
    - FASTA protein sequence digestion
-   - Target-decoy sequence generation (reverse/shuffle)
+   - Target-decoy sequence generation via termini mutation mapping
    - Entrapment sequence integration for FDR calibration
    - Protein group definition (mathematical formulation)
 

@@ -171,7 +171,7 @@ function prepare_chronologer_input(
     Arrow.write(proteins_out_path, protein_df)
 
     # Display decoy generation configuration
-    decoy_method = get(_params.fasta_digest_params, "decoy_method", "shuffle")
+    decoy_method = get(_params.fasta_digest_params, "decoy_method", "termini_mutation")
     entrapment_method = get(_params.fasta_digest_params, "entrapment_method", "shuffle")
 
     # Step 1: Combine shared peptides (I/L equivalence)
@@ -200,7 +200,7 @@ function prepare_chronologer_input(
 
     # Step 6: Add decoys (GROUPED by base sequence; all mods share same decoy)
     if _params.fasta_digest_params["add_decoys"]
-        decoy_method = get(_params.fasta_digest_params, "decoy_method", "shuffle")
+        decoy_method = get(_params.fasta_digest_params, "decoy_method", "termini_mutation")
         fasta_entries = add_decoy_sequences_grouped(fasta_entries; decoy_method=decoy_method)
     end
         

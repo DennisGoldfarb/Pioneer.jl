@@ -81,11 +81,14 @@ function check_params_bsp(json_string::String)
     
     # Check decoy_method with default value
     if !haskey(fasta_digest_params, "decoy_method")
-        fasta_digest_params["decoy_method"] = "shuffle"
+        fasta_digest_params["decoy_method"] = "termini_mutation"
     else
         decoy_method = fasta_digest_params["decoy_method"]
-        if !(decoy_method in ["shuffle", "reverse"])
-            error("decoy_method must be either 'shuffle' or 'reverse', got: $decoy_method")
+        if decoy_method in ["shuffle", "reverse"]
+            @user_warn "decoy_method='$decoy_method' is deprecated; using 'termini_mutation' instead."
+            fasta_digest_params["decoy_method"] = "termini_mutation"
+        elseif decoy_method != "termini_mutation"
+            error("decoy_method must be 'termini_mutation', got: $decoy_method")
         end
     end
     

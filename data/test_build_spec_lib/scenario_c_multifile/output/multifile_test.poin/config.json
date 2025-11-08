@@ -87,7 +87,7 @@
   "fasta_digest_params": {
     "cleavage_regex": "[KR][^_|$]",
     "add_decoys": true,
-    "decoy_method": "shuffle",
+    "decoy_method": "termini_mutation",
     "missed_cleavages": 1,
     "min_charge": 2,
     "max_length": 15,
