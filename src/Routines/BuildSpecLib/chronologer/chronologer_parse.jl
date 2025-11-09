@@ -138,6 +138,13 @@ function parse_chronologer_output(
     end
     sort!(@view(precursors_df[start_idx:end,:]),:mz)
     
+    # Ensure each precursor has a stable identifier for downstream pairing
+    if :precursor_idx ∈ names(precursors_df)
+        precursors_df[!, :precursor_idx] = UInt32.(precursors_df[!, :precursor_idx])
+    else
+        precursors_df[!, :precursor_idx] = UInt32.(1:nrow(precursors_df))
+    end
+
     # Write processed precursors to Arrow file
     precursors_arrow_path = joinpath(pion_lib_dir, "precursors.arrow")
     Arrow.write(precursors_arrow_path, precursors_df)

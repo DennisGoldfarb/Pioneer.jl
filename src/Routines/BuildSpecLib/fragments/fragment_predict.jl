@@ -49,6 +49,16 @@ function predict_fragments(
     # Load data and split targets/decoys
     peptides_df = DataFrame(Arrow.Table(peptide_table_path))
 
+    if :precursor_idx ∉ names(peptides_df)
+        error("Peptide table $(peptide_table_path) is missing required :precursor_idx column")
+    end
+
+    if any(ismissing, peptides_df[!, :precursor_idx])
+        error("Peptide table $(peptide_table_path) contains missing precursor_idx values")
+    end
+
+    peptides_df[!, :precursor_idx] = UInt32.(peptides_df[!, :precursor_idx])
+
     target_idxs = findall(.!peptides_df.decoy)
     decoy_idxs = findall(peptides_df.decoy)
 
@@ -72,7 +82,7 @@ function predict_fragments(
                 instrument_type,
                 batch_size,
                 max_koina_batches,
-                UInt32.(batch_indices),
+                UInt32.(peptides_df[batch_indices, :precursor_idx]),
             )
 
             push!(target_batches, frags_out)
@@ -93,8 +103,8 @@ function predict_fragments(
         target_fragments_df,
         target_lookup,
         peptides_df,
-        UInt32.(target_idxs),
-        UInt32.(decoy_idxs),
+        target_idxs,
+        decoy_idxs,
     )
 
     Arrow.write(frags_out_path, all_fragments_df)
@@ -104,31 +114,43 @@ function duplicate_decoy_fragments(
     target_fragments_df::DataFrame,
     target_lookup::Dict{UInt32, SubDataFrame},
     peptides_df::DataFrame,
-    target_indices::Vector{UInt32},
-    decoy_indices::Vector{UInt32},
+    target_indices::AbstractVector{<:Integer},
+    decoy_indices::AbstractVector{<:Integer},
 )
     # Fast path: no decoys or no targets
     if isempty(decoy_indices) || isempty(target_fragments_df)
         return target_fragments_df
     end
 
+    if :precursor_idx ∉ names(peptides_df)
+        error("Peptide metadata missing required :precursor_idx column")
+    end
+
     # Build lookup from (pair_id, charge) -> precursor index for targets
     partner_lookup = Dict{Tuple{UInt32, UInt8}, UInt32}()
     for idx in target_indices
-        pair_val = peptides_df.pair_id[idx]
-        charge_val = peptides_df.precursor_charge[idx]
-        if ismissing(pair_val) || ismissing(charge_val)
+        row_idx = Int(idx)
+        pair_val = peptides_df.pair_id[row_idx]
+        charge_val = peptides_df.precursor_charge[row_idx]
+        precursor_val = peptides_df.precursor_idx[row_idx]
+        if ismissing(pair_val) || ismissing(charge_val) || ismissing(precursor_val)
             continue
         end
-        partner_lookup[(UInt32(pair_val), UInt8(charge_val))] = UInt32(idx)
+        partner_lookup[(UInt32(pair_val), UInt8(charge_val))] = UInt32(precursor_val)
     end
 
     decoy_fragments = DataFrame[]
     for decoy_idx in ProgressBar(decoy_indices)
-        pair_val = peptides_df.pair_id[decoy_idx]
-        charge_val = peptides_df.precursor_charge[decoy_idx]
+        row_idx = Int(decoy_idx)
+        pair_val = peptides_df.pair_id[row_idx]
+        charge_val = peptides_df.precursor_charge[row_idx]
+        precursor_val = peptides_df.precursor_idx[row_idx]
         if ismissing(pair_val) || ismissing(charge_val)
             @warn "Decoy precursor $decoy_idx missing pair_id or precursor_charge metadata"
+            continue
+        end
+        if ismissing(precursor_val)
+            @warn "Decoy precursor $decoy_idx missing precursor_idx metadata"
             continue
         end
         partner_key = (UInt32(pair_val), UInt8(charge_val))
@@ -139,13 +161,14 @@ function duplicate_decoy_fragments(
         end
 
         target_precursor = partner_lookup[partner_key]
-        if !haskey(target_lookup, target_precursor)
+        subdf = get(target_lookup, target_precursor, nothing)
+        if subdf === nothing
             @warn "No fragment predictions found for target precursor $target_precursor when duplicating decoy $decoy_idx"
             continue
         end
 
-        decoy_df = copy(target_lookup[target_precursor])
-        decoy_df[!, :precursor_idx] .= UInt32(decoy_idx)
+        decoy_df = copy(subdf)
+        decoy_df[!, :precursor_idx] .= UInt32(precursor_val)
         push!(decoy_fragments, decoy_df)
     end
 
