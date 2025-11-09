@@ -83,8 +83,12 @@ function predict_fragments(
 
     target_fragments_df = isempty(target_batches) ? DataFrame() : vcat(target_batches...)
 
-    target_groups = :precursor_idx ∈ names(target_fragments_df) ? groupby(target_fragments_df, :precursor_idx) : nothing
-    target_lookup = target_groups === nothing ? Dict{UInt32, SubDataFrame}() : Dict(UInt32(first(group.precursor_idx)) => group for group in target_groups)
+    target_lookup = Dict{UInt32, SubDataFrame}()
+    if :precursor_idx ∈ names(target_fragments_df)
+        for group in groupby(target_fragments_df, :precursor_idx)
+            target_lookup[UInt32(first(group.precursor_idx))] = group
+        end
+    end
 
     # Duplicate target predictions for decoys using partner mapping
     all_fragments_df = duplicate_decoy_fragments(
@@ -126,21 +130,23 @@ function duplicate_decoy_fragments(
         pair_val = peptides_df.pair_id[decoy_idx]
         charge_val = peptides_df.precursor_charge[decoy_idx]
         if ismissing(pair_val) || ismissing(charge_val)
-            @warn "Decoy precursor $decoy_idx missing pair_id or precursor_charge metadata" continue
+            @warn "Decoy precursor $decoy_idx missing pair_id or precursor_charge metadata"
+            continue
         end
         partner_key = (UInt32(pair_val), UInt8(charge_val))
 
         if !haskey(partner_lookup, partner_key)
-            @warn "No target partner found for decoy precursor $decoy_idx (pair_id=$(pair_val), charge=$(charge_val))" continue
+            @warn "No target partner found for decoy precursor $decoy_idx (pair_id=$(pair_val), charge=$(charge_val))"
+            continue
         end
 
         target_idx = partner_lookup[partner_key]
-        subdf = get(target_lookup, target_idx, nothing)
-        if subdf === nothing
-            @warn "No fragment predictions found for target precursor $target_idx when duplicating decoy $decoy_idx" continue
+        if !haskey(target_lookup, target_idx)
+            @warn "No fragment predictions found for target precursor $target_idx when duplicating decoy $decoy_idx"
+            continue
         end
 
-        decoy_df = copy(subdf)
+        decoy_df = copy(target_lookup[target_idx])
         decoy_df[!, :precursor_idx] .= decoy_idx
         push!(decoy_fragments, decoy_df)
     end
