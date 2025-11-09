@@ -116,6 +116,8 @@ function prepare_chronologer_input(
         mod_to_mass_dict[name] = string(mass)
     end
 
+    var_mod_names_list = [mod[:r] for mod in var_mods]
+
     # Convert mass dictionary to float values
     mod_to_mass_float = Dict(k => parse(Float64, v) for (k, v) in mod_to_mass_dict)
 
@@ -207,6 +209,8 @@ function prepare_chronologer_input(
             decoy_method = decoy_method,
             min_edit_distance = min_edit_distance,
             structural_mod_masses = mod_to_mass_float,
+            fixed_mod_patterns = fixed_mods,
+            variable_mod_names = var_mod_names_list,
         )
     end
         
