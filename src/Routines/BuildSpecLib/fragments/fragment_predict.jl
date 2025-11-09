@@ -22,7 +22,8 @@ using JSON
 """
     load_fragment_mod_dictionaries(config_path::String)
 
-Load structural and isotope modification dictionaries from a configuration JSON file.
+Load structural and isotope modification dictionaries from a configuration JSON file and
+return the fragment filtering parameters required for decoy cloning.
 """
 function load_fragment_mod_dictionaries(config_path::String)
     params = JSON.parsefile(config_path)
@@ -68,7 +69,17 @@ function load_fragment_mod_dictionaries(config_path::String)
         mods_to_sulfur_diff[mod_group["name"]] = Int8(mod_group["sulfur_count"])
     end
 
-    return structural_mod_to_mass, iso_mods_dict, mods_to_sulfur_diff
+    library_params = get(params, "library_params", Dict{String, Any}())
+    include_immonium = get(library_params, "include_immonium", true)
+    max_frag_rank = Int(get(library_params, "max_frag_rank", 255))
+    length_to_frag_count_multiple = Float32(get(library_params, "length_to_frag_count_multiple", 255))
+
+    return structural_mod_to_mass,
+           iso_mods_dict,
+           mods_to_sulfur_diff,
+           include_immonium,
+           max_frag_rank,
+           length_to_frag_count_multiple
 end
 
 function get_fragment_annotation_info(
@@ -125,7 +136,12 @@ function clone_decoy_fragments(
         end
     end
 
-    structural_mod_to_mass, iso_mods_dict, _ = load_fragment_mod_dictionaries(config_path)
+    structural_mod_to_mass,
+    iso_mods_dict,
+    _,
+    include_immonium,
+    max_frag_rank,
+    length_to_frag_count_multiple = load_fragment_mod_dictionaries(config_path)
     immonium_to_sulfur_count = get_immonium_sulfur_dict(asset_path("immonium.txt"))
 
     ion_dictionary = nothing
@@ -161,6 +177,8 @@ function clone_decoy_fragments(
         frag_df = copy(target_groups[target_idx])
         frag_df[!, :precursor_idx] .= UInt32(idx)
 
+        filter_fragments!(frag_df, model_type)
+
         sequence = row.sequence
         struct_mods = if hasproperty(row, mods_column) && row[mods_column] !== missing
             String(row[mods_column])
@@ -178,7 +196,9 @@ function clone_decoy_fragments(
         getIsoModMasses!(iso_mod_masses, struct_mods, iso_mods, iso_mods_dict)
         seq_length = UInt8(length(sequence))
 
-        for frag_row in eachrow(frag_df)
+        keep_rows = Int[]
+        frag_infos = PioneerFragAnnotation[]
+        for (row_idx, frag_row) in enumerate(eachrow(frag_df))
             info = get_fragment_annotation_info(
                 frag_row.annotation,
                 model_type,
@@ -186,6 +206,38 @@ function clone_decoy_fragments(
                 annotation_cache,
                 immonium_to_sulfur_count,
             )
+            if info.immonium && !include_immonium
+                continue
+            end
+            push!(keep_rows, row_idx)
+            push!(frag_infos, info)
+        end
+
+        isempty(keep_rows) && continue
+
+        frag_df = frag_df[keep_rows, :]
+
+        max_allowed = min(
+            max_frag_rank,
+            round(Int, seq_length * length_to_frag_count_multiple) + 1,
+        )
+
+        if max_allowed <= 0
+            continue
+        end
+
+        if nrow(frag_df) > max_allowed
+            if hasproperty(frag_df, :intensities)
+                order = sortperm(frag_df.intensities; rev=true)
+            else
+                order = collect(1:nrow(frag_df))
+            end
+            order = order[1:max_allowed]
+            frag_df = frag_df[order, :]
+            frag_infos = frag_infos[order]
+        end
+
+        for (frag_row, info) in zip(eachrow(frag_df), frag_infos)
             start_idx, stop_idx = get_fragment_indices(info.base_type, info.frag_index, seq_length)
             frag_row.mz = get_fragment_mz(
                 start_idx,

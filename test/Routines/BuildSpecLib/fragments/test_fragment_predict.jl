@@ -182,15 +182,20 @@ using JSON
     @testset "clone_decoy_fragments" begin
         temp_dir = mktempdir()
         config_path = joinpath(temp_dir, "config.json")
-        config = Dict(
+        base_config = Dict(
             "fixed_mods" => Dict("mass" => Float64[], "name" => String[]),
             "variable_mods" => Dict("mass" => Float64[], "name" => String[]),
             "isotope_mod_groups" => Any[],
             "channel_decoys" => false,
-            "sulfur_mod_groups" => Any[]
+            "sulfur_mod_groups" => Any[],
+            "library_params" => Dict(
+                "include_immonium" => false,
+                "max_frag_rank" => 50,
+                "length_to_frag_count_multiple" => 2.0,
+            ),
         )
         open(config_path, "w") do io
-            write(io, JSON.json(config))
+            write(io, JSON.json(base_config))
         end
 
         peptides_df = DataFrame(
@@ -211,10 +216,10 @@ using JSON
         model = InstrumentSpecificModel("unispec")
         decoy_frags = clone_decoy_fragments(peptides_df, target_fragments, model, config_path)
 
-        @test nrow(decoy_frags) == 2
+        @test nrow(decoy_frags) == 1
         @test all(decoy_frags.precursor_idx .== UInt32(2))
-        @test decoy_frags.intensities == target_fragments.intensities
-        @test decoy_frags.annotation == target_fragments.annotation
+        @test decoy_frags.intensities == Float32[0.8]
+        @test decoy_frags.annotation == ["y2"]
 
         aa_masses = zeros(Float32, 255)
         structural_mod_masses = zeros(Float32, 255)
@@ -239,9 +244,36 @@ using JSON
         @test y2_idx !== nothing
         @test isapprox(decoy_frags.mz[y2_idx], expected_mz; atol=1e-5)
 
-        ih_idx = findfirst(==("IH"), decoy_frags.annotation)
-        @test ih_idx !== nothing
-        @test isfinite(decoy_frags.mz[ih_idx])
+        @test all(!=("IH"), decoy_frags.annotation)
+
+        # Re-run with immonium enabled
+        include_config = deepcopy(base_config)
+        include_config["library_params"]["include_immonium"] = true
+        open(config_path, "w") do io
+            write(io, JSON.json(include_config))
+        end
+
+        decoy_frags = clone_decoy_fragments(peptides_df, target_fragments, model, config_path)
+        @test nrow(decoy_frags) == 2
+        @test "IH" in decoy_frags.annotation
+
+        # Limit the requested number of ions
+        rank_limited_config = deepcopy(include_config)
+        rank_limited_config["library_params"]["max_frag_rank"] = 1
+        open(config_path, "w") do io
+            write(io, JSON.json(rank_limited_config))
+        end
+
+        rich_target = DataFrame(
+            annotation = ["y2", "b3", "a1"],
+            mz = Float32[400.0, 320.0, 210.0],
+            intensities = Float32[0.8, 0.5, 0.3],
+            precursor_idx = UInt32[1, 1, 1],
+        )
+
+        limited_frags = clone_decoy_fragments(peptides_df, rich_target, model, config_path)
+        @test nrow(limited_frags) == 1
+        @test limited_frags.annotation == ["y2"]
 
         rm(temp_dir, recursive=true)
     end
