@@ -117,7 +117,7 @@ function duplicate_decoy_fragments(
     end
 
     decoy_fragments = DataFrame[]
-    for decoy_idx in decoy_indices
+    for decoy_idx in ProgressBar(decoy_indices)
         pair_val = peptides_df.pair_id[decoy_idx]
         charge_val = peptides_df.precursor_charge[decoy_idx]
         if ismissing(pair_val) || ismissing(charge_val)
