@@ -17,12 +17,188 @@
 
 # src/fragments/fragment_predict.jl
 
+using JSON
+
+"""
+    load_fragment_mod_dictionaries(config_path::String)
+
+Load structural and isotope modification dictionaries from a configuration JSON file.
+"""
+function load_fragment_mod_dictionaries(config_path::String)
+    params = JSON.parsefile(config_path)
+
+    structural_mod_to_mass = Dict{String, Float32}()
+    for (mass, name) in zip(
+        get(params["fixed_mods"], "mass", Float64[]),
+        get(params["fixed_mods"], "name", String[])
+    )
+        structural_mod_to_mass[name] = Float32(mass)
+    end
+
+    if haskey(params, "variable_mods")
+        for (mass, name) in zip(
+            get(params["variable_mods"], "mass", Float64[]),
+            get(params["variable_mods"], "name", String[])
+        )
+            structural_mod_to_mass[name] = Float32(mass)
+        end
+    end
+
+    iso_mods_dict = Dict{String, Dict{String, Float32}}()
+    for mod_group in get(params, "isotope_mod_groups", Any[])
+        name = mod_group["name"]
+        iso_mods_dict[name] = Dict{String, Float32}()
+        for channel in get(mod_group, "channels", Any[])
+            iso_mods_dict[name][channel["channel"]] = Float32(channel["mass"])
+        end
+    end
+
+    if get(params, "channel_decoys", false)
+        for mod_group in get(params, "decoy_isotope_mod_groups", Any[])
+            name = mod_group["name"]
+            dict = get!(iso_mods_dict, name, Dict{String, Float32}())
+            for channel in get(mod_group, "channels", Any[])
+                dict[channel["channel"]] = Float32(channel["mass"])
+            end
+        end
+    end
+
+    mods_to_sulfur_diff = Dict{String, Int8}()
+    for mod_group in get(params, "sulfur_mod_groups", Any[])
+        mods_to_sulfur_diff[mod_group["name"]] = Int8(mod_group["sulfur_count"])
+    end
+
+    return structural_mod_to_mass, iso_mods_dict, mods_to_sulfur_diff
+end
+
+function get_fragment_annotation_info(
+    annotation,
+    model::KoinaModelType,
+    ion_dictionary::Union{Nothing, Dict{Int32, String}},
+    cache::Dict{Any, PioneerFragAnnotation}
+)
+    if haskey(cache, annotation)
+        return cache[annotation]
+    end
+
+    frag_annotation = if model isa SplineCoefficientModel
+        if ion_dictionary === nothing
+            error("Ion dictionary required for spline coefficient models")
+        end
+        ion_name = ion_dictionary[Int32(annotation)]
+        UniSpecFragAnnotation(ion_name)
+    elseif model isa InstrumentSpecificModel
+        UniSpecFragAnnotation(String(annotation))
+    else
+        GenericFragAnnotation(String(annotation))
+    end
+
+    info = parse_fragment_annotation(frag_annotation)
+    cache[annotation] = info
+    return info
+end
+
+function clone_decoy_fragments(
+    peptides_df::DataFrame,
+    target_fragments::DataFrame,
+    model_type::KoinaModelType,
+    config_path::String
+)
+    isempty(target_fragments) && return DataFrame()
+
+    pair_to_target = Dict{UInt32, UInt32}()
+    for (idx, row) in enumerate(eachrow(peptides_df))
+        if hasproperty(row, :pair_id) && !ismissing(row.pair_id) && hasproperty(row, :decoy) && !row.decoy
+            pair_to_target[row.pair_id] = UInt32(idx)
+        end
+    end
+
+    target_groups = Dict{UInt32, DataFrame}()
+    if !isempty(target_fragments)
+        for subdf in groupby(target_fragments, :precursor_idx)
+            pid = first(subdf.precursor_idx)
+            target_groups[pid] = DataFrame(subdf)
+        end
+    end
+
+    structural_mod_to_mass, iso_mods_dict, _ = load_fragment_mod_dictionaries(config_path)
+
+    ion_dictionary = nothing
+    if model_type isa SplineCoefficientModel
+        ion_dictionary = get_altimeter_ion_dict(joinpath(@__DIR__, "..", "..", "..", "..", "assets", "ion_dictionary.txt"))
+    end
+
+    aa_masses = zeros(Float32, 255)
+    structural_mod_masses = zeros(Float32, 255)
+    iso_mod_masses = zeros(Float32, 255)
+    annotation_cache = Dict{Any, PioneerFragAnnotation}()
+
+    mods_column = hasproperty(peptides_df, :mods) ? :mods : :structural_mods
+    iso_column = hasproperty(peptides_df, :isotope_mods) ? :isotope_mods : :isotopic_mods
+
+    decoy_tables = DataFrame[]
+    for (idx, row) in enumerate(eachrow(peptides_df))
+        if !(hasproperty(row, :decoy) && row.decoy)
+            continue
+        end
+
+        if !hasproperty(row, :pair_id) || ismissing(row.pair_id) || !haskey(pair_to_target, row.pair_id)
+            @warn "Skipping decoy without paired target" pair_id=row.pair_id
+            continue
+        end
+
+        target_idx = pair_to_target[row.pair_id]
+        if !haskey(target_groups, target_idx)
+            @warn "No fragments available for paired target" pair_id=row.pair_id target_idx=target_idx
+            continue
+        end
+
+        frag_df = copy(target_groups[target_idx])
+        frag_df[!, :precursor_idx] .= UInt32(idx)
+
+        sequence = row.sequence
+        struct_mods = if hasproperty(row, mods_column) && row[mods_column] !== missing
+            String(row[mods_column])
+        else
+            ""
+        end
+        iso_mods = if hasproperty(row, iso_column) && row[iso_column] !== missing
+            String(row[iso_column])
+        else
+            ""
+        end
+
+        get_aa_masses!(aa_masses, sequence)
+        get_structural_mod_masses!(structural_mod_masses, struct_mods, structural_mod_to_mass)
+        getIsoModMasses!(iso_mod_masses, struct_mods, iso_mods, iso_mods_dict)
+        seq_length = UInt8(length(sequence))
+
+        for frag_row in eachrow(frag_df)
+            info = get_fragment_annotation_info(frag_row.annotation, model_type, ion_dictionary, annotation_cache)
+            start_idx, stop_idx = get_fragment_indices(info.base_type, info.frag_index, seq_length)
+            frag_row.mz = get_fragment_mz(
+                start_idx,
+                stop_idx,
+                info.base_type,
+                info.charge,
+                aa_masses,
+                structural_mod_masses,
+                iso_mod_masses
+            )
+        end
+
+        push!(decoy_tables, frag_df)
+    end
+
+    return isempty(decoy_tables) ? DataFrame() : vcat(decoy_tables...)
+end
+
 """
     predict_fragments(
         peptide_table_path::String,
         frags_out_path::String,
         model_type::KoinaModelType,
-        instrument_type::String, 
+        instrument_type::String,
         max_koina_batches::Int,
         batch_size::Int,
         model_name::String;
@@ -41,47 +217,57 @@ function predict_fragments(
     model_name::String;
     intensity_threshold::Float32 = 0.001f0
 )
-    # Verify model configuration
     if !haskey(KOINA_URLS, model_name)
         error("Invalid model name: $model_name. Valid options: $(join(keys(KOINA_URLS), ", "))")
     end
 
-    # Load data
     peptides_df = DataFrame(Arrow.Table(peptide_table_path))
+    decoy_mask = hasproperty(peptides_df, :decoy) ? peptides_df.decoy : falses(nrow(peptides_df))
+    target_rows = findall(!, decoy_mask)
 
-    # Process in batches
+    if isempty(target_rows)
+        @warn "No target precursors available for fragment prediction."
+        Arrow.write(frags_out_path, DataFrame())
+        return
+    end
+
+    target_df = peptides_df[target_rows, :]
+    target_precursor_indices = UInt32.(target_rows)
+
     koina_pool_size = max_koina_batches * 5
-    nprecs = nrow(peptides_df)
     batch_size = min(batch_size, 1000)
-    batch_start_idxs = collect(one(UInt32):UInt32(batch_size*koina_pool_size):UInt32(nprecs))
+    n_targets = length(target_rows)
+    batch_start_idxs = collect(1:batch_size*koina_pool_size:n_targets)
 
     rm(frags_out_path, force=true)
-    
+
+    target_batches = DataFrame[]
     for start_idx in ProgressBar(batch_start_idxs)
-        stop_idx = min(start_idx + batch_size*koina_pool_size - 1, nrow(peptides_df))
-        batch_df = peptides_df[start_idx:stop_idx, :]
-        
-        # Generate predictions for batch
+        stop_idx = min(start_idx + batch_size*koina_pool_size - 1, n_targets)
+        batch_df = target_df[start_idx:stop_idx, :]
+        batch_indices = target_precursor_indices[start_idx:stop_idx]
+
         frags_out = predict_fragments_batch(
             batch_df,
             model_type,
             instrument_type,
             batch_size,
             max_koina_batches,
-            start_idx,
-            
+            batch_indices,
         )
 
-        # Write or append results
-        if start_idx == 1
-            # Create file in stream format to support appending
-            open(frags_out_path, "w") do io
-                Arrow.write(io, frags_out; file=false)  # file=false creates stream format
-            end
-        else
-            Arrow.append(frags_out_path, frags_out)
-        end
+        push!(target_batches, frags_out)
     end
+
+    target_fragments = isempty(target_batches) ? DataFrame() : vcat(target_batches...)
+
+    config_path = joinpath(dirname(frags_out_path), "config.json")
+    decoy_fragments = clone_decoy_fragments(peptides_df, target_fragments, model_type, config_path)
+
+    fragments_df = isempty(decoy_fragments) ? target_fragments : vcat(target_fragments, decoy_fragments)
+    sort_fragments!(fragments_df)
+
+    Arrow.write(frags_out_path, fragments_df; file=false)
 end
 
 """
@@ -93,7 +279,7 @@ function predict_fragments_batch(
     instrument_type::String,
     batch_size::Int,
     concurrent_koina_requests::Int,
-    first_prec_idx::UInt32
+    precursor_indices::AbstractVector{UInt32}
 )::DataFrame
     # Verify instrument compatibility
     if instrument_type ∉ MODEL_CONFIGS[model.name].instruments
@@ -113,13 +299,12 @@ function predict_fragments_batch(
     batch_dfs = []
     for (i, response) in enumerate(responses)
         batch_result = parse_koina_batch(model, response)
-        start_idx = (i-1) * batch_size + 1 + first_prec_idx - 1
-        
-        # Add precursor indices
+        start_idx = (i-1) * batch_size + 1
+        stop_idx = min(i * batch_size, length(precursor_indices))
+        batch_precursor_idxs = precursor_indices[start_idx:stop_idx]
+
         batch_df = batch_result.fragments
-        n_precursors_in_batch = UInt32(fld(size( batch_df , 1), batch_result.frags_per_precursor))
-        batch_df[!, :precursor_idx] = repeat(start_idx:(start_idx + n_precursors_in_batch - one(UInt32)), 
-                                                inner=batch_result.frags_per_precursor)
+        batch_df[!, :precursor_idx] = repeat(batch_precursor_idxs, inner=batch_result.frags_per_precursor)
         # Filter and sort fragments
         filter_fragments!(batch_df, model)
         push!(batch_dfs, batch_df)
@@ -142,7 +327,7 @@ function predict_fragments_batch(
     _::String,  # instrument type not used
     batch_size::Int,
     concurrent_koina_requests::Int,
-    first_prec_idx::UInt32
+    precursor_indices::AbstractVector{UInt32}
 )::DataFrame
     # Prepare batches (no instrument type needed)
     json_batches = prepare_koina_batch(
@@ -158,13 +343,12 @@ function predict_fragments_batch(
     batch_dfs = []
     for (i, response) in enumerate(responses)
         batch_result = parse_koina_batch(model, response)
-        start_idx = (i-1) * batch_size + 1 + first_prec_idx - 1
-        
-        # Add precursor indices
+        start_idx = (i-1) * batch_size + 1
+        stop_idx = min(i * batch_size, length(precursor_indices))
+        batch_precursor_idxs = precursor_indices[start_idx:stop_idx]
+
         batch_df = batch_result.fragments
-        n_precursors_in_batch = UInt32(fld(size( batch_df , 1), batch_result.frags_per_precursor))
-        batch_df[!, :precursor_idx] = repeat(start_idx:(start_idx + n_precursors_in_batch - one(UInt32)), 
-                                                inner=batch_result.frags_per_precursor)
+        batch_df[!, :precursor_idx] = repeat(batch_precursor_idxs, inner=batch_result.frags_per_precursor)
         # Filter and sort fragments
         filter_fragments!(batch_df, model)
         push!(batch_dfs, batch_df)
@@ -185,7 +369,7 @@ function predict_fragments_batch(
     instrument_type::String,
     batch_size::Int,
     concurrent_koina_requests::Int,
-    first_prec_idx::UInt32
+    precursor_indices::AbstractVector{UInt32}
 )::DataFrame
     # Similar to InstrumentSpecificModel but handles spline coefficients
     json_batches = prepare_koina_batch(
@@ -202,12 +386,12 @@ function predict_fragments_batch(
     
     for (i, response) in enumerate(responses)
         batch_result = parse_koina_batch(model, response)
-        start_idx = (i-1) * batch_size + 1 + first_prec_idx - 1
-        
+        start_idx = (i-1) * batch_size + 1
+        stop_idx = min(i * batch_size, length(precursor_indices))
+        batch_precursor_idxs = precursor_indices[start_idx:stop_idx]
+
         batch_df = batch_result.fragments
-        n_precursors_in_batch = UInt32(fld(size( batch_df , 1), batch_result.frags_per_precursor))
-        batch_df[!, :precursor_idx] = repeat(start_idx:(start_idx + n_precursors_in_batch - one(UInt32)), 
-                                                inner=batch_result.frags_per_precursor)
+        batch_df[!, :precursor_idx] = repeat(batch_precursor_idxs, inner=batch_result.frags_per_precursor)
         filter_fragments!(batch_df, model)
         push!(batch_dfs, batch_df)
         push!(knot_vectors, batch_result.extra_data)  # Store knot vectors

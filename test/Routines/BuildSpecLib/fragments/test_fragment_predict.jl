@@ -1,4 +1,6 @@
 
+using JSON
+
 @testset "Fragment Predict Tests" begin
     
     @testset "Model Type Validation" begin
@@ -98,7 +100,7 @@
             intensities = Float32[0.5, 0.9, 0.7, 0.3, 0.8, 0.6],
             mz = Float32[300.1, 400.2, 500.3, 200.1, 350.2, 450.3]
         )
-        
+
         sort_fragments!(df)
         
         # Check that within each precursor, fragments are sorted by intensity (descending)
@@ -176,7 +178,67 @@
         
         rm(temp_dir, recursive=true)
     end
-    
+
+    @testset "clone_decoy_fragments" begin
+        temp_dir = mktempdir()
+        config_path = joinpath(temp_dir, "config.json")
+        config = Dict(
+            "fixed_mods" => Dict("mass" => Float64[], "name" => String[]),
+            "variable_mods" => Dict("mass" => Float64[], "name" => String[]),
+            "isotope_mod_groups" => Any[],
+            "channel_decoys" => false,
+            "sulfur_mod_groups" => Any[]
+        )
+        open(config_path, "w") do io
+            write(io, JSON.json(config))
+        end
+
+        peptides_df = DataFrame(
+            sequence = ["PEPTIDE", "PEPTIDA"],
+            mods = ["", ""],
+            isotope_mods = ["", ""],
+            decoy = [false, true],
+            pair_id = UInt32[1, 1]
+        )
+
+        target_fragments = DataFrame(
+            annotation = ["y2"],
+            mz = Float32[400.0],
+            intensities = Float32[0.8],
+            precursor_idx = UInt32[1]
+        )
+
+        model = InstrumentSpecificModel("unispec")
+        decoy_frags = clone_decoy_fragments(peptides_df, target_fragments, model, config_path)
+
+        @test nrow(decoy_frags) == 1
+        @test decoy_frags.precursor_idx == [UInt32(2)]
+        @test decoy_frags.intensities == target_fragments.intensities
+
+        aa_masses = zeros(Float32, 255)
+        structural_mod_masses = zeros(Float32, 255)
+        iso_mod_masses = zeros(Float32, 255)
+        sequence = peptides_df.sequence[2]
+        get_aa_masses!(aa_masses, sequence)
+        get_structural_mod_masses!(structural_mod_masses, "", Dict{String, Float32}())
+        getIsoModMasses!(iso_mod_masses, "", "", Dict{String, Dict{String, Float32}}())
+        info = parse_fragment_annotation(UniSpecFragAnnotation("y2"))
+        start_idx, stop_idx = get_fragment_indices(info.base_type, info.frag_index, UInt8(length(sequence)))
+        expected_mz = get_fragment_mz(
+            start_idx,
+            stop_idx,
+            info.base_type,
+            info.charge,
+            aa_masses,
+            structural_mod_masses,
+            iso_mod_masses
+        )
+
+        @test isapprox(decoy_frags.mz[1], expected_mz; atol=1e-5)
+
+        rm(temp_dir, recursive=true)
+    end
+
     @testset "predict_fragments - main dispatcher" begin
         temp_dir = mktempdir()
         
