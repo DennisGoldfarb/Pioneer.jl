@@ -83,9 +83,13 @@ function predict_fragments(
 
     target_fragments_df = isempty(target_batches) ? DataFrame() : vcat(target_batches...)
 
+    target_groups = :precursor_idx ∈ names(target_fragments_df) ? groupby(target_fragments_df, :precursor_idx) : nothing
+    target_lookup = target_groups === nothing ? Dict{UInt32, SubDataFrame}() : Dict(UInt32(first(group.precursor_idx)) => group for group in target_groups)
+
     # Duplicate target predictions for decoys using partner mapping
     all_fragments_df = duplicate_decoy_fragments(
         target_fragments_df,
+        target_lookup,
         peptides_df,
         UInt32.(target_idxs),
         UInt32.(decoy_idxs),
@@ -96,6 +100,7 @@ end
 
 function duplicate_decoy_fragments(
     target_fragments_df::DataFrame,
+    target_lookup::Dict{UInt32, SubDataFrame},
     peptides_df::DataFrame,
     target_indices::Vector{UInt32},
     decoy_indices::Vector{UInt32},
@@ -117,7 +122,7 @@ function duplicate_decoy_fragments(
     end
 
     decoy_fragments = DataFrame[]
-    for decoy_idx in decoy_indices
+    for decoy_idx in ProgressBar(decoy_indices)
         pair_val = peptides_df.pair_id[decoy_idx]
         charge_val = peptides_df.precursor_charge[decoy_idx]
         if ismissing(pair_val) || ismissing(charge_val)
@@ -130,12 +135,12 @@ function duplicate_decoy_fragments(
         end
 
         target_idx = partner_lookup[partner_key]
-        target_rows = findall(target_fragments_df.precursor_idx .== target_idx)
-        if isempty(target_rows)
+        subdf = get(target_lookup, target_idx, nothing)
+        if subdf === nothing
             @warn "No fragment predictions found for target precursor $target_idx when duplicating decoy $decoy_idx" continue
         end
 
-        decoy_df = deepcopy(target_fragments_df[target_rows, :])
+        decoy_df = copy(subdf)
         decoy_df[!, :precursor_idx] .= decoy_idx
         push!(decoy_fragments, decoy_df)
     end
