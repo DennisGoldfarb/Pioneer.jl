@@ -49,8 +49,6 @@ function predict_fragments(
     # Load data and split targets/decoys
     peptides_df = DataFrame(Arrow.Table(peptide_table_path))
 
-    println(names(peptides_df), "\n")
-
     target_idxs = findall(.!peptides_df.decoy)
     decoy_idxs = findall(peptides_df.decoy)
 
@@ -119,11 +117,10 @@ function duplicate_decoy_fragments(
     for idx in target_indices
         pair_val = peptides_df.pair_id[idx]
         charge_val = peptides_df.precursor_charge[idx]
-        precursor_val = peptides_df.precursor_idx[idx]
-        if ismissing(pair_val) || ismissing(charge_val) || ismissing(precursor_val)
+        if ismissing(pair_val) || ismissing(charge_val)
             continue
         end
-        partner_lookup[(UInt32(pair_val), UInt8(charge_val))] = UInt32(precursor_val)
+        partner_lookup[(UInt32(pair_val), UInt8(charge_val))] = UInt32(idx)
     end
 
     decoy_fragments = DataFrame[]
@@ -147,14 +144,8 @@ function duplicate_decoy_fragments(
             continue
         end
 
-        precursor_val = peptides_df.precursor_idx[decoy_idx]
-        if ismissing(precursor_val)
-            @warn "Decoy precursor $decoy_idx missing precursor_idx identifier"
-            continue
-        end
-
         decoy_df = copy(target_lookup[target_precursor])
-        decoy_df[!, :precursor_idx] .= UInt32(precursor_val)
+        decoy_df[!, :precursor_idx] .= UInt32(decoy_idx)
         push!(decoy_fragments, decoy_df)
     end
 
