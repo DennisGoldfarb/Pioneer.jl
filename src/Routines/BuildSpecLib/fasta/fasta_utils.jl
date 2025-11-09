@@ -755,6 +755,228 @@ function count_y_ion_mass_differences(
 end
 
 
+const TERMINAL_MUTATION_MAP = Dict{Char, Char}(zip(
+    collect("GAVLIFMPWSCTYHKRQEND"),
+    collect("LLLVVLLLLTSSSSLLNDQE"),
+))
+
+sequence_exists(pss::PeptideSequenceSet, seq::AbstractString) = begin
+    normalized = replace(seq, 'I' => 'L')
+    any(stored_seq == normalized for (stored_seq, _) in getSeqSet(pss))
+end
+
+function collect_static_mods_for_sequence(
+    sequence::AbstractString,
+    fixed_mod_patterns::Vector{@NamedTuple{p::Regex, r::String}},
+)
+    if isempty(fixed_mod_patterns)
+        return PeptideMod[]
+    end
+    mods = PeptideMod[]
+    for mod in fixed_mod_patterns
+        getFixedMods!(mods, eachmatch(mod[:p], sequence), mod[:r])
+    end
+    sort!(mods)
+    return mods
+end
+
+function has_variable_mod_at_position(
+    mods::Union{Missing, Vector{PeptideMod}},
+    pos::Int,
+    var_mod_set::Set{String},
+)
+    if ismissing(mods)
+        return false
+    end
+    for mod in mods
+        if mod.mod_name ∈ var_mod_set && mod.aa ∉ ('n', 'c') && Int(mod.position) == pos
+            return true
+        end
+    end
+    return false
+end
+
+function collect_mutatable_positions(
+    sequence::AbstractString,
+    structural_mods_list::Vector{Union{Missing, Vector{PeptideMod}}},
+    var_mod_set::Set{String},
+    range_iter,
+)
+    len = lastindex(sequence)
+    positions = Int[]
+    for pos in range_iter
+        if pos <= 1 || pos >= len
+            continue
+        end
+        aa = sequence[pos]
+        haskey(TERMINAL_MUTATION_MAP, aa) || continue
+        has_var = any(has_variable_mod_at_position(mods, pos, var_mod_set) for mods in structural_mods_list)
+        if !has_var
+            push!(positions, pos)
+        end
+    end
+    return positions
+end
+
+function generate_mutation_position_sets(
+    n_positions::Vector{Int},
+    c_positions::Vector{Int},
+)
+    combos = Vector{Vector{Int}}()
+    if !isempty(n_positions) && !isempty(c_positions)
+        for n_pos in n_positions
+            for c_pos in c_positions
+                if n_pos == c_pos
+                    push!(combos, [n_pos])
+                else
+                    push!(combos, sort([n_pos, c_pos]))
+                end
+            end
+        end
+    elseif !isempty(n_positions)
+        for n_pos in n_positions
+            push!(combos, [n_pos])
+        end
+    elseif !isempty(c_positions)
+        for c_pos in c_positions
+            push!(combos, [c_pos])
+        end
+    end
+
+    unique_combos = Vector{Vector{Int}}()
+    seen = Set{Tuple{Vararg{Int}}}()
+    for combo in combos
+        key = tuple(combo...)
+        if key ∉ seen
+            push!(seen, key)
+            push!(unique_combos, combo)
+        end
+    end
+    return unique_combos
+end
+
+function apply_terminal_mutations(
+    sequence::AbstractString,
+    positions::Vector{Int},
+)
+    isempty(positions) && return nothing
+    chars = collect(sequence)
+    seen = Set{Int}()
+    for pos in positions
+        if pos ∈ seen
+            continue
+        end
+        new_aa = get(TERMINAL_MUTATION_MAP, chars[pos], nothing)
+        if new_aa === nothing
+            return nothing
+        end
+        chars[pos] = new_aa
+        push!(seen, pos)
+    end
+    return String(chars)
+end
+
+function rebuild_structural_mods_for_variants(
+    mutated_sequence::AbstractString,
+    original_mods::Vector{Union{Missing, Vector{PeptideMod}}},
+    static_mod_names::Set{String},
+    fixed_mod_patterns::Vector{@NamedTuple{p::Regex, r::String}},
+)
+    static_mods = collect_static_mods_for_sequence(mutated_sequence, fixed_mod_patterns)
+    result = Vector{Union{Missing, Vector{PeptideMod}}}(undef, length(original_mods))
+    for (i, mods) in enumerate(original_mods)
+        variable_mods = PeptideMod[]
+        if !ismissing(mods)
+            for mod in mods
+                if mod.mod_name ∉ static_mod_names
+                    push!(variable_mods, PeptideMod(mod.position, mod.aa, mod.mod_name))
+                end
+            end
+        end
+
+        if isempty(static_mods) && isempty(variable_mods)
+            result[i] = missing
+        else
+            combined = Vector{PeptideMod}(undef, length(static_mods) + length(variable_mods))
+            idx = 1
+            for mod in static_mods
+                combined[idx] = PeptideMod(mod.position, mod.aa, mod.mod_name)
+                idx += 1
+            end
+            for mod in variable_mods
+                combined[idx] = mod
+                idx += 1
+            end
+            sort!(combined)
+            result[i] = combined
+        end
+    end
+    return result
+end
+
+function try_terminal_mutation(
+    sequence::AbstractString,
+    structural_mods_list::Vector{Union{Missing, Vector{PeptideMod}}},
+    isotopic_mods_list::Vector{Union{Missing, Vector{PeptideMod}}},
+    sequences_set::PeptideSequenceSet,
+    target_y_masses_list::Vector{Vector{Float64}},
+    min_edit_distance::Int,
+    structural_mod_masses,
+    isotopic_mod_masses,
+    fixed_mod_patterns::Vector{@NamedTuple{p::Regex, r::String}},
+    static_mod_names::Set{String},
+    var_mod_set::Set{String},
+)
+    len = lastindex(sequence)
+    len <= 2 && return nothing
+
+    n_positions = collect_mutatable_positions(sequence, structural_mods_list, var_mod_set, 2:len-1)
+    c_positions = collect_mutatable_positions(sequence, structural_mods_list, var_mod_set, (len-1):-1:2)
+    position_sets = generate_mutation_position_sets(n_positions, c_positions)
+    isempty(position_sets) && return nothing
+
+    for positions in position_sets
+        mutated_sequence = apply_terminal_mutations(sequence, positions)
+        mutated_sequence === nothing && continue
+        sequence_exists(sequences_set, mutated_sequence) && continue
+
+        mutated_structural_mods = rebuild_structural_mods_for_variants(
+            mutated_sequence,
+            structural_mods_list,
+            static_mod_names,
+            fixed_mod_patterns,
+        )
+
+        min_distance = typemax(Int)
+        for (mods, iso_mods, target_y) in zip(
+            mutated_structural_mods,
+            isotopic_mods_list,
+            target_y_masses_list,
+        )
+            decoy_y = compute_y_ion_masses(
+                mutated_sequence,
+                mods,
+                iso_mods,
+                structural_mod_masses,
+                isotopic_mod_masses,
+            )
+            distance = count_y_ion_mass_differences(target_y, decoy_y)
+            min_distance = min(min_distance, distance)
+        end
+
+        if min_distance >= min_edit_distance
+            return (
+                sequence = mutated_sequence,
+                structural_mods_list = mutated_structural_mods,
+                distance = min_distance,
+            )
+        end
+    end
+
+    return nothing
+end
+
+
 """
     add_decoy_sequences(
         target_fasta_entries::Vector{FastaEntry};
@@ -764,6 +986,8 @@ end
         min_edit_distance::Int = 2,
         structural_mod_masses = Dict{String, Float64}(),
         isotopic_mod_masses = Dict{String, Float64}(),
+        fixed_mod_patterns::Vector{@NamedTuple{p::Regex, r::String}} = Vector{@NamedTuple{p::Regex, r::String}}(),
+        variable_mod_names::Vector{String} = String[],
     )
 
 Creates decoy sequences for target peptides while enforcing a minimum edit distance
@@ -777,6 +1001,8 @@ defined as the number of y-ions with different masses.
 - `min_edit_distance::Int`: Minimum number of differing y-ion masses required (default: 2).
 - `structural_mod_masses`: Dictionary mapping structural modification names to mass shifts.
 - `isotopic_mod_masses`: Dictionary mapping isotopic modification names to mass shifts.
+- `fixed_mod_patterns`: Regex/name pairs describing static modifications to recompute after mutation.
+- `variable_mod_names`: Names of variable modifications used to avoid mutating modified residues.
 
 # Returns
 - `Vector{FastaEntry}`: Combined and sorted vector with original entries and generated decoys.
@@ -795,12 +1021,16 @@ function add_decoy_sequences(
     min_edit_distance::Int = 2,
     structural_mod_masses = Dict{String, Float64}(),
     isotopic_mod_masses = Dict{String, Float64}(),
-    )
+    fixed_mod_patterns::Vector{@NamedTuple{p::Regex, r::String}} = Vector{@NamedTuple{p::Regex, r::String}}(),
+    variable_mod_names::Vector{String} = String[],
+)
     # Pre-allocate space for decoy entries
     decoy_fasta_entries = Vector{FastaEntry}(undef, length(target_fasta_entries))
 
     # Set to track unique sequences
     sequences_set = PeptideSequenceSet(target_fasta_entries)
+    static_mod_names = Set(mod[:r] for mod in fixed_mod_patterns)
+    var_mod_set = Set(variable_mod_names)
 
     # Initialize position tracking vector (max peptide length of 255 should be sufficient)
     #positions = Vector{UInt8}(undef, 255)
@@ -872,6 +1102,7 @@ function add_decoy_sequences(
                     sequence = decoy_sequence,
                     structural_mods = adjusted_structural_mods,
                     isotopic_mods = adjusted_isotopic_mods,
+                    distance = distance,
                 )
                 break
             elseif distance > best_distance
@@ -880,17 +1111,46 @@ function add_decoy_sequences(
                     sequence = decoy_sequence,
                     structural_mods = adjusted_structural_mods,
                     isotopic_mods = adjusted_isotopic_mods,
+                    distance = distance,
                 )
             end
 
             method = "shuffle"
         end
 
-        chosen = isnothing(candidate) ? best_candidate : candidate
+        chosen = if !isnothing(candidate)
+            candidate
+        else
+            mutation_result = try_terminal_mutation(
+                target_sequence,
+                [get_structural_mods(target_entry)],
+                [get_isotopic_mods(target_entry)],
+                sequences_set,
+                [target_y_masses],
+                min_edit_distance,
+                structural_mod_masses,
+                isotopic_mod_masses,
+                fixed_mod_patterns,
+                static_mod_names,
+                var_mod_set,
+            )
+            if !isnothing(mutation_result)
+                (
+                    sequence = mutation_result.sequence,
+                    structural_mods = mutation_result.structural_mods_list[1],
+                    isotopic_mods = get_isotopic_mods(target_entry),
+                    distance = mutation_result.distance,
+                )
+            else
+                best_candidate
+            end
+        end
 
         if isnothing(chosen)
             @user_warn "Unable to generate decoy for $(target_sequence) within $(max_shuffle_attempts) attempts"
             continue
+        elseif chosen.distance < min_edit_distance
+            @debug_l2 "Decoy for $(target_sequence) fell back below min_edit_distance ($(chosen.distance) < $(min_edit_distance))"
         end
 
         decoy_fasta_entries[n] = FastaEntry(
@@ -942,6 +1202,8 @@ while respecting a minimum y-ion edit distance.
 - `min_edit_distance::Int`: Minimum number of differing y-ion masses required per group
 - `structural_mod_masses`: Dictionary mapping structural modification names to mass shifts
 - `isotopic_mod_masses`: Dictionary mapping isotopic modification names to mass shifts
+- `fixed_mod_patterns`: Regex/name pairs describing static modifications to recompute after mutation
+- `variable_mod_names`: Names of variable modifications used to avoid mutating modified residues
 
 # Returns
 - `Vector{FastaEntry}`: Sorted vector with both original entries and their decoys
@@ -962,10 +1224,14 @@ function add_decoy_sequences_grouped(
     min_edit_distance::Int = 2,
     structural_mod_masses = Dict{String, Float64}(),
     isotopic_mod_masses = Dict{String, Float64}(),
+    fixed_mod_patterns::Vector{@NamedTuple{p::Regex, r::String}} = Vector{@NamedTuple{p::Regex, r::String}}(),
+    variable_mod_names::Vector{String} = String[],
 )::Vector{FastaEntry}
 
     # Track sequences (I/L equivalence) with charge awareness
     sequences_set = PeptideSequenceSet(target_fasta_entries)
+    static_mod_names = Set(mod[:r] for mod in fixed_mod_patterns)
+    var_mod_set = Set(variable_mod_names)
 
     # Prepare shuffler/reverser
     shuffle_seq = ShuffleSeq(
@@ -1004,12 +1270,16 @@ function add_decoy_sequences_grouped(
 
         seq_length = UInt8(length(base_seq))
         target_y_masses = Vector{Vector{Float64}}(undef, length(idxs))
+        structural_mods_list = Vector{Union{Missing, Vector{PeptideMod}}}(undef, length(idxs))
+        isotopic_mods_list = Vector{Union{Missing, Vector{PeptideMod}}}(undef, length(idxs))
         for (j, idx) in enumerate(idxs)
             entry = target_fasta_entries[idx]
+            structural_mods_list[j] = get_structural_mods(entry)
+            isotopic_mods_list[j] = get_isotopic_mods(entry)
             target_y_masses[j] = compute_y_ion_masses(
                 get_sequence(entry),
-                get_structural_mods(entry),
-                get_isotopic_mods(entry),
+                structural_mods_list[j],
+                isotopic_mods_list[j],
                 structural_mod_masses,
                 isotopic_mod_masses,
             )
@@ -1092,8 +1362,43 @@ function add_decoy_sequences_grouped(
         end
 
         decoy_sequence = best_candidate.sequence
-        positions_copy = best_candidate.positions
         candidate_mods = best_candidate.mods
+        selected_distance = best_candidate.distance
+
+        if selected_distance < min_edit_distance
+            mutation_result = try_terminal_mutation(
+                base_seq,
+                structural_mods_list,
+                isotopic_mods_list,
+                sequences_set,
+                target_y_masses,
+                min_edit_distance,
+                structural_mod_masses,
+                isotopic_mod_masses,
+                fixed_mod_patterns,
+                static_mod_names,
+                var_mod_set,
+            )
+
+            if !isnothing(mutation_result)
+                decoy_sequence = mutation_result.sequence
+                selected_distance = mutation_result.distance
+                mutated_mods = mutation_result.structural_mods_list
+                candidate_mods = Vector{Tuple{Union{Missing, Vector{PeptideMod}}, Union{Missing, Vector{PeptideMod}}}}(undef, length(idxs))
+                for variant_idx in eachindex(idxs)
+                    candidate_mods[variant_idx] = (
+                        mutated_mods[variant_idx],
+                        isotopic_mods_list[variant_idx],
+                    )
+                end
+            else
+                @debug_l2 "Decoy for $(base_seq) retained shuffled candidate with distance $(selected_distance) (< $(min_edit_distance))"
+            end
+        end
+
+        if selected_distance < min_edit_distance
+            @debug_l2 "Final decoy distance for $(base_seq) below threshold ($(selected_distance) < $(min_edit_distance))"
+        end
 
         for c in charges
             push!(sequences_set, decoy_sequence, c)

@@ -353,6 +353,61 @@
         sort!(strict_decoys, by = x -> get_base_pep_id(x))
         strict_diffs = [count_y_differences(get_sequence(entries[i]), get_sequence(strict_decoys[i])) for i in 1:2]
         @test all(strict_diffs .< 100)
+
+        # Mutation fallback handles static modification bookkeeping
+        mutation_entry = FastaEntry(
+            "P3", "", "", "", "human", "test", "ACEEFDK",
+            UInt32(1),
+            [
+                PeptideMod(UInt8(2), 'C', "StaticC"),
+                PeptideMod(UInt8(3), 'E', "StaticE"),
+                PeptideMod(UInt8(4), 'E', "StaticE"),
+            ],
+            missing,
+            UInt8(0),
+            UInt32(3),
+            UInt32(3),
+            UInt8(0),
+            false,
+        )
+
+        mutation_decoys = add_decoy_sequences(
+            [mutation_entry];
+            max_shuffle_attempts = 0,
+            fixed_mod_patterns = [(p = r"C", r = "StaticC"), (p = r"E", r = "StaticE")],
+        )
+
+        mutation_decoy = only(filter(is_decoy, mutation_decoys))
+        @test get_sequence(mutation_decoy) == "ASEEFEK"
+        expected_static_mods = [
+            PeptideMod(UInt8(3), 'E', "StaticE"),
+            PeptideMod(UInt8(4), 'E', "StaticE"),
+            PeptideMod(UInt8(6), 'E', "StaticE"),
+        ]
+        @test get_structural_mods(mutation_decoy) == expected_static_mods
+
+        # Variable modifications prevent mutation at that position
+        variable_entry = FastaEntry(
+            "P4", "", "", "", "human", "test", "ACEEFDK",
+            UInt32(1),
+            [PeptideMod(UInt8(6), 'D', "VarMod")],
+            missing,
+            UInt8(0),
+            UInt32(4),
+            UInt32(4),
+            UInt8(0),
+            false,
+        )
+
+        variable_decoys = add_decoy_sequences(
+            [variable_entry];
+            max_shuffle_attempts = 0,
+            variable_mod_names = ["VarMod"],
+        )
+
+        variable_decoy = only(filter(is_decoy, variable_decoys))
+        @test get_sequence(variable_decoy) == "ASEELDK"
+        @test get_structural_mods(variable_decoy) == [PeptideMod(UInt8(6), 'D', "VarMod")]
     end
     
     @testset "combine_shared_peptides" begin
