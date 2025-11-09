@@ -102,17 +102,35 @@ using JSON
         )
 
         sort_fragments!(df)
-        
+
         # Check that within each precursor, fragments are sorted by intensity (descending)
         @test df.precursor_idx == [1, 1, 1, 2, 2, 2]
-        
+
         # For precursor 1
         prec1_mask = df.precursor_idx .== 1
         @test issorted(df[prec1_mask, :intensities], rev=true)
-        
+
         # For precursor 2
         prec2_mask = df.precursor_idx .== 2
         @test issorted(df[prec2_mask, :intensities], rev=true)
+
+        coef_df = DataFrame(
+            precursor_idx = UInt32[1, 1, 2, 2],
+            annotation = Int32[10, 11, 20, 21],
+            coefficients = [
+                (0.1f0, 0.2f0),
+                (0.3f0, 0.4f0),
+                (0.5f0, 0.6f0),
+                (0.7f0, 0.8f0),
+            ],
+            ranking = UInt8[2, 1, 2, 1],
+            mz = Float32[100.0, 101.0, 200.0, 201.0],
+        )
+
+        sort_fragments!(coef_df)
+
+        @test coef_df.precursor_idx == UInt32[1, 1, 2, 2]
+        @test coef_df.ranking == UInt8[1, 2, 1, 2]
     end
     
     @testset "predict_fragments_batch" begin

@@ -227,10 +227,14 @@ function clone_decoy_fragments(
         end
 
         if nrow(frag_df) > max_allowed
-            if hasproperty(frag_df, :intensities)
-                order = sortperm(frag_df.intensities; rev=true)
+            order = if hasproperty(frag_df, :intensities)
+                sortperm(frag_df.intensities; rev=true)
+            elseif hasproperty(frag_df, :ranking)
+                sortperm(frag_df.ranking)
+            elseif hasproperty(frag_df, :rank)
+                sortperm(frag_df.rank)
             else
-                order = collect(1:nrow(frag_df))
+                collect(1:nrow(frag_df))
             end
             order = order[1:max_allowed]
             frag_df = frag_df[order, :]
@@ -508,6 +512,23 @@ end
 Sort fragments by intensity within each precursor group.
 """
 function sort_fragments!(df::DataFrame)
-    sort!(df, [:precursor_idx, order(:intensities, rev=true)])
+    nrow(df) <= 1 && return df
+
+    if hasproperty(df, :intensities)
+        sort!(df, [:precursor_idx, order(:intensities, rev=true)])
+        return df
+    elseif hasproperty(df, :ranking)
+        sort!(df, [:precursor_idx, :ranking])
+        return df
+    elseif hasproperty(df, :rank)
+        sort!(df, [:precursor_idx, :rank])
+        return df
+    end
+
+    tmp_col = gensym(:frag_order)
+    df[!, tmp_col] = collect(1:nrow(df))
+    sort!(df, [:precursor_idx, tmp_col])
+    select!(df, filter(col -> col != tmp_col, names(df)))
+    return df
 end
 
