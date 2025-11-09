@@ -202,18 +202,19 @@ using JSON
         )
 
         target_fragments = DataFrame(
-            annotation = ["y2"],
-            mz = Float32[400.0],
-            intensities = Float32[0.8],
-            precursor_idx = UInt32[1]
+            annotation = ["y2", "IH"],
+            mz = Float32[400.0, 110.0],
+            intensities = Float32[0.8, 0.2],
+            precursor_idx = UInt32[1, 1]
         )
 
         model = InstrumentSpecificModel("unispec")
         decoy_frags = clone_decoy_fragments(peptides_df, target_fragments, model, config_path)
 
-        @test nrow(decoy_frags) == 1
-        @test decoy_frags.precursor_idx == [UInt32(2)]
+        @test nrow(decoy_frags) == 2
+        @test all(decoy_frags.precursor_idx .== UInt32(2))
         @test decoy_frags.intensities == target_fragments.intensities
+        @test decoy_frags.annotation == target_fragments.annotation
 
         aa_masses = zeros(Float32, 255)
         structural_mod_masses = zeros(Float32, 255)
@@ -234,7 +235,13 @@ using JSON
             iso_mod_masses
         )
 
-        @test isapprox(decoy_frags.mz[1], expected_mz; atol=1e-5)
+        y2_idx = findfirst(==("y2"), decoy_frags.annotation)
+        @test y2_idx !== nothing
+        @test isapprox(decoy_frags.mz[y2_idx], expected_mz; atol=1e-5)
+
+        ih_idx = findfirst(==("IH"), decoy_frags.annotation)
+        @test ih_idx !== nothing
+        @test isfinite(decoy_frags.mz[ih_idx])
 
         rm(temp_dir, recursive=true)
     end

@@ -75,7 +75,8 @@ function get_fragment_annotation_info(
     annotation,
     model::KoinaModelType,
     ion_dictionary::Union{Nothing, Dict{Int32, String}},
-    cache::Dict{Any, PioneerFragAnnotation}
+    cache::Dict{Any, PioneerFragAnnotation},
+    immonium_to_sulfur_count::Dict{String, Int8} = Dict{String, Int8}()
 )
     if haskey(cache, annotation)
         return cache[annotation]
@@ -93,7 +94,10 @@ function get_fragment_annotation_info(
         GenericFragAnnotation(String(annotation))
     end
 
-    info = parse_fragment_annotation(frag_annotation)
+    info = parse_fragment_annotation(
+        frag_annotation;
+        immonium_to_sulfur_count=immonium_to_sulfur_count,
+    )
     cache[annotation] = info
     return info
 end
@@ -122,6 +126,7 @@ function clone_decoy_fragments(
     end
 
     structural_mod_to_mass, iso_mods_dict, _ = load_fragment_mod_dictionaries(config_path)
+    immonium_to_sulfur_count = get_immonium_sulfur_dict(asset_path("immonium.txt"))
 
     ion_dictionary = nothing
     if model_type isa SplineCoefficientModel
@@ -174,7 +179,13 @@ function clone_decoy_fragments(
         seq_length = UInt8(length(sequence))
 
         for frag_row in eachrow(frag_df)
-            info = get_fragment_annotation_info(frag_row.annotation, model_type, ion_dictionary, annotation_cache)
+            info = get_fragment_annotation_info(
+                frag_row.annotation,
+                model_type,
+                ion_dictionary,
+                annotation_cache,
+                immonium_to_sulfur_count,
+            )
             start_idx, stop_idx = get_fragment_indices(info.base_type, info.frag_index, seq_length)
             frag_row.mz = get_fragment_mz(
                 start_idx,
