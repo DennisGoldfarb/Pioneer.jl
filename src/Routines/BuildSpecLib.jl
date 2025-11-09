@@ -207,6 +207,21 @@ function BuildSpecLib(params_path::String)
             # Parse results and prepare for fragment prediction
             parse_timing = @timed begin
                 iso_mod_to_mass = Dict{String, Float32}()
+                structural_mod_to_mass = Dict{String, Float32}()
+                if haskey(params, "variable_mods")
+                    names = params["variable_mods"]["name"]
+                    masses = params["variable_mods"]["mass"]
+                    for (name, mass) in zip(names, masses)
+                        structural_mod_to_mass[name] = Float32(mass)
+                    end
+                end
+                if haskey(params, "fixed_mods")
+                    names = params["fixed_mods"]["name"]
+                    masses = params["fixed_mods"]["mass"]
+                    for (name, mass) in zip(names, masses)
+                        structural_mod_to_mass[name] = Float32(mass)
+                    end
+                end
                 precursors_arrow_path = parse_chronologer_output(
                     chronologer_out_path,
                     lib_dir,
@@ -266,6 +281,7 @@ function BuildSpecLib(params_path::String)
                         asset_path("immonium.txt"),
                         lib_dir,
                         Dict{String, Int8}(),
+                        structural_mod_to_mass,
                         iso_mod_to_mass,
                         koina_model_type
                     )
@@ -287,6 +303,7 @@ function BuildSpecLib(params_path::String)
                         asset_path("immonium.txt"),
                         lib_dir,
                         Dict{String, Int8}(),
+                        structural_mod_to_mass,
                         iso_mod_to_mass,
                         koina_model_type
                     )
