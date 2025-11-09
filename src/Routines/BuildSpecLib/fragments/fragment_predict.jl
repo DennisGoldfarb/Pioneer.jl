@@ -48,11 +48,10 @@ function predict_fragments(
 
     # Load data and split targets/decoys
     peptides_df = DataFrame(Arrow.Table(peptide_table_path))
-    if :decoy ∉ names(peptides_df)
-        error("Expected precursor table to contain a :decoy column")
-    end
 
-    target_idxs = findall(!peptides_df.decoy)
+    println(names(peptides_df), "\n")
+
+    target_idxs = findall(.!peptides_df.decoy)
     decoy_idxs = findall(peptides_df.decoy)
 
     # Process in batches for targets only
@@ -104,10 +103,6 @@ function duplicate_decoy_fragments(
     # Fast path: no decoys or no targets
     if isempty(decoy_indices) || isempty(target_fragments_df)
         return target_fragments_df
-    end
-
-    if (:pair_id ∉ names(peptides_df)) || (:precursor_charge ∉ names(peptides_df))
-        error("Precursor table must contain :pair_id and :precursor_charge columns to duplicate decoys")
     end
 
     # Build lookup from (pair_id, charge) -> precursor index for targets
