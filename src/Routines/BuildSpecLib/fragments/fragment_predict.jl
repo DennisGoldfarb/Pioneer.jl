@@ -119,10 +119,11 @@ function duplicate_decoy_fragments(
     for idx in target_indices
         pair_val = peptides_df.pair_id[idx]
         charge_val = peptides_df.precursor_charge[idx]
-        if ismissing(pair_val) || ismissing(charge_val)
+        precursor_val = peptides_df.precursor_idx[idx]
+        if ismissing(pair_val) || ismissing(charge_val) || ismissing(precursor_val)
             continue
         end
-        partner_lookup[(UInt32(pair_val), UInt8(charge_val))] = idx
+        partner_lookup[(UInt32(pair_val), UInt8(charge_val))] = UInt32(precursor_val)
     end
 
     decoy_fragments = DataFrame[]
@@ -140,14 +141,20 @@ function duplicate_decoy_fragments(
             continue
         end
 
-        target_idx = partner_lookup[partner_key]
-        if !haskey(target_lookup, target_idx)
-            @warn "No fragment predictions found for target precursor $target_idx when duplicating decoy $decoy_idx"
+        target_precursor = partner_lookup[partner_key]
+        if !haskey(target_lookup, target_precursor)
+            @warn "No fragment predictions found for target precursor $target_precursor when duplicating decoy $decoy_idx"
             continue
         end
 
-        decoy_df = copy(target_lookup[target_idx])
-        decoy_df[!, :precursor_idx] .= decoy_idx
+        precursor_val = peptides_df.precursor_idx[decoy_idx]
+        if ismissing(precursor_val)
+            @warn "Decoy precursor $decoy_idx missing precursor_idx identifier"
+            continue
+        end
+
+        decoy_df = copy(target_lookup[target_precursor])
+        decoy_df[!, :precursor_idx] .= UInt32(precursor_val)
         push!(decoy_fragments, decoy_df)
     end
 
