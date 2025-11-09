@@ -48,7 +48,7 @@ function predict_fragments(
 
     # Load data and split targets/decoys
     peptides_df = DataFrame(Arrow.Table(peptide_table_path))
-    if !haskey(peptides_df, :decoy)
+    if :decoy ∉ names(peptides_df)
         error("Expected precursor table to contain a :decoy column")
     end
 
@@ -106,7 +106,7 @@ function duplicate_decoy_fragments(
         return target_fragments_df
     end
 
-    if !haskey(peptides_df, :pair_id) || !haskey(peptides_df, :precursor_charge)
+    if (:pair_id ∉ names(peptides_df)) || (:precursor_charge ∉ names(peptides_df))
         error("Precursor table must contain :pair_id and :precursor_charge columns to duplicate decoys")
     end
 
