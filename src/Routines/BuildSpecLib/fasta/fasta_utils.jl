@@ -620,7 +620,7 @@ function shuffle_fast_with_positions_and_fixed_chars!(
 end
 
 function adjust_mod_positions(
-    mods::Union{Missing, Vector{PeptideMod}}, 
+    mods::Union{Missing, Vector{PeptideMod}},
     positions::Vector{UInt8},
     seq_length::UInt8
 )::Union{Missing, Vector{PeptideMod}}
@@ -670,61 +670,141 @@ end
 
 
 """
-    add_decoy_sequences(target_fasta_entries::Vector{FastaEntry}; max_shuffle_attempts::Int64 = 20)
+    compute_y_ion_masses(
+        sequence::AbstractString,
+        structural_mods::Union{Missing, Vector{PeptideMod}},
+        isotopic_mods::Union{Missing, Vector{PeptideMod}},
+        structural_mod_masses,
+        isotopic_mod_masses,
+    )
 
-Creates decoy sequences for target peptides by reversing all but the last amino acid.
-If reversal creates a duplicate sequence, falls back to shuffling.
+Calculate the cumulative masses for the y-ion series of a peptide sequence.
+
+The returned vector is ordered as `[y₁, y₂, …, yₙ₋₁]` where each entry
+represents the summed mass contribution (amino acids + modifications) of the
+corresponding C-terminal fragment. Constant offsets such as proton and water
+masses are omitted because they cancel out when comparing two sequences.
+"""
+function compute_y_ion_masses(
+    sequence::AbstractString,
+    structural_mods::Union{Missing, Vector{PeptideMod}},
+    isotopic_mods::Union{Missing, Vector{PeptideMod}},
+    structural_mod_masses,
+    isotopic_mod_masses,
+)::Vector{Float64}
+    len = length(sequence)
+    len <= 1 && return Float64[]
+
+    contributions = zeros(Float64, len)
+
+    for (i, aa) in enumerate(sequence)
+        contributions[i] += AA_to_mass[aa]
+    end
+
+    if !ismissing(structural_mods)
+        for mod in structural_mods
+            pos = clamp(Int(mod.position), 1, len)
+            mass = haskey(structural_mod_masses, mod.mod_name) ?
+                Float64(structural_mod_masses[mod.mod_name]) : 0.0
+            contributions[pos] += mass
+        end
+    end
+
+    if !ismissing(isotopic_mods)
+        for mod in isotopic_mods
+            pos = clamp(Int(mod.position), 1, len)
+            mass = haskey(isotopic_mod_masses, mod.mod_name) ?
+                Float64(isotopic_mod_masses[mod.mod_name]) : 0.0
+            contributions[pos] += mass
+        end
+    end
+
+    y_masses = Vector{Float64}(undef, len - 1)
+    suffix_sum = 0.0
+    idx = len
+    for out_idx in 1:(len - 1)
+        suffix_sum += contributions[idx]
+        y_masses[out_idx] = suffix_sum
+        idx -= 1
+    end
+
+    return y_masses
+end
+
+
+"""
+    count_y_ion_mass_differences(target::Vector{Float64}, decoy::Vector{Float64}; atol::Float64=1e-6)
+
+Counts how many y-ion masses differ between two peptides. The vectors are
+expected to represent `[y₁, y₂, …, yₙ₋₁]`. Length mismatches are treated as
+additional differences.
+"""
+function count_y_ion_mass_differences(
+    target::Vector{Float64},
+    decoy::Vector{Float64};
+    atol::Float64=1e-6,
+)::Int
+    n = min(length(target), length(decoy))
+    diff = 0
+    for i in 1:n
+        if !isapprox(target[i], decoy[i]; atol=atol)
+            diff += 1
+        end
+    end
+    return diff + abs(length(target) - length(decoy))
+end
+
+
+"""
+    add_decoy_sequences(
+        target_fasta_entries::Vector{FastaEntry};
+        max_shuffle_attempts::Int64 = 20,
+        fixed_chars::Vector{Char} = Vector{Char}(),
+        decoy_method::String = "shuffle",
+        min_edit_distance::Int = 2,
+        structural_mod_masses = Dict{String, Float64}(),
+        isotopic_mod_masses = Dict{String, Float64}(),
+    )
+
+Creates decoy sequences for target peptides while enforcing a minimum edit distance
+defined as the number of y-ions with different masses.
 
 # Parameters
-- `target_fasta_entries::Vector{FastaEntry}`: Vector of target peptide entries to generate decoys for
-- `max_shuffle_attempts::Int64`: Maximum attempts to generate unique shuffled sequence when reversal creates a duplicate (default: 20)
+- `target_fasta_entries::Vector{FastaEntry}`: Peptides to generate decoys for.
+- `max_shuffle_attempts::Int64`: Maximum number of unique shuffles to attempt per peptide.
+- `fixed_chars::Vector{Char}`: Characters that should remain fixed during shuffling.
+- `decoy_method::String`: Initial decoy generation strategy ("shuffle" or "reverse").
+- `min_edit_distance::Int`: Minimum number of differing y-ion masses required (default: 2).
+- `structural_mod_masses`: Dictionary mapping structural modification names to mass shifts.
+- `isotopic_mod_masses`: Dictionary mapping isotopic modification names to mass shifts.
 
 # Returns
-- `Vector{FastaEntry}`: Sorted vector containing both original entries and their decoys
-
-# Details
-For each target peptide:
-1. Reverses the sequence keeping the last amino acid fixed
-2. If the resulting sequence already exists, tries shuffling instead
-3. Updates modification positions to match the reversed/shuffled sequence
-4. Sets is_decoy=true for decoy entries
-5. Maintains original metadata (base_pep_id, entrapment_group_id) for tracking
-6. Returns a combined list of target and decoy sequences, sorted by sequence
-
-# Examples
-```julia
-# Add reverse decoys to a set of target entries
-all_entries = add_decoy_sequences(target_entries)
-
-# Add decoys with more shuffle attempts
-all_entries = add_decoy_sequences(target_entries, max_shuffle_attempts=50)
-```
+- `Vector{FastaEntry}`: Combined and sorted vector with original entries and generated decoys.
 
 # Notes
-- Preserves C-terminal amino acid to maintain enzymatic cleavage properties
-- Correctly handles modifications, updating their positions to match the reversed sequence
-- Uses I/L equivalence when checking for sequence uniqueness
-- Entries are sorted by sequence in the output for efficient lookup
+- Falls back to shuffling if `decoy_method == "reverse"` produces duplicates.
+- If no candidate meets `min_edit_distance`, the best (largest distance) unique
+  shuffle is used when available; otherwise the peptide is skipped.
+- Constant offsets in fragment masses are ignored when computing edit distances.
 """
 function add_decoy_sequences(
-    target_fasta_entries::Vector{FastaEntry}; 
+    target_fasta_entries::Vector{FastaEntry};
     max_shuffle_attempts::Int64 = 20,
     fixed_chars::Vector{Char} = Vector{Char}(),
-    decoy_method::String = "shuffle"
+    decoy_method::String = "shuffle",
+    min_edit_distance::Int = 2,
+    structural_mod_masses = Dict{String, Float64}(),
+    isotopic_mod_masses = Dict{String, Float64}(),
     )
     # Pre-allocate space for decoy entries
     decoy_fasta_entries = Vector{FastaEntry}(undef, length(target_fasta_entries))
-    
+
     # Set to track unique sequences
     sequences_set = PeptideSequenceSet(target_fasta_entries)
-    
-    # Counters for tracking fallback to shuffle
-    total_sequences = length(target_fasta_entries)
-    fallback_to_shuffle_count = 0
-    
+
     # Initialize position tracking vector (max peptide length of 255 should be sufficient)
     #positions = Vector{UInt8}(undef, 255)
-    
+
     shuffle_seq = ShuffleSeq(
         "",
         Vector{Char}(undef, 255),
@@ -739,94 +819,102 @@ function add_decoy_sequences(
         target_sequence = get_sequence(target_entry)
         charge = get_charge(target_entry)
         seq_length = UInt8(length(target_sequence))
+        target_y_masses = compute_y_ion_masses(
+            target_sequence,
+            get_structural_mods(target_entry),
+            get_isotopic_mods(target_entry),
+            structural_mod_masses,
+            isotopic_mod_masses,
+        )
 
-        # Create decoy sequence using the specified method
-        decoy_sequence = shuffle_sequence!(shuffle_seq, target_sequence; method=decoy_method)
-                
-        n_shuffle_attempts = 0
-        
-        # If the decoy creates a duplicate, need to handle differently based on method
-        if (decoy_sequence, charge) ∈ sequences_set
-            if decoy_method == "reverse"
-                # If reverse creates a duplicate, fall back to shuffle
-                # (reverse is deterministic, so retrying won't help)
-                @debug_l2 "Reverse created duplicate for $target_sequence, falling back to shuffle"
-                fallback_to_shuffle_count += 1
-                while n_shuffle_attempts < max_shuffle_attempts
-                    decoy_sequence = shuffle_sequence!(shuffle_seq, target_sequence; method="shuffle")
-                    
-                    if (decoy_sequence, charge) ∉ sequences_set
-                        break
-                    end
-                    n_shuffle_attempts += 1
+        attempts = 0
+        method = decoy_method
+        candidate = nothing
+        best_candidate = nothing
+        best_distance = -1
+
+        while attempts < max_shuffle_attempts
+            decoy_sequence = shuffle_sequence!(shuffle_seq, target_sequence; method=method)
+            attempts += 1
+
+            if (decoy_sequence, charge) ∈ sequences_set
+                if decoy_method == "reverse" && method == "reverse"
+                    @debug_l2 "Reverse created duplicate for $target_sequence, falling back to shuffle"
                 end
-            else
-                # For shuffle, keep trying with shuffle
-                while n_shuffle_attempts < max_shuffle_attempts
-                    decoy_sequence = shuffle_sequence!(shuffle_seq, target_sequence; method="shuffle")
-                    
-                    if (decoy_sequence, charge) ∉ sequences_set
-                        break
-                    end
-                    n_shuffle_attempts += 1
-                end
+                method = "shuffle"
+                continue
             end
-        end
-        
-        if n_shuffle_attempts >= max_shuffle_attempts
-            @user_warn "Exceeded max shuffle attempts for $(get_sequence(target_entry))"
-        else
-            # Adjust modification positions based on sequence manipulation
+
             adjusted_structural_mods = adjust_mod_positions(
                 get_structural_mods(target_entry),
                 shuffle_seq.new_positions,
-                seq_length
+                seq_length,
             )
-            
+
             adjusted_isotopic_mods = adjust_mod_positions(
                 get_isotopic_mods(target_entry),
                 shuffle_seq.new_positions,
-                seq_length
+                seq_length,
             )
-            
-            # Create decoy entry with adjusted modifications
-            decoy_fasta_entries[n] = FastaEntry(
-                get_id(target_entry),
-                get_description(target_entry),
-                get_gene(target_entry),
-                get_protein(target_entry),
-                get_organism(target_entry),
-                get_proteome(target_entry),
+
+            decoy_y_masses = compute_y_ion_masses(
                 decoy_sequence,
-                get_start_idx(target_entry),
                 adjusted_structural_mods,
                 adjusted_isotopic_mods,
-                get_charge(target_entry),
-                get_base_target_id(target_entry), # inherit base_target_id for tracking
-                get_base_pep_id(target_entry),  # inherit base_pep_id for pairing
-                get_entrapment_pair_id(target_entry),
-                true  # This is a decoy sequence
+                structural_mod_masses,
+                isotopic_mod_masses,
             )
-            
-            n += 1
-            push!(sequences_set, decoy_sequence, get_charge(target_entry))
+
+            distance = count_y_ion_mass_differences(target_y_masses, decoy_y_masses)
+
+            if distance >= min_edit_distance
+                candidate = (
+                    sequence = decoy_sequence,
+                    structural_mods = adjusted_structural_mods,
+                    isotopic_mods = adjusted_isotopic_mods,
+                )
+                break
+            elseif distance > best_distance
+                best_distance = distance
+                best_candidate = (
+                    sequence = decoy_sequence,
+                    structural_mods = adjusted_structural_mods,
+                    isotopic_mods = adjusted_isotopic_mods,
+                )
+            end
+
+            method = "shuffle"
         end
-    end
-    
-    # Report statistics if using reverse method
-    #=
-    if decoy_method == "reverse"
-        if fallback_to_shuffle_count > 0
-            @user_warn "Decoy generation statistics for REVERSE method:"
-            @user_warn "  Total sequences attempted: $total_sequences"
-            @user_warn "  Sequences where reverse created duplicates: $fallback_to_shuffle_count"
-            @user_warn "  Sequences successfully reversed: $(total_sequences - fallback_to_shuffle_count)"
-            @user_warn "  Fallback rate: $(round(100.0 * fallback_to_shuffle_count / total_sequences, digits=1))%"
-        else
-            @user_info "Successfully reversed all $total_sequences sequences without duplicates"
+
+        chosen = isnothing(candidate) ? best_candidate : candidate
+
+        if isnothing(chosen)
+            @user_warn "Unable to generate decoy for $(target_sequence) within $(max_shuffle_attempts) attempts"
+            continue
         end
+
+        decoy_fasta_entries[n] = FastaEntry(
+            get_id(target_entry),
+            get_description(target_entry),
+            get_gene(target_entry),
+            get_protein(target_entry),
+            get_organism(target_entry),
+            get_proteome(target_entry),
+            chosen.sequence,
+            get_start_idx(target_entry),
+            chosen.structural_mods,
+            chosen.isotopic_mods,
+            get_charge(target_entry),
+            get_base_target_id(target_entry), # inherit base_target_id for tracking
+            get_base_pep_id(target_entry),  # inherit base_pep_id for pairing
+            get_entrapment_pair_id(target_entry),
+            true  # This is a decoy sequence
+        )
+
+        n += 1
+        push!(sequences_set, chosen.sequence, get_charge(target_entry))
     end
-    =#
+
     # Sort the peptides by sequence
     return sort(vcat(target_fasta_entries, decoy_fasta_entries[1:n-1]), by = x -> get_sequence(x))
 end
@@ -836,17 +924,24 @@ end
         target_fasta_entries::Vector{FastaEntry};
         max_shuffle_attempts::Int64 = 20,
         fixed_chars::Vector{Char} = Vector{Char}(),
-        decoy_method::String = "shuffle"
+        decoy_method::String = "shuffle",
+        min_edit_distance::Int = 2,
+        structural_mod_masses = Dict{String, Float64}(),
+        isotopic_mod_masses = Dict{String, Float64}(),
     )::Vector{FastaEntry}
 
 Group-aware decoy generation that ensures all modification variants of the same
-base peptide sequence share a single decoy sequence and mod position mapping.
+base peptide sequence share a single decoy sequence and mod position mapping
+while respecting a minimum y-ion edit distance.
 
 # Parameters
 - `target_fasta_entries::Vector{FastaEntry}`: Peptide entries to generate decoys for (typically includes targets and entrapments)
 - `max_shuffle_attempts::Int64`: Max attempts to find a unique shuffled sequence
 - `fixed_chars::Vector{Char}`: Optional set of characters kept fixed when shuffling
 - `decoy_method::String`: "shuffle" or "reverse" (reverse may fall back to shuffle)
+- `min_edit_distance::Int`: Minimum number of differing y-ion masses required per group
+- `structural_mod_masses`: Dictionary mapping structural modification names to mass shifts
+- `isotopic_mod_masses`: Dictionary mapping isotopic modification names to mass shifts
 
 # Returns
 - `Vector{FastaEntry}`: Sorted vector with both original entries and their decoys
@@ -854,7 +949,8 @@ base peptide sequence share a single decoy sequence and mod position mapping.
 # Details
 Algorithm:
 1. Group by base sequence (ignoring modifications)
-2. For each base sequence, generate one decoy sequence once (respect I/L equivalence and charges)
+2. For each group, attempt shuffles until the minimal y-ion edit distance across
+   variants meets the threshold (or the best attempt is selected if none do)
 3. Apply the same position mapping to all modification variants in the group
 4. Preserve metadata and set `is_decoy = true`
 """
@@ -862,7 +958,10 @@ function add_decoy_sequences_grouped(
     target_fasta_entries::Vector{FastaEntry};
     max_shuffle_attempts::Int64 = 20,
     fixed_chars::Vector{Char} = Vector{Char}(),
-    decoy_method::String = "shuffle"
+    decoy_method::String = "shuffle",
+    min_edit_distance::Int = 2,
+    structural_mod_masses = Dict{String, Float64}(),
+    isotopic_mod_masses = Dict{String, Float64}(),
 )::Vector{FastaEntry}
 
     # Track sequences (I/L equivalence) with charge awareness
@@ -903,50 +1002,106 @@ function add_decoy_sequences_grouped(
         # Unique charges across variants in this group
         charges = unique([get_charge(target_fasta_entries[i]) for i in idxs])
 
-        # Generate a single decoy sequence for this base_seq
-        n_shuffle_attempts = 0
-        decoy_sequence = shuffle_sequence!(shuffle_seq, base_seq; method=decoy_method)
-
-        # Handle duplicates: reverse may fall back to shuffle; shuffle keeps trying
-        needs_retry = any(((decoy_sequence, c) ∈ sequences_set) for c in charges)
-        if needs_retry && decoy_method == "reverse"
-            @user_warn "Reverse duplicate for decoy of $base_seq; fallback to shuffle"
-            fallback_to_shuffle_count += 1
+        seq_length = UInt8(length(base_seq))
+        target_y_masses = Vector{Vector{Float64}}(undef, length(idxs))
+        for (j, idx) in enumerate(idxs)
+            entry = target_fasta_entries[idx]
+            target_y_masses[j] = compute_y_ion_masses(
+                get_sequence(entry),
+                get_structural_mods(entry),
+                get_isotopic_mods(entry),
+                structural_mod_masses,
+                isotopic_mod_masses,
+            )
         end
-        while needs_retry && n_shuffle_attempts < max_shuffle_attempts
-            decoy_sequence = shuffle_sequence!(shuffle_seq, base_seq; method="shuffle")
+
+        attempts = 0
+        method = decoy_method
+        best_candidate = nothing
+        best_distance = -1
+
+        while attempts < max_shuffle_attempts
+            decoy_sequence = shuffle_sequence!(shuffle_seq, base_seq; method=method)
+            attempts += 1
+
             needs_retry = any(((decoy_sequence, c) ∈ sequences_set) for c in charges)
-            n_shuffle_attempts += 1
+            if needs_retry
+                if decoy_method == "reverse" && method == "reverse"
+                    @user_warn "Reverse duplicate for decoy of $base_seq; fallback to shuffle"
+                    fallback_to_shuffle_count += 1
+                end
+                method = "shuffle"
+                continue
+            end
+
+            positions_copy = Vector{UInt8}(shuffle_seq.new_positions)
+            candidate_mods = Vector{Tuple{Union{Missing, Vector{PeptideMod}}, Union{Missing, Vector{PeptideMod}}}}(undef, length(idxs))
+            min_distance = typemax(Int)
+
+            for (j, idx) in enumerate(idxs)
+                target_entry = target_fasta_entries[idx]
+                adjusted_structural_mods = adjust_mod_positions(
+                    get_structural_mods(target_entry),
+                    positions_copy,
+                    seq_length,
+                )
+                adjusted_isotopic_mods = adjust_mod_positions(
+                    get_isotopic_mods(target_entry),
+                    positions_copy,
+                    seq_length,
+                )
+
+                candidate_mods[j] = (adjusted_structural_mods, adjusted_isotopic_mods)
+
+                decoy_y_masses = compute_y_ion_masses(
+                    decoy_sequence,
+                    adjusted_structural_mods,
+                    adjusted_isotopic_mods,
+                    structural_mod_masses,
+                    isotopic_mod_masses,
+                )
+
+                distance = count_y_ion_mass_differences(target_y_masses[j], decoy_y_masses)
+                min_distance = min(min_distance, distance)
+            end
+
+            if min_distance >= min_edit_distance
+                best_candidate = (
+                    sequence = decoy_sequence,
+                    positions = positions_copy,
+                    mods = candidate_mods,
+                    distance = min_distance,
+                )
+                break
+            elseif min_distance > best_distance
+                best_distance = min_distance
+                best_candidate = (
+                    sequence = decoy_sequence,
+                    positions = positions_copy,
+                    mods = candidate_mods,
+                    distance = min_distance,
+                )
+            end
+
+            method = "shuffle"
         end
 
-        if needs_retry
+        if isnothing(best_candidate)
             exhausted_groups += 1
             continue
         end
 
-        # Snapshot positions for consistent mod adjustment across all variants
-        positions_copy = Vector{UInt8}(shuffle_seq.new_positions)
-        seq_length = UInt8(length(base_seq))
+        decoy_sequence = best_candidate.sequence
+        positions_copy = best_candidate.positions
+        candidate_mods = best_candidate.mods
 
-        # Reserve the decoy sequence across all charges
         for c in charges
             push!(sequences_set, decoy_sequence, c)
         end
 
-        # Build decoys for each variant in this group using the same mapping
-        for idx in idxs
+        for (variant_idx, idx) in enumerate(idxs)
             target_entry = target_fasta_entries[idx]
-
-            adjusted_structural_mods = adjust_mod_positions(
-                get_structural_mods(target_entry),
-                positions_copy,
-                seq_length
-            )
-            adjusted_isotopic_mods = adjust_mod_positions(
-                get_isotopic_mods(target_entry),
-                positions_copy,
-                seq_length
-            )
+            adjusted_structural_mods, adjusted_isotopic_mods = candidate_mods[variant_idx]
 
             push!(decoy_entries, FastaEntry(
                 get_id(target_entry),
