@@ -201,7 +201,7 @@ function prepare_chronologer_input(
     # Step 6: Add decoys (GROUPED by base sequence; all mods share same decoy)
     if _params.fasta_digest_params["add_decoys"]
         decoy_method = get(_params.fasta_digest_params, "decoy_method", "shuffle")
-        min_edit_distance = get(_params.fasta_digest_params, "min_decoy_edit_distance", 2)
+        min_edit_distance = get(_params.fasta_digest_params, "min_decoy_edit_distance", 3)
         fasta_entries = add_decoy_sequences_grouped(
             fasta_entries;
             decoy_method = decoy_method,
