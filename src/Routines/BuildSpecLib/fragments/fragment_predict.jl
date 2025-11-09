@@ -46,42 +46,112 @@ function predict_fragments(
         error("Invalid model name: $model_name. Valid options: $(join(keys(KOINA_URLS), ", "))")
     end
 
-    # Load data
+    # Load data and split targets/decoys
     peptides_df = DataFrame(Arrow.Table(peptide_table_path))
+    if :decoy ∉ names(peptides_df)
+        error("Expected precursor table to contain a :decoy column")
+    end
 
-    # Process in batches
+    target_idxs = findall(!peptides_df.decoy)
+    decoy_idxs = findall(peptides_df.decoy)
+
+    # Process in batches for targets only
     koina_pool_size = max_koina_batches * 5
-    nprecs = nrow(peptides_df)
+    n_targets = length(target_idxs)
     batch_size = min(batch_size, 1000)
-    batch_start_idxs = collect(one(UInt32):UInt32(batch_size*koina_pool_size):UInt32(nprecs))
+    target_batches = DataFrame[]
+    if n_targets > 0
+        batch_start_positions = 1:batch_size*koina_pool_size:n_targets
+        rm(frags_out_path, force=true)
 
-    rm(frags_out_path, force=true)
-    
-    for start_idx in ProgressBar(batch_start_idxs)
-        stop_idx = min(start_idx + batch_size*koina_pool_size - 1, nrow(peptides_df))
-        batch_df = peptides_df[start_idx:stop_idx, :]
-        
-        # Generate predictions for batch
-        frags_out = predict_fragments_batch(
-            batch_df,
-            model_type,
-            instrument_type,
-            batch_size,
-            max_koina_batches,
-            start_idx,
-            
-        )
+        for start_pos in ProgressBar(batch_start_positions)
+            stop_pos = min(start_pos + batch_size*koina_pool_size - 1, n_targets)
+            batch_indices = target_idxs[start_pos:stop_pos]
+            batch_df = peptides_df[batch_indices, :]
 
-        # Write or append results
-        if start_idx == 1
-            # Create file in stream format to support appending
-            open(frags_out_path, "w") do io
-                Arrow.write(io, frags_out; file=false)  # file=false creates stream format
-            end
-        else
-            Arrow.append(frags_out_path, frags_out)
+            frags_out = predict_fragments_batch(
+                batch_df,
+                model_type,
+                instrument_type,
+                batch_size,
+                max_koina_batches,
+                UInt32.(batch_indices),
+            )
+
+            push!(target_batches, frags_out)
         end
     end
+
+    target_fragments_df = isempty(target_batches) ? DataFrame() : vcat(target_batches...)
+
+    # Duplicate target predictions for decoys using partner mapping
+    all_fragments_df = duplicate_decoy_fragments(
+        target_fragments_df,
+        peptides_df,
+        UInt32.(target_idxs),
+        UInt32.(decoy_idxs),
+    )
+
+    Arrow.write(frags_out_path, all_fragments_df)
+end
+
+function duplicate_decoy_fragments(
+    target_fragments_df::DataFrame,
+    peptides_df::DataFrame,
+    target_indices::Vector{UInt32},
+    decoy_indices::Vector{UInt32},
+)
+    # Fast path: no decoys or no targets
+    if isempty(decoy_indices) || isempty(target_fragments_df)
+        return target_fragments_df
+    end
+
+    if (:pair_id ∉ names(peptides_df)) || (:precursor_charge ∉ names(peptides_df))
+        error("Precursor table must contain :pair_id and :precursor_charge columns to duplicate decoys")
+    end
+
+    # Build lookup from (pair_id, charge) -> precursor index for targets
+    partner_lookup = Dict{Tuple{UInt32, UInt8}, UInt32}()
+    for idx in target_indices
+        pair_val = peptides_df.pair_id[idx]
+        charge_val = peptides_df.precursor_charge[idx]
+        if ismissing(pair_val) || ismissing(charge_val)
+            continue
+        end
+        partner_lookup[(UInt32(pair_val), UInt8(charge_val))] = idx
+    end
+
+    decoy_fragments = DataFrame[]
+    for decoy_idx in decoy_indices
+        pair_val = peptides_df.pair_id[decoy_idx]
+        charge_val = peptides_df.precursor_charge[decoy_idx]
+        if ismissing(pair_val) || ismissing(charge_val)
+            @warn "Decoy precursor $decoy_idx missing pair_id or precursor_charge metadata" continue
+        end
+        partner_key = (UInt32(pair_val), UInt8(charge_val))
+
+        if !haskey(partner_lookup, partner_key)
+            @warn "No target partner found for decoy precursor $decoy_idx (pair_id=$(pair_val), charge=$(charge_val))" continue
+        end
+
+        target_idx = partner_lookup[partner_key]
+        target_rows = findall(target_fragments_df.precursor_idx .== target_idx)
+        if isempty(target_rows)
+            @warn "No fragment predictions found for target precursor $target_idx when duplicating decoy $decoy_idx" continue
+        end
+
+        decoy_df = deepcopy(target_fragments_df[target_rows, :])
+        decoy_df[!, :precursor_idx] .= decoy_idx
+        push!(decoy_fragments, decoy_df)
+    end
+
+    if isempty(decoy_fragments)
+        return target_fragments_df
+    end
+
+    combined = vcat(target_fragments_df, decoy_fragments...)
+    sort!(combined, :precursor_idx)
+    return combined
 end
 
 """
@@ -93,7 +163,7 @@ function predict_fragments_batch(
     instrument_type::String,
     batch_size::Int,
     concurrent_koina_requests::Int,
-    first_prec_idx::UInt32
+    precursor_indices::Vector{UInt32}
 )::DataFrame
     # Verify instrument compatibility
     if instrument_type ∉ MODEL_CONFIGS[model.name].instruments
@@ -110,16 +180,16 @@ function predict_fragments_batch(
     # Request predictions
     responses = make_koina_batch_requests(json_batches, KOINA_URLS[model.name]; concurrency=concurrent_koina_requests)
     # Process responses
-    batch_dfs = []
+    batch_dfs = Vector{DataFrame}()
     for (i, response) in enumerate(responses)
         batch_result = parse_koina_batch(model, response)
-        start_idx = (i-1) * batch_size + 1 + first_prec_idx - 1
-        
-        # Add precursor indices
+        batch_start = (i-1) * batch_size + 1
+        batch_stop = min(i * batch_size, length(precursor_indices))
+        current_indices = precursor_indices[batch_start:batch_stop]
+
         batch_df = batch_result.fragments
-        n_precursors_in_batch = UInt32(fld(size( batch_df , 1), batch_result.frags_per_precursor))
-        batch_df[!, :precursor_idx] = repeat(start_idx:(start_idx + n_precursors_in_batch - one(UInt32)), 
-                                                inner=batch_result.frags_per_precursor)
+        n_precursors_in_batch = length(current_indices)
+        batch_df[!, :precursor_idx] = repeat(current_indices, inner=batch_result.frags_per_precursor)
         # Filter and sort fragments
         filter_fragments!(batch_df, model)
         push!(batch_dfs, batch_df)
@@ -142,7 +212,7 @@ function predict_fragments_batch(
     _::String,  # instrument type not used
     batch_size::Int,
     concurrent_koina_requests::Int,
-    first_prec_idx::UInt32
+    precursor_indices::Vector{UInt32}
 )::DataFrame
     # Prepare batches (no instrument type needed)
     json_batches = prepare_koina_batch(
@@ -155,16 +225,16 @@ function predict_fragments_batch(
     responses = make_koina_batch_requests(json_batches, KOINA_URLS[model.name]; concurrency=concurrent_koina_requests)
 
     # Process responses
-    batch_dfs = []
+    batch_dfs = Vector{DataFrame}()
     for (i, response) in enumerate(responses)
         batch_result = parse_koina_batch(model, response)
-        start_idx = (i-1) * batch_size + 1 + first_prec_idx - 1
-        
-        # Add precursor indices
+        batch_start = (i-1) * batch_size + 1
+        batch_stop = min(i * batch_size, length(precursor_indices))
+        current_indices = precursor_indices[batch_start:batch_stop]
+
         batch_df = batch_result.fragments
-        n_precursors_in_batch = UInt32(fld(size( batch_df , 1), batch_result.frags_per_precursor))
-        batch_df[!, :precursor_idx] = repeat(start_idx:(start_idx + n_precursors_in_batch - one(UInt32)), 
-                                                inner=batch_result.frags_per_precursor)
+        n_precursors_in_batch = length(current_indices)
+        batch_df[!, :precursor_idx] = repeat(current_indices, inner=batch_result.frags_per_precursor)
         # Filter and sort fragments
         filter_fragments!(batch_df, model)
         push!(batch_dfs, batch_df)
@@ -185,7 +255,7 @@ function predict_fragments_batch(
     instrument_type::String,
     batch_size::Int,
     concurrent_koina_requests::Int,
-    first_prec_idx::UInt32
+    precursor_indices::Vector{UInt32}
 )::DataFrame
     # Similar to InstrumentSpecificModel but handles spline coefficients
     json_batches = prepare_koina_batch(
@@ -197,17 +267,18 @@ function predict_fragments_batch(
 
     responses = make_koina_batch_requests(json_batches, KOINA_URLS[model.name]; concurrency=concurrent_koina_requests)
 
-    batch_dfs = []
+    batch_dfs = Vector{DataFrame}()
     knot_vectors = []
-    
+
     for (i, response) in enumerate(responses)
         batch_result = parse_koina_batch(model, response)
-        start_idx = (i-1) * batch_size + 1 + first_prec_idx - 1
-        
+        batch_start = (i-1) * batch_size + 1
+        batch_stop = min(i * batch_size, length(precursor_indices))
+        current_indices = precursor_indices[batch_start:batch_stop]
+
         batch_df = batch_result.fragments
-        n_precursors_in_batch = UInt32(fld(size( batch_df , 1), batch_result.frags_per_precursor))
-        batch_df[!, :precursor_idx] = repeat(start_idx:(start_idx + n_precursors_in_batch - one(UInt32)), 
-                                                inner=batch_result.frags_per_precursor)
+        n_precursors_in_batch = length(current_indices)
+        batch_df[!, :precursor_idx] = repeat(current_indices, inner=batch_result.frags_per_precursor)
         filter_fragments!(batch_df, model)
         push!(batch_dfs, batch_df)
         push!(knot_vectors, batch_result.extra_data)  # Store knot vectors

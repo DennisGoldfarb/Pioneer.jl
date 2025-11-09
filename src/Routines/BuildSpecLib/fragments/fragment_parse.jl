@@ -331,9 +331,10 @@ end
         immonium_data_path::String,
         out_dir::String,
         mods_to_sulfur_diff::Dict{String, Int8},
+        structural_mod_to_mass::Dict{String, Float32},
         iso_mod_to_mass::Dict{String, Float32},
         model_type::KoinaModelType
-    )
+)
 
 Process Koina prediction outputs into Pioneer's fragment format.
 """
@@ -347,6 +348,7 @@ function parse_koina_fragments(
     immonium_data_path::String,
     out_dir::String,
     mods_to_sulfur_diff::Dict{String, Int8},
+    structural_mod_to_mass::Dict{String, Float32},
     iso_mod_to_mass::Dict{String, Float32},
     model_type::KoinaModelType
 )
@@ -390,6 +392,7 @@ function parse_koina_fragments(
             ion_annotation_to_features_dict,
             frag_name_to_idx,
             mods_to_sulfur_diff,
+            structural_mod_to_mass,
             iso_mod_to_mass,
             model_type
         )
@@ -439,6 +442,7 @@ function process_fragments_batched(
             ion_annotation_to_features_dict,
             frag_name_to_idx,
             mods_to_sulfur_diff,
+            structural_mod_to_mass,
             iso_mod_to_mass,
             model_type
         )
@@ -466,6 +470,7 @@ function append_pioneer_lib_batch(
     ion_annotation_to_data_dict::Dict{String, PioneerFragAnnotation},
     frag_name_to_idx::Dict{String, UInt16},
     mods_to_sulfur_diff::Dict{String, Int8},
+    structural_mod_to_mass::Dict{String, Float32},
     iso_mod_to_mass::Dict{String, Float32},
     ::Union{InstrumentSpecificModel, InstrumentAgnosticModel}
 )
@@ -507,6 +512,7 @@ function append_pioneer_lib_batch(
         ion_annotation_to_data_dict,
         frag_name_to_idx,
         mods_to_sulfur_diff,
+        structural_mod_to_mass,
         iso_mod_to_mass
     )
     
@@ -530,6 +536,7 @@ function append_pioneer_lib_batch(
     fragment_table::Arrow.Table,
     ion_annotation_to_data_dict::Dict{Int32, PioneerFragAnnotation},
     mods_to_sulfur_diff::Dict{String, Int8},
+    structural_mod_to_mass::Dict{String, Float32},
     iso_mod_to_mass::Dict{String, Float32},
     ::SplineCoefficientModel
 )
@@ -574,6 +581,7 @@ function append_pioneer_lib_batch(
         fragment_table,
         ion_annotation_to_data_dict,
         mods_to_sulfur_diff,
+        structural_mod_to_mass,
         iso_mod_to_mass
     )
     
@@ -601,15 +609,20 @@ function process_batch!(
     ion_annotation_to_data_dict::Dict{String, PioneerFragAnnotation},
     frag_name_to_idx::Dict{String, UInt16},
     mods_to_sulfur_diff::Dict{String, Int8},
+    structural_mod_to_mass::Dict{String, Float32},
     iso_mod_to_mass::Dict{String, Float32}
 )
     # Track working variables
     seq_idx_to_sulfur = zeros(UInt8, 255)
     seq_idx_to_iso_mod = zeros(Float32, 255)
+    aa_masses = zeros(Float32, 255)
+    structural_mod_masses = zeros(Float32, 255)
+    zero_iso_mods = zeros(Float32, 255)
     last_pid = zero(UInt32)
     precursor_sulfur_count = zero(UInt8)
     precursor_length = zero(UInt8)
     batch_pid = 0
+    current_is_decoy = false
     
     for frag_idx in 1:length(prec_frags)
         # Get fragment info
@@ -621,11 +634,13 @@ function process_batch!(
         if pid != last_pid
             batch_pid += 1
             last_pid = pid
-            
+
             # Reset and update sulfur tracking
             fill!(seq_idx_to_sulfur, zero(UInt8))
             fill!(seq_idx_to_iso_mod, zero(Float32))
-            
+            fill!(aa_masses, 0f0)
+            fill!(structural_mod_masses, 0f0)
+
             # Calculate sulfur count for new precursor
             prec_sulfur_count[batch_pid] = count_sulfurs!(
                 seq_idx_to_sulfur,
@@ -633,7 +648,7 @@ function process_batch!(
                 parseMods(precursor_table[:mods][pid]),
                 mods_to_sulfur_diff
             )
-            
+
             # Handle isotope modifications
             iso_mods_iterator = parseMods(precursor_table[:isotope_mods][pid])
             fill_isotope_mods!(
@@ -641,10 +656,17 @@ function process_batch!(
                 iso_mods_iterator,
                 iso_mod_to_mass
             )
-            
+
+            sequence = precursor_table[:sequence][pid]
+            mods_value = precursor_table[:mods][pid]
+            mods_string = mods_value === missing ? "" : mods_value
+            get_aa_masses!(aa_masses, sequence)
+            get_structural_mod_masses!(structural_mod_masses, mods_string, structural_mod_to_mass)
+
             precursor_sulfur_count = prec_sulfur_count[batch_pid]
-            precursor_length = UInt8(length(precursor_table[:sequence][pid]))
+            precursor_length = UInt8(length(sequence))
             pid_to_frag_idxs[batch_pid] = actual_frag_idx
+            current_is_decoy = hasproperty(precursor_table, :decoy) ? precursor_table[:decoy][pid] : false
         end
 
         # Get fragment data and parse annotation
@@ -692,6 +714,18 @@ function process_batch!(
 
         # Add any sulfur difference from modifications
         sulfur_count += frag_data.sulfur_diff
+
+        if current_is_decoy && !frag_data.immonium
+            frag_mz = get_fragment_mz(
+                start_idx,
+                stop_idx,
+                frag_data.base_type,
+                frag_data.charge,
+                aa_masses,
+                structural_mod_masses,
+                zero_iso_mods,
+            )
+        end
 
         # Adjust m/z for isotope modifications
         frag_mz += apply_isotope_mod(
@@ -748,17 +782,22 @@ function process_spline_batch!(
     fragment_table::Arrow.Table,
     ion_annotation_to_data_dict::Dict{Int32, PioneerFragAnnotation},
     mods_to_sulfur_diff::Dict{String, Int8},
+    structural_mod_to_mass::Dict{String, Float32},
     iso_mod_to_mass::Dict{String, Float32}
 ) where N
     # Working arrays for tracking modifications and sulfur
     seq_idx_to_sulfur = zeros(UInt8, 255)
     seq_idx_to_iso_mod = zeros(Float32, 255)
-    
+    aa_masses = zeros(Float32, 255)
+    structural_mod_masses = zeros(Float32, 255)
+    zero_iso_mods = zeros(Float32, 255)
+
     # Tracking variables
     last_pid = zero(UInt32)
     precursor_sulfur_count = zero(UInt8)
     precursor_length = zero(UInt8)
     batch_pid = 0
+    current_is_decoy = false
 
     for frag_idx in 1:length(prec_frags)
         actual_frag_idx = first_frag_idx + frag_idx - 1
@@ -776,6 +815,8 @@ function process_spline_batch!(
             # Reset tracking arrays
             fill!(seq_idx_to_sulfur, zero(UInt8))
             fill!(seq_idx_to_iso_mod, zero(Float32))
+            fill!(aa_masses, 0f0)
+            fill!(structural_mod_masses, 0f0)
 
             # Calculate sulfur count for new precursor
             prec_sulfur_count[batch_pid] = count_sulfurs!(
@@ -793,10 +834,17 @@ function process_spline_batch!(
                 iso_mod_to_mass
             )
 
+            sequence = precursor_table[:sequence][pid]
+            mods_value = precursor_table[:mods][pid]
+            mods_string = mods_value === missing ? "" : mods_value
+            get_aa_masses!(aa_masses, sequence)
+            get_structural_mod_masses!(structural_mod_masses, mods_string, structural_mod_to_mass)
+
             # Update precursor tracking
             precursor_sulfur_count = prec_sulfur_count[batch_pid]
-            precursor_length = UInt8(length(precursor_table[:sequence][pid]))
+            precursor_length = UInt8(length(sequence))
             pid_to_frag_idxs[batch_pid] = actual_frag_idx
+            current_is_decoy = hasproperty(precursor_table, :decoy) ? precursor_table[:decoy][pid] : false
         end
 
         # Get fragment data
@@ -837,6 +885,18 @@ function process_spline_batch!(
 
         # Add modification-based sulfur changes
         sulfur_count += frag_data.sulfur_diff
+
+        if current_is_decoy && !frag_data.immonium
+            frag_mz = get_fragment_mz(
+                start_idx,
+                stop_idx,
+                frag_data.base_type,
+                frag_data.charge,
+                aa_masses,
+                structural_mod_masses,
+                zero_iso_mods,
+            )
+        end
 
         # Adjust m/z for isotope modifications
         frag_mz += apply_isotope_mod(
@@ -888,6 +948,7 @@ function parse_altimeter_fragments(
     immonium_data_path::String,
     out_dir::String,
     mods_to_sulfur_diff::Dict{String, Int8},
+    structural_mod_to_mass::Dict{String, Float32},
     iso_mod_to_mass::Dict{String, Float32},
     model_type::KoinaModelType
 )
@@ -930,6 +991,7 @@ function parse_altimeter_fragments(
             fragment_table,
             ion_annotation_to_features_dict,
             mods_to_sulfur_diff,
+            structural_mod_to_mass,
             iso_mod_to_mass,
             model_type
         )
