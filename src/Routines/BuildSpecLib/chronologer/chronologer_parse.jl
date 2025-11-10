@@ -78,6 +78,19 @@ function parse_chronologer_output(
     end
     # Read chronologer output
     precursors_df = DataFrame(Tables.columntable(Arrow.Table(path_to_precursors)))
+
+    # Preserve the raw Chronologer predictions before renaming columns.
+    # Chronologer currently returns a single `rt` column with the predicted
+    # retention time in iRT space.  Downstream consumers have historically
+    # expected this information under the `:irt` column, so we keep that
+    # behaviour while also exposing the raw prediction explicitly via a new
+    # `:predicted_rt` column.
+    if hasproperty(precursors_df, :rt)
+        precursors_df[!, :predicted_rt] = Float32.(precursors_df[!, :rt])
+    else
+        precursors_df[!, :predicted_rt] = fill(Float32(NaN), nrow(precursors_df))
+    end
+
     # Rename columns to match Pioneer format
     rename!(precursors_df, Dict(
         :rt => :irt,

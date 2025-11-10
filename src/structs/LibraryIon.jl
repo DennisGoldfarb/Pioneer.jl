@@ -757,6 +757,12 @@ getMz(lp::LibraryPrecursors)::Arrow.Primitive{Float32, Vector{Float32}}  = lp.da
 getLength(lp::LibraryPrecursors)::Arrow.Primitive{UInt8, Vector{UInt8}}  = lp.data[:length]
 getMissedCleavages(lp::LibraryPrecursors)::Arrow.Primitive{UInt8, Vector{UInt8}} = lp.data[:missed_cleavages]
 getIrt(lp::LibraryPrecursors)::Arrow.Primitive{Float32, Vector{Float32}} = lp.data[:irt]
+function getPredictedRt(lp::LibraryPrecursors)
+    if :predicted_rt in propertynames(lp.data)
+        return lp.data[:predicted_rt]
+    end
+    return lp.data[:irt]
+end
 getSulfurCount(lp::LibraryPrecursors)::Arrow.Primitive{UInt8, Vector{UInt8}} = lp.data[:sulfur_count]
 getIsotopicMods(lp::LibraryPrecursors)::Arrow.List{Union{Missing, String}, Int32, Vector{UInt8}} = lp.data[:isotopic_mods]
 getPartnerPrecursorIdx(lp::LibraryPrecursors)::Arrow.Primitive{Union{Missing, I}, Vector{I}} where {I<:Integer} = lp.data[:partner_precursor_idx]
