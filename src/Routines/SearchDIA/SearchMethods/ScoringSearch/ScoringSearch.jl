@@ -695,6 +695,21 @@ function summarize_results!(
         # Convert calibrated predicted iRT values into RT space for downstream outputs
         irt_to_rt_models = getIrtRtMap(search_context)
         identity_model = IdentityModel()
+
+        convert_to_union_float32 = function (column::AbstractVector)
+            n = length(column)
+            result = Vector{Union{Missing, Float32}}(undef, n)
+            @inbounds for i in 1:n
+                value = column[i]
+                if ismissing(value)
+                    result[i] = missing
+                else
+                    result[i] = Float32(value)
+                end
+            end
+            return result
+        end
+
         predicted_rt_fn = function (df::DataFrame)
             n = nrow(df)
             result = Vector{Union{Missing, Float32}}(undef, n)
@@ -722,7 +737,12 @@ function summarize_results!(
             return result
         end
 
+        observed_irt_fn = df -> convert_to_union_float32(df.irt_obs)
+        predicted_irt_fn = df -> convert_to_union_float32(df.irt_pred)
+
         for ref in passing_refs
+            add_column_to_file!(ref, :observed_irt, observed_irt_fn)
+            add_column_to_file!(ref, :predicted_irt, predicted_irt_fn)
             add_column_to_file!(ref, :predicted_rt, predicted_rt_fn)
         end
 

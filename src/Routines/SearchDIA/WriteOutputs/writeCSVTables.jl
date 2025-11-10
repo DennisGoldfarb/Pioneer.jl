@@ -260,6 +260,8 @@ function writePrecursorCSV(
         :precursor_fraction_transmitted,
         :isotopes_captured,
         :rt,
+        :observed_irt,
+        :predicted_irt,
         :predicted_rt,
         :apex_scan,
         :global_pg_score,
