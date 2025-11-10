@@ -123,9 +123,7 @@ function clone_decoy_fragments(
 
     pair_to_target = Dict{UInt32, UInt32}()
     for (idx, row) in enumerate(eachrow(peptides_df))
-        if hasproperty(row, :pair_id) && !ismissing(row.pair_id) && hasproperty(row, :decoy) && !row.decoy
-            pair_to_target[row.pair_id] = UInt32(idx)
-        end
+        pair_to_target[row.pair_id] = UInt32(idx)
     end
 
     target_groups = Dict{UInt32, DataFrame}()
@@ -159,20 +157,7 @@ function clone_decoy_fragments(
 
     decoy_tables = DataFrame[]
     for (idx, row) in enumerate(eachrow(peptides_df))
-        if !(hasproperty(row, :decoy) && row.decoy)
-            continue
-        end
-
-        if !hasproperty(row, :pair_id) || ismissing(row.pair_id) || !haskey(pair_to_target, row.pair_id)
-            @warn "Skipping decoy without paired target" pair_id=row.pair_id
-            continue
-        end
-
         target_idx = pair_to_target[row.pair_id]
-        if !haskey(target_groups, target_idx)
-            @warn "No fragments available for paired target" pair_id=row.pair_id target_idx=target_idx
-            continue
-        end
 
         frag_df = copy(target_groups[target_idx])
         frag_df[!, :precursor_idx] .= UInt32(idx)
@@ -180,12 +165,12 @@ function clone_decoy_fragments(
         filter_fragments!(frag_df, model_type)
 
         sequence = row.sequence
-        struct_mods = if hasproperty(row, mods_column) && row[mods_column] !== missing
+        struct_mods = if row[mods_column] !== missing
             String(row[mods_column])
         else
             ""
         end
-        iso_mods = if hasproperty(row, iso_column) && row[iso_column] !== missing
+        iso_mods = if row[iso_column] !== missing
             String(row[iso_column])
         else
             ""
