@@ -1,4 +1,6 @@
 
+using JSON
+
 @testset "Fragment Predict Tests" begin
     
     @testset "Model Type Validation" begin
@@ -98,19 +100,37 @@
             intensities = Float32[0.5, 0.9, 0.7, 0.3, 0.8, 0.6],
             mz = Float32[300.1, 400.2, 500.3, 200.1, 350.2, 450.3]
         )
-        
+
         sort_fragments!(df)
-        
+
         # Check that within each precursor, fragments are sorted by intensity (descending)
         @test df.precursor_idx == [1, 1, 1, 2, 2, 2]
-        
+
         # For precursor 1
         prec1_mask = df.precursor_idx .== 1
         @test issorted(df[prec1_mask, :intensities], rev=true)
-        
+
         # For precursor 2
         prec2_mask = df.precursor_idx .== 2
         @test issorted(df[prec2_mask, :intensities], rev=true)
+
+        coef_df = DataFrame(
+            precursor_idx = UInt32[1, 1, 2, 2],
+            annotation = Int32[10, 11, 20, 21],
+            coefficients = [
+                (0.1f0, 0.2f0),
+                (0.3f0, 0.4f0),
+                (0.5f0, 0.6f0),
+                (0.7f0, 0.8f0),
+            ],
+            ranking = UInt8[2, 1, 2, 1],
+            mz = Float32[100.0, 101.0, 200.0, 201.0],
+        )
+
+        sort_fragments!(coef_df)
+
+        @test coef_df.precursor_idx == UInt32[1, 1, 2, 2]
+        @test coef_df.ranking == UInt8[1, 2, 1, 2]
     end
     
     @testset "predict_fragments_batch" begin
@@ -176,7 +196,106 @@
         
         rm(temp_dir, recursive=true)
     end
-    
+
+    @testset "clone_decoy_fragments" begin
+        temp_dir = mktempdir()
+        config_path = joinpath(temp_dir, "config.json")
+        base_config = Dict(
+            "fixed_mods" => Dict("mass" => Float64[], "name" => String[]),
+            "variable_mods" => Dict("mass" => Float64[], "name" => String[]),
+            "isotope_mod_groups" => Any[],
+            "channel_decoys" => false,
+            "sulfur_mod_groups" => Any[],
+            "library_params" => Dict(
+                "include_immonium" => false,
+                "max_frag_rank" => 50,
+                "length_to_frag_count_multiple" => 2.0,
+            ),
+        )
+        open(config_path, "w") do io
+            write(io, JSON.json(base_config))
+        end
+
+        peptides_df = DataFrame(
+            sequence = ["PEPTIDE", "PEPTIDA"],
+            mods = ["", ""],
+            isotope_mods = ["", ""],
+            decoy = [false, true],
+            pair_id = UInt32[1, 1]
+        )
+
+        target_fragments = DataFrame(
+            annotation = ["y2", "IH"],
+            mz = Float32[400.0, 110.0],
+            intensities = Float32[0.8, 0.2],
+            precursor_idx = UInt32[1, 1]
+        )
+
+        model = InstrumentSpecificModel("unispec")
+        decoy_frags = clone_decoy_fragments(peptides_df, target_fragments, model, config_path)
+
+        @test nrow(decoy_frags) == 1
+        @test all(decoy_frags.precursor_idx .== UInt32(2))
+        @test decoy_frags.intensities == Float32[0.8]
+        @test decoy_frags.annotation == ["y2"]
+
+        aa_masses = zeros(Float32, 255)
+        structural_mod_masses = zeros(Float32, 255)
+        iso_mod_masses = zeros(Float32, 255)
+        sequence = peptides_df.sequence[2]
+        get_aa_masses!(aa_masses, sequence)
+        get_structural_mod_masses!(structural_mod_masses, "", Dict{String, Float32}())
+        getIsoModMasses!(iso_mod_masses, "", "", Dict{String, Dict{String, Float32}}())
+        info = parse_fragment_annotation(UniSpecFragAnnotation("y2"))
+        start_idx, stop_idx = get_fragment_indices(info.base_type, info.frag_index, UInt8(length(sequence)))
+        expected_mz = get_fragment_mz(
+            start_idx,
+            stop_idx,
+            info.base_type,
+            info.charge,
+            aa_masses,
+            structural_mod_masses,
+            iso_mod_masses
+        )
+
+        y2_idx = findfirst(==("y2"), decoy_frags.annotation)
+        @test y2_idx !== nothing
+        @test isapprox(decoy_frags.mz[y2_idx], expected_mz; atol=1e-5)
+
+        @test all(!=("IH"), decoy_frags.annotation)
+
+        # Re-run with immonium enabled
+        include_config = deepcopy(base_config)
+        include_config["library_params"]["include_immonium"] = true
+        open(config_path, "w") do io
+            write(io, JSON.json(include_config))
+        end
+
+        decoy_frags = clone_decoy_fragments(peptides_df, target_fragments, model, config_path)
+        @test nrow(decoy_frags) == 2
+        @test "IH" in decoy_frags.annotation
+
+        # Limit the requested number of ions
+        rank_limited_config = deepcopy(include_config)
+        rank_limited_config["library_params"]["max_frag_rank"] = 1
+        open(config_path, "w") do io
+            write(io, JSON.json(rank_limited_config))
+        end
+
+        rich_target = DataFrame(
+            annotation = ["y2", "b3", "a1"],
+            mz = Float32[400.0, 320.0, 210.0],
+            intensities = Float32[0.8, 0.5, 0.3],
+            precursor_idx = UInt32[1, 1, 1],
+        )
+
+        limited_frags = clone_decoy_fragments(peptides_df, rich_target, model, config_path)
+        @test nrow(limited_frags) == 1
+        @test limited_frags.annotation == ["y2"]
+
+        rm(temp_dir, recursive=true)
+    end
+
     @testset "predict_fragments - main dispatcher" begin
         temp_dir = mktempdir()
         
