@@ -699,11 +699,6 @@ function summarize_results!(
             n = nrow(df)
             result = Vector{Union{Missing, Float32}}(undef, n)
 
-            if !(hasproperty(df, :ms_file_idx) && hasproperty(df, :irt_pred))
-                fill!(result, missing)
-                return result
-            end
-
             ms_idx_col = df.ms_file_idx
             irt_pred_col = df.irt_pred
 
