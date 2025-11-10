@@ -692,6 +692,45 @@ function summarize_results!(
         end
         #@debug_l1 "Step 11 completed in $(round(step11_time, digits=2)) seconds"
 
+        # Convert calibrated predicted iRT values into RT space for downstream outputs
+        irt_to_rt_models = getIrtRtMap(search_context)
+        identity_model = IdentityModel()
+        predicted_rt_fn = function (df::DataFrame)
+            n = nrow(df)
+            result = Vector{Union{Missing, Float32}}(undef, n)
+
+            if !(hasproperty(df, :ms_file_idx) && hasproperty(df, :irt_pred))
+                fill!(result, missing)
+                return result
+            end
+
+            ms_idx_col = df.ms_file_idx
+            irt_pred_col = df.irt_pred
+
+            @inbounds for i in 1:n
+                irt_val = irt_pred_col[i]
+                if ismissing(irt_val)
+                    result[i] = missing
+                    continue
+                end
+
+                ms_idx = ms_idx_col[i]
+                if ismissing(ms_idx)
+                    result[i] = missing
+                    continue
+                end
+
+                model = get(irt_to_rt_models, Int(ms_idx), identity_model)
+                result[i] = Float32(model(Float32(irt_val)))
+            end
+
+            return result
+        end
+
+        for ref in passing_refs
+            add_column_to_file!(ref, :predicted_rt, predicted_rt_fn)
+        end
+
         # Update search context with passing PSM paths
         for (file_idx, ref) in zip(valid_file_indices, passing_refs)
             setPassingPsms!(getMSData(search_context), file_idx, file_path(ref))
