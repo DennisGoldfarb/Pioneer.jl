@@ -54,6 +54,7 @@ function process_psms!(
     precursors = getPrecursors(getSpecLib(search_context))
     add_tuning_search_columns!(
         psms,
+        search_context,
         spectra,
         getIsDecoy(precursors),
         getIrt(precursors),
