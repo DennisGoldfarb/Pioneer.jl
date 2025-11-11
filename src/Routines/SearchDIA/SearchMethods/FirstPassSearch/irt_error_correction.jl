@@ -17,6 +17,78 @@
 
 const CANONICAL_AMINO_ACIDS = collect("ACDEFGHIKLMNPQRSTVWY")
 const CANONICAL_AA_TO_INDEX = Dict{Char, Int}(aa => idx for (idx, aa) in enumerate(CANONICAL_AMINO_ACIDS))
+const TERMINAL_MOD_BASES = Set(['n', 'c'])
+const EMPTY_SEQUENCE_MODIFICATIONS = NamedTuple{(:position, :residue, :mod_name), Tuple{Int, Char, String}}[]
+
+normalize_residue(ch::Char) = uppercase(String(ch))[1]
+
+function normalize_mod_residue(ch::Char)
+    return ch in TERMINAL_MOD_BASES ? ch : normalize_residue(ch)
+end
+
+const SequenceModification = NamedTuple{(:position, :residue, :mod_name), Tuple{Int, Char, String}}
+
+function parse_structural_mods(::Missing)
+    return SequenceModification[]
+end
+
+function parse_structural_mods(mods::AbstractString)
+    isempty(mods) && return SequenceModification[]
+    mod_regex = r"\((\d+),([^,]+),([^\)]+)\)"
+    parsed = SequenceModification[]
+
+    for match in eachmatch(mod_regex, mods)
+        position = parse(Int, match.captures[1])
+        residue_token = strip(match.captures[2])
+        residue_char = isempty(residue_token) ? '?' : first(residue_token)
+        mod_name = strip(match.captures[3])
+        push!(parsed, (position = position,
+                       residue = normalize_mod_residue(residue_char),
+                       mod_name = mod_name))
+    end
+
+    return parsed
+end
+
+structural_mod_token(residue::Char, mod_name::String) = string(residue, "(", mod_name, ")")
+
+function determine_static_mods(sequences::Vector{String},
+                               positional_mods::Vector{Vector{SequenceModification}},
+                               nonpositional_mods::Vector{Vector{SequenceModification}})
+    residue_site_totals = Dict{Char, Int}()
+    for seq in sequences
+        for ch in seq
+            residue = normalize_residue(ch)
+            residue_site_totals[residue] = get(residue_site_totals, residue, 0) + 1
+        end
+    end
+    residue_site_totals['n'] = max(get(residue_site_totals, 'n', 0), length(sequences))
+    residue_site_totals['c'] = max(get(residue_site_totals, 'c', 0), length(sequences))
+
+    mod_counts = Dict{Tuple{Char, String}, Int}()
+    for mods in positional_mods
+        for mod in mods
+            key = (mod.residue, mod.mod_name)
+            mod_counts[key] = get(mod_counts, key, 0) + 1
+        end
+    end
+    for mods in nonpositional_mods
+        for mod in mods
+            key = (mod.residue, mod.mod_name)
+            mod_counts[key] = get(mod_counts, key, 0) + 1
+        end
+    end
+
+    static_mods = Set{Tuple{Char, String}}()
+    for (key, count) in mod_counts
+        total_sites = get(residue_site_totals, key[1], length(sequences))
+        if total_sites != 0 && count == total_sites
+            push!(static_mods, key)
+        end
+    end
+
+    return static_mods
+end
 """
     correct_first_pass_irt_errors!(search_context::SearchContext;
                                    q_value_threshold::Float32 = 0.01f0,
@@ -29,7 +101,8 @@ The routine loads the cached first-pass PSM Arrow tables, filters to target
 PSMs with q-values less than or equal to `q_value_threshold`, and computes
 signed iRT errors (`predicted - observed`). Sequence features are generated
 from peptide sequences by counting the occurrences of canonical amino acids
-and distinct modification-specific residues. A linear system is solved to
+and distinct modification-specific residues derived from the structural
+modification annotations in the spectral library. A linear system is solved to
 estimate regression
 coefficients that map these counts to iRT errors. If insufficient training
 data are available or the design matrix is rank-deficient, the correction is
@@ -102,19 +175,55 @@ end
 
 function compute_precursor_aa_features(precursors)
     sequences_raw = getSequence(precursors)
+    structural_mods_raw = getStructuralMods(precursors)
     n_precursors = length(sequences_raw)
 
-    tokens_per_precursor = Vector{Vector{String}}(undef, n_precursors)
-    extra_tokens = String[]
-    seen_extra_tokens = Set{String}()
+    sequences = Vector{String}(undef, n_precursors)
+    positional_mods = Vector{Vector{SequenceModification}}(undef, n_precursors)
+    nonpositional_mods = Vector{Vector{SequenceModification}}(undef, n_precursors)
 
     for prec_idx in 1:n_precursors
-        tokens = parse_sequence_tokens(sequences_raw[prec_idx])
-        tokens_per_precursor[prec_idx] = tokens
-        for token in tokens
-            if is_canonical_token(token)
+        seq = String(sequences_raw[prec_idx])
+        sequences[prec_idx] = seq
+
+        mods = parse_structural_mods(structural_mods_raw[prec_idx])
+        positional = SequenceModification[]
+        nonpositional = SequenceModification[]
+        for mod in mods
+            if haskey(CANONICAL_AA_TO_INDEX, mod.residue)
+                push!(positional, mod)
+            else
+                push!(nonpositional, mod)
+            end
+        end
+        positional_mods[prec_idx] = positional
+        nonpositional_mods[prec_idx] = nonpositional
+    end
+
+    static_mods = determine_static_mods(sequences, positional_mods, nonpositional_mods)
+
+    extra_tokens = String[]
+    seen_extra_tokens = Set{String}()
+    for mods in positional_mods
+        for mod in mods
+            key = (mod.residue, mod.mod_name)
+            if in(key, static_mods)
                 continue
             end
+            token = structural_mod_token(mod.residue, mod.mod_name)
+            if !in(token, seen_extra_tokens)
+                push!(extra_tokens, token)
+                push!(seen_extra_tokens, token)
+            end
+        end
+    end
+    for mods in nonpositional_mods
+        for mod in mods
+            key = (mod.residue, mod.mod_name)
+            if in(key, static_mods)
+                continue
+            end
+            token = structural_mod_token(mod.residue, mod.mod_name)
             if !in(token, seen_extra_tokens)
                 push!(extra_tokens, token)
                 push!(seen_extra_tokens, token)
@@ -132,16 +241,41 @@ function compute_precursor_aa_features(precursors)
 
     for prec_idx in 1:n_precursors
         feature_row = @view features[prec_idx, :]
-        for token in tokens_per_precursor[prec_idx]
-            if length(token) == 1
-                aa = token[1]
-                feature_idx = get(CANONICAL_AA_TO_INDEX, aa, 0)
+        seq = sequences[prec_idx]
+
+        mods_by_position = Dict{Int, Vector{SequenceModification}}()
+        for mod in positional_mods[prec_idx]
+            push!(get!(mods_by_position, mod.position, SequenceModification[]), mod)
+        end
+
+        for (pos, ch) in enumerate(seq)
+            residue = normalize_residue(ch)
+            canonical_idx = get(CANONICAL_AA_TO_INDEX, residue, 0)
+            has_variable_mod = false
+            mods_here = get(mods_by_position, pos, EMPTY_SEQUENCE_MODIFICATIONS)
+
+            for mod in mods_here
+                if in((mod.residue, mod.mod_name), static_mods)
+                    continue
+                end
+                has_variable_mod = true
+                token = structural_mod_token(mod.residue, mod.mod_name)
+                feature_idx = get(extra_token_to_index, token, 0)
                 if feature_idx != 0
                     feature_row[feature_idx] += 1.0
-                    continue
                 end
             end
 
+            if !has_variable_mod && canonical_idx != 0
+                feature_row[canonical_idx] += 1.0
+            end
+        end
+
+        for mod in nonpositional_mods[prec_idx]
+            if in((mod.residue, mod.mod_name), static_mods)
+                continue
+            end
+            token = structural_mod_token(mod.residue, mod.mod_name)
             feature_idx = get(extra_token_to_index, token, 0)
             if feature_idx != 0
                 feature_row[feature_idx] += 1.0
@@ -151,49 +285,6 @@ function compute_precursor_aa_features(precursors)
 
     return features
 end
-
-function parse_sequence_tokens(seq::Missing)
-    return String[]
-end
-
-function parse_sequence_tokens(seq::AbstractString)
-    tokens = String[]
-    seq_str = String(seq)
-    i = firstindex(seq_str)
-    last = lastindex(seq_str)
-
-    while i <= last
-        ch = seq_str[i]
-        if ch == '(' || ch == ')' || ch == ' '
-            i = nextind(seq_str, i)
-            continue
-        end
-
-        base = uppercase(ch)
-        next_i = nextind(seq_str, i)
-        token = string(base)
-
-        if next_i <= last && seq_str[next_i] == '('
-            close_idx = findnext(c -> c == ')', seq_str, next_i)
-            if close_idx !== nothing
-                inner_start = nextind(seq_str, next_i)
-                inner_end = prevind(seq_str, close_idx)
-                if inner_start <= inner_end
-                    mod_content = uppercase(seq_str[inner_start:inner_end])
-                    token = string(base, "(", mod_content, ")")
-                    next_i = nextind(seq_str, close_idx)
-                end
-            end
-        end
-
-        push!(tokens, token)
-        i = next_i
-    end
-
-    return tokens
-end
-
-is_canonical_token(token::String) = length(token) == 1 && haskey(CANONICAL_AA_TO_INDEX, token[1])
 
 function fit_irt_error_model!(search_context::SearchContext,
                               library_irt::Vector{Float32},
