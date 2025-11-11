@@ -171,7 +171,7 @@ function parse_sequence_tokens(seq::AbstractString)
 
         base = uppercase(ch)
         next_i = nextind(seq_str, i)
-        token = String(base)
+        token = string(base)
 
         if next_i <= last && seq_str[next_i] == '('
             close_idx = findnext(c -> c == ')', seq_str, next_i)
