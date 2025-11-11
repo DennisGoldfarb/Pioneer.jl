@@ -493,6 +493,7 @@ function process_initial_psms(
 )
     add_tuning_search_columns!(
         psms,
+        search_context,
         spectra,
         getIsDecoy(getPrecursors(getSpecLib(search_context))),#[:is_decoy],
         getIrt(getPrecursors(getSpecLib(search_context))),#[:irt],

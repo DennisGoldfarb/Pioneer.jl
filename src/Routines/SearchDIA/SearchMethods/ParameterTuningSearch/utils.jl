@@ -16,17 +16,20 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """
-    add_tuning_search_columns!(psms::DataFrame, MS_TABLE::Arrow.Table,
-                             prec_is_decoy::Arrow.BoolVector{Bool},
-                             prec_irt::Arrow.Primitive{T, Vector{T}},
-                             prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
-                             scan_retention_time::AbstractVector{Float32},
-                             tic::AbstractVector{Float32}) where {T<:AbstractFloat}
+    add_tuning_search_columns!(psms::DataFrame,
+                               search_context::SearchContext,
+                               MS_TABLE::MassSpecData,
+                               prec_is_decoy::AbstractVector{Bool},
+                               prec_irt::AbstractVector{T},
+                               prec_charge::AbstractVector{UInt8},
+                               scan_retention_time::AbstractVector{Float32},
+                               tic::AbstractVector{Float32}) where {T<:AbstractFloat}
 
 Adds essential columns to PSM DataFrame for parameter tuning analysis.
 
 # Arguments
 - `psms`: DataFrame containing PSMs to modify
+- `search_context`: Search context that stores corrected iRT observations
 - `MS_TABLE`: Mass spectrometry data table
 - `prec_is_decoy`: Boolean vector indicating decoy status
 - `prec_irt`: Vector of iRT values
@@ -35,20 +38,21 @@ Adds essential columns to PSM DataFrame for parameter tuning analysis.
 - `tic`: Vector of total ion currents
 
 # Added Columns
-- Basic metrics: RT, iRT predicted, charge, TIC
+- Basic metrics: RT, corrected iRT predictions, charge, TIC
 - Analysis columns: target, decoy, matched_ratio
 - Scoring columns: q_value, prob, intercept
 
 Uses parallel processing for efficiency through data chunking.
 """
-function add_tuning_search_columns!(psms::DataFrame, 
-                                MS_TABLE::MassSpecData, 
-                                prec_is_decoy::Arrow.BoolVector{Bool},
-                                prec_irt::Arrow.Primitive{T, Vector{T}},
-                                prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
-                                scan_retention_time::AbstractVector{Float32},
-                                tic::AbstractVector{Float32}) where {T<:AbstractFloat}
-    
+function add_tuning_search_columns!(psms::DataFrame,
+                                    search_context::SearchContext,
+                                    MS_TABLE::MassSpecData,
+                                    prec_is_decoy::AbstractVector{Bool},
+                                    prec_irt::AbstractVector{T},
+                                    prec_charge::AbstractVector{UInt8},
+                                    scan_retention_time::AbstractVector{Float32},
+                                    tic::AbstractVector{Float32}) where {T<:AbstractFloat}
+
     N = size(psms, 1)
     decoys = zeros(Bool, N);
     targets = zeros(Bool, N);
@@ -57,10 +61,12 @@ function add_tuning_search_columns!(psms::DataFrame,
     spectrum_peak_count = zeros(UInt32, N);
     irt_pred = zeros(Float32, N);
     rt = zeros(Float32, N);
-    scan_idx::Vector{UInt32} = psms[!,:scan_idx]
-    precursor_idx::Vector{UInt32} = psms[!,:precursor_idx]
-    matched_ratio::Vector{Float16} = psms[!,:matched_ratio]
-    
+    scan_idx::Vector{UInt32} = psms[!, :scan_idx]
+    precursor_idx::Vector{UInt32} = psms[!, :precursor_idx]
+    matched_ratio::Vector{Float16} = psms[!, :matched_ratio]
+    irt_obs = getPredIrt(search_context)
+    has_irt_obs = !isempty(irt_obs)
+
     tasks_per_thread = 10
     chunk_size = max(1, size(psms, 1) ÷ (tasks_per_thread * Threads.nthreads()))
     data_chunks = partition(1:size(psms, 1), chunk_size) # partition your data into chunks that
@@ -68,13 +74,18 @@ function add_tuning_search_columns!(psms::DataFrame,
     tasks = map(data_chunks) do chunk
         Threads.@spawn begin
             for i in chunk
-            decoys[i] = prec_is_decoy[precursor_idx[i]];
-            targets[i] = decoys[i] == false
-            irt_pred[i] = Float32(prec_irt[precursor_idx[i]]);
-            rt[i] = Float32(scan_retention_time[scan_idx[i]]);
-            TIC[i] = Float16(log2(tic[scan_idx[i]]));
-            charge[i] = UInt8(prec_charge[precursor_idx[i]]);
-            matched_ratio[i] = Float16(min(matched_ratio[i], 6e4))
+                prec_idx = precursor_idx[i]
+                decoys[i] = prec_is_decoy[prec_idx]
+                targets[i] = !decoys[i]
+                if has_irt_obs && haskey(irt_obs, prec_idx)
+                    irt_pred[i] = getPredIrt(search_context, prec_idx)
+                else
+                    irt_pred[i] = Float32(prec_irt[prec_idx])
+                end
+                rt[i] = Float32(scan_retention_time[scan_idx[i]])
+                TIC[i] = Float16(log2(tic[scan_idx[i]]))
+                charge[i] = UInt8(prec_charge[prec_idx])
+                matched_ratio[i] = Float16(min(matched_ratio[i], 6e4))
             end
         end
     end
@@ -1413,6 +1424,7 @@ function collect_psms_with_model(
     # Add necessary columns for scoring
     add_tuning_search_columns!(
         psms,
+        search_context,
         spectra,
         getIsDecoy(precursors),
         getIrt(precursors),

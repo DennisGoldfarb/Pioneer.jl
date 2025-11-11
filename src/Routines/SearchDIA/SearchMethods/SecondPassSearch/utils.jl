@@ -896,17 +896,26 @@ function add_features!(psms::DataFrame,
     chunk_size = max(1, size(psms, 1) ÷ (tasks_per_thread * Threads.nthreads()))
     data_chunks = partition(1:size(psms, 1), chunk_size) # partition your data into chunks that
 
+    irt_obs_dict = getPredIrt(search_context)
+    has_predicted_irts = !isempty(irt_obs_dict)
+
     tasks = map(data_chunks) do chunk
-        Threads.@spawn begin 
+        Threads.@spawn begin
             for i in chunk
                 prec_idx = precursor_idx[i]
                 entrap_group_id[i] = entrap_group_ids[prec_idx]
                 irt_obs[i] = rt_to_irt_interp(rt[i])
-                irt_pred[i] = getPredIrt(search_context, prec_idx)#prec_irt[prec_idx]
+                if has_predicted_irts && haskey(irt_obs_dict, prec_idx)
+                    predicted_irt = getPredIrt(search_context, prec_idx)
+                else
+                    predicted_irt = Float32(prec_irt[prec_idx])
+                end
+                irt_pred[i] = predicted_irt
                 #irt_diff[i] = abs(irt_obs[i] - first(prec_id_to_irt[prec_idx]))
                 irt_diff[i] = abs(irt_obs[i] - prec_id_to_irt[prec_idx].best_irt)
                 if !ms1_missing[i]
-                    ms1_irt_diff[i] = abs(rt_to_irt_interp(ms1_rt[i]) - getPredIrt(search_context, prec_idx))
+                    ms1_irt_reference = predicted_irt
+                    ms1_irt_diff[i] = abs(rt_to_irt_interp(ms1_rt[i]) - ms1_irt_reference)
                 else
                     ms1_irt_diff[i] = 0f0
                 end
