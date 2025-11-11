@@ -174,6 +174,7 @@ end
     include("./utils/FileOperations/io/test_arrow_operations_basic.jl")
     include("./utils/FileOperations/core/test_core_references_basic.jl")
     include("./utils/FileOperations/streaming/test_stream_sorted_merge_basic.jl")
+    include("./Routines/SearchDIA/SearchMethods/FirstPassSearch/test_irt_error_correction.jl")
     # ScoringSearch interface tests
 
     #include("./Routines/SearchDIA/SearchMethods/ScoringSearch/test_scoring_interface.jl")
