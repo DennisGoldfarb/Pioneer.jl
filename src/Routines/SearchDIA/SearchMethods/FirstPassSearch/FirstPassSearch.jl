@@ -557,8 +557,9 @@ function summarize_results!(
             max_q_val=params.max_q_val_for_irt
         )
     end
-    # Map retention times
+    # Map retention times and update iRT observations
     map_retention_times!(search_context, results, params)
+    correct_first_pass_irt_errors!(search_context)
     # Process precursors
     precursor_dict = get_best_precursors_accross_runs!(search_context, results, params)
 
@@ -574,7 +575,7 @@ function summarize_results!(
         i = 1
         for (pid, val) in pairs(precursor_dict)
             i += 1
-            setPredIrt!(search_context, pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
+            setPredIrt!(search_context, pid, getPredIrt(search_context, pid))
             partner_pid = getPartnerPrecursorIdx(precursors)[pid]
             if ismissing(partner_pid)
                 continue
@@ -584,15 +585,11 @@ function summarize_results!(
             # Otherwise if the partner was ID'ed, it should keep its original predicted iRT
             if !haskey(precursor_dict, partner_pid)
                 insert!(precursor_dict, partner_pid, val)
-                setPredIrt!(search_context, partner_pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
+                setPredIrt!(search_context, partner_pid, getPredIrt(search_context, pid))
             else
-                setPredIrt!(search_context, partner_pid, getIrt(getPrecursors(getSpecLib(search_context)))[partner_pid])
+                setPredIrt!(search_context, partner_pid, getPredIrt(search_context, partner_pid))
             end
             
-        end
-    else
-        for (pid, val) in pairs(precursor_dict)
-            setPredIrt!(search_context, pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
         end
     end
 
