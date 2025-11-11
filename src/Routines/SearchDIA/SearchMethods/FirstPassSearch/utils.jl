@@ -569,7 +569,7 @@ function create_rt_indices!(
     # Create precursor to iRT mapping using calibrated predictions when available
     predicted_irts = getPredIrt(search_context)
     prec_to_irt = Dictionary{UInt32, NamedTuple{(:irt, :mz), Tuple{Float32, Float32}}}()
-    for (prec_idx, stats) in precursor_dict
+    for (prec_idx, stats) in pairs(precursor_dict)
         irt_value = haskey(predicted_irts, prec_idx) ? predicted_irts[prec_idx] : stats[:best_irt]
         insert!(prec_to_irt, prec_idx, (irt = Float32(irt_value), mz = stats[:mz]))
     end
