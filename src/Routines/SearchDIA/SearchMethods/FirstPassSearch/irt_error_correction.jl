@@ -20,7 +20,7 @@ const CANONICAL_AA_TO_INDEX = Dict{Char, Int}(aa => idx for (idx, aa) in enumera
 const TERMINAL_MOD_BASES = Set(['n', 'c'])
 const EMPTY_SEQUENCE_MODIFICATIONS = NamedTuple{(:position, :residue, :mod_name), Tuple{Int, Char, String}}[]
 
-normalize_residue(ch::Char) = uppercase(String(ch))[1]
+normalize_residue(ch::Char) = uppercase(ch)
 
 function normalize_mod_residue(ch::Char)
     return ch in TERMINAL_MOD_BASES ? ch : normalize_residue(ch)
