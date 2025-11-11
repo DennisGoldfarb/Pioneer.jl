@@ -326,10 +326,10 @@ function getMs1MassErrorModel(results::FirstPassSearchResults)
     @user_warn "MS1 mass error model missing on first-pass results. Falling back to ±30 ppm default."
     return MassErrorModel(zero(Float32), (30.0f0, 30.0f0))
 end
-getMs1TolPpm(params::FirstPassSearchParameters) = params.ms1_tol_ppm
+getMs1TolPpm(params::FirstPassSearchParameters{<:PrecEstimation}) = params.ms1_tol_ppm
 
 function init_search_results(
-    ::FirstPassSearchParameters,
+    ::FirstPassSearchParameters{<:PrecEstimation},
     search_context::SearchContext
 )
     temp_folder = joinpath(getDataOutDir(search_context), "temp_data", "first_pass_psms")
@@ -361,11 +361,11 @@ Process a single MS file in the first pass search.
 """
 function process_file!(
     results::FirstPassSearchResults,
-    params::P, 
+    params::FirstPassSearchParameters{P},
     search_context::SearchContext,
     ms_file_idx::Int64,
     spectra::MassSpecData
-) where {P<:FirstPassSearchParameters}
+) where {P<:PrecEstimation}
 
     """
     Perform library search with current parameters.
@@ -373,7 +373,7 @@ function process_file!(
     function perform_library_search(
         spectra::MassSpecData,
         search_context::SearchContext,
-        params::FirstPassSearchParameters,
+        params::FirstPassSearchParameters{<:PrecEstimation},
         ms_file_idx::Int64)
         return library_search(spectra, search_context, params, ms_file_idx)
     end
@@ -386,7 +386,7 @@ function process_file!(
         psms::DataFrame,
         spectra::MassSpecData,
         search_context::SearchContext,
-        params::FirstPassSearchParameters,
+        params::FirstPassSearchParameters{<:PrecEstimation},
         ms_file_idx::Int64)
 
         """
@@ -395,7 +395,7 @@ function process_file!(
         function select_best_psms!(
             psms::DataFrame,
             precursor_mzs::AbstractVector,
-            params::FirstPassSearchParameters,
+            params::FirstPassSearchParameters{<:PrecEstimation},
             search_context::SearchContext
         )
             fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
@@ -457,7 +457,7 @@ function process_file!(
     """
     function score_psms!(
         psms::DataFrame,
-        params::FirstPassSearchParameters,
+        params::FirstPassSearchParameters{<:PrecEstimation},
         search_context::SearchContext)
         column_names = [
             :spectral_contrast, :city_block, :entropy_score, :scribe, :percent_theoretical_ignored,
@@ -614,11 +614,11 @@ Initial file processing complete, no additional processing needed.
 """
 function process_search_results!(
     results::FirstPassSearchResults,
-    params::P,
+    params::FirstPassSearchParameters{P},
     search_context::SearchContext,
     ms_file_idx::Int64,
     _
-) where {P<:FirstPassSearchParameters}
+) where {P<:PrecEstimation}
     psms = results.psms[]
     fwhms = skipmissing(psms[!, :fwhm])
     fwhm_points = count(!ismissing, fwhms)
@@ -671,9 +671,9 @@ Summarize results across all files.
 """
 function summarize_results!(
     results::FirstPassSearchResults,
-    params::P,
+    params::FirstPassSearchParameters{P},
     search_context::SearchContext
-) where {P<:FirstPassSearchParameters}
+) where {P<:PrecEstimation}
     
     """
     Process precursors and calculate iRT errors.
@@ -681,7 +681,7 @@ function summarize_results!(
     function get_best_precursors_accross_runs!(
         search_context::SearchContext,
         results::FirstPassSearchResults,
-        params::FirstPassSearchParameters
+        params::FirstPassSearchParameters{<:PrecEstimation}
     )
 
         # Filter out failed files
