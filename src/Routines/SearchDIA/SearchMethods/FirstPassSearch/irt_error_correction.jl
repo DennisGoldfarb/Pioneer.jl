@@ -17,8 +17,6 @@
 
 const CANONICAL_AMINO_ACIDS = collect("ACDEFGHIKLMNPQRSTVWY")
 const CANONICAL_AA_TO_INDEX = Dict{Char, Int}(aa => idx for (idx, aa) in enumerate(CANONICAL_AMINO_ACIDS))
-const MOD_ANNOTATION_REGEX = r"\(.*?\)"
-
 """
     correct_first_pass_irt_errors!(search_context::SearchContext;
                                    q_value_threshold::Float32 = 0.01f0,
@@ -30,8 +28,9 @@ update the observed iRT dictionary stored in the search context.
 The routine loads the cached first-pass PSM Arrow tables, filters to target
 PSMs with q-values less than or equal to `q_value_threshold`, and computes
 signed iRT errors (`predicted - observed`). Sequence features are generated
-from modification-stripped peptide sequences by counting the occurrences of
-canonical amino acids. A linear system is solved to estimate regression
+from peptide sequences by counting the occurrences of canonical amino acids
+and distinct modification-specific residues. A linear system is solved to
+estimate regression
 coefficients that map these counts to iRT errors. If insufficient training
 data are available or the design matrix is rank-deficient, the correction is
 skipped and library iRT values are retained.
@@ -104,18 +103,46 @@ end
 function compute_precursor_aa_features(precursors)
     sequences_raw = getSequence(precursors)
     n_precursors = length(sequences_raw)
-    n_features = length(CANONICAL_AMINO_ACIDS)
-    features = zeros(Float64, n_precursors, n_features)
+
+    tokens_per_precursor = Vector{Vector{String}}(undef, n_precursors)
+    extra_tokens = String[]
+    seen_extra_tokens = Set{String}()
 
     for prec_idx in 1:n_precursors
-        seq_raw = sequences_raw[prec_idx]
-        if seq_raw === missing
-            continue
+        tokens = parse_sequence_tokens(sequences_raw[prec_idx])
+        tokens_per_precursor[prec_idx] = tokens
+        for token in tokens
+            if is_canonical_token(token)
+                continue
+            end
+            if !in(token, seen_extra_tokens)
+                push!(extra_tokens, token)
+                push!(seen_extra_tokens, token)
+            end
         end
-        seq_clean = normalize_sequence(seq_raw)
+    end
+
+    n_features = length(CANONICAL_AMINO_ACIDS) + length(extra_tokens)
+    features = zeros(Float64, n_precursors, n_features)
+
+    extra_token_to_index = Dict{String, Int}()
+    for (offset, token) in enumerate(extra_tokens)
+        extra_token_to_index[token] = length(CANONICAL_AMINO_ACIDS) + offset
+    end
+
+    for prec_idx in 1:n_precursors
         feature_row = @view features[prec_idx, :]
-        for aa in seq_clean
-            feature_idx = get(CANONICAL_AA_TO_INDEX, aa, 0)
+        for token in tokens_per_precursor[prec_idx]
+            if length(token) == 1
+                aa = token[1]
+                feature_idx = get(CANONICAL_AA_TO_INDEX, aa, 0)
+                if feature_idx != 0
+                    feature_row[feature_idx] += 1.0
+                    continue
+                end
+            end
+
+            feature_idx = get(extra_token_to_index, token, 0)
             if feature_idx != 0
                 feature_row[feature_idx] += 1.0
             end
@@ -125,8 +152,48 @@ function compute_precursor_aa_features(precursors)
     return features
 end
 
-normalize_sequence(seq::AbstractString) = uppercase(replace(String(seq), MOD_ANNOTATION_REGEX => ""))
-normalize_sequence(::Missing) = ""
+function parse_sequence_tokens(seq::Missing)
+    return String[]
+end
+
+function parse_sequence_tokens(seq::AbstractString)
+    tokens = String[]
+    seq_str = String(seq)
+    i = firstindex(seq_str)
+    last = lastindex(seq_str)
+
+    while i <= last
+        ch = seq_str[i]
+        if ch == '(' || ch == ')' || ch == ' '
+            i = nextind(seq_str, i)
+            continue
+        end
+
+        base = uppercase(ch)
+        next_i = nextind(seq_str, i)
+        token = String(base)
+
+        if next_i <= last && seq_str[next_i] == '('
+            close_idx = findnext(==')', seq_str, next_i)
+            if close_idx !== nothing
+                inner_start = nextind(seq_str, next_i)
+                inner_end = prevind(seq_str, close_idx)
+                if inner_start <= inner_end
+                    mod_content = uppercase(seq_str[inner_start:inner_end])
+                    token = string(base, "(", mod_content, ")")
+                    next_i = nextind(seq_str, close_idx)
+                end
+            end
+        end
+
+        push!(tokens, token)
+        i = next_i
+    end
+
+    return tokens
+end
+
+is_canonical_token(token::String) = length(token) == 1 && haskey(CANONICAL_AA_TO_INDEX, token[1])
 
 function fit_irt_error_model!(search_context::SearchContext,
                               library_irt::Vector{Float32},
