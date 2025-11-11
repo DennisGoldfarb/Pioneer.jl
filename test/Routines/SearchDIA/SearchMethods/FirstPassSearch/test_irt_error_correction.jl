@@ -2,6 +2,8 @@ using Test
 using Pioneer
 using Arrow
 using DataFrames
+using Dictionaries
+using Plots
 
 struct MockSearchStructures <: Pioneer.SearchDataStructures end
 
@@ -38,6 +40,7 @@ function build_mock_context(psms_df::DataFrame, sequences::Vector{String},
     context = Pioneer.SearchContext(library, temp_structures, ms_reference,
                                     1, length(sequences), 1)
     Pioneer.setRtIrtMap!(context, Pioneer.IdentityModel(), 1)
+    Pioneer.setDataOutDir!(context, tmp_dir)
     return context
 end
 
@@ -73,6 +76,120 @@ function compute_expected_irt(sequence::AbstractString,
     end
 
     return Float32(Float64(base_irt) - err)
+end
+
+@testset "Calibrated iRTs drive RT index bins" begin
+    sequences = ["PEPTIDE", "PEPTIDER"]
+    structural_mods = ["", "(2,E,Unimod:4)"]
+    is_decoy = [false, false]
+    library_irt = Float32[100.0, 110.0]
+
+    psms_df = DataFrame(
+        ms_file_idx = fill(UInt32(1), 2),
+        scan_idx = UInt32[1, 2],
+        precursor_idx = UInt32[1, 2],
+        rt = Float32[90.0, 105.0],
+        irt_predicted = library_irt,
+        q_value = Float32[0.001, 0.001],
+        score = zeros(Float32, 2),
+        prob = ones(Float32, 2),
+        scan_count = fill(UInt32(1), 2)
+    )
+
+    ctx = build_mock_context(psms_df, sequences, structural_mods, is_decoy, library_irt)
+    Pioneer.correct_first_pass_irt_errors!(ctx)
+
+    # Perturb calibrated predictions so they differ from observed best_irt values
+    for prec_idx in UInt32[1, 2]
+        current = Pioneer.getPredIrt(ctx, prec_idx)
+        Pioneer.setPredIrt!(ctx, prec_idx, current + 5.0f0)
+    end
+
+    precursor_dict = Dictionary{UInt32, @NamedTuple{
+        best_prob::Float32,
+        best_ms_file_idx::UInt32,
+        best_scan_idx::UInt32,
+        best_irt::Float32,
+        mean_irt::Union{Missing, Float32},
+        var_irt::Union{Missing, Float32},
+        n::Union{Missing, UInt16},
+        mz::Float32
+    }}()
+
+    insert!(precursor_dict, UInt32(1), (
+        best_prob = 0.9f0,
+        best_ms_file_idx = UInt32(1),
+        best_scan_idx = UInt32(1),
+        best_irt = 90.0f0,
+        mean_irt = Float32(90.0),
+        var_irt = Float32(0.0),
+        n = UInt16(1),
+        mz = 500.0f0
+    ))
+
+    insert!(precursor_dict, UInt32(2), (
+        best_prob = 0.85f0,
+        best_ms_file_idx = UInt32(1),
+        best_scan_idx = UInt32(2),
+        best_irt = 105.0f0,
+        mean_irt = Float32(105.0),
+        var_irt = Float32(0.0),
+        n = UInt16(1),
+        mz = 510.0f0
+    ))
+
+    fwhm_stats = Dictionary{Int64, NamedTuple{(:median_fwhm, :mad_fwhm), Tuple{Float32, Float32}}}()
+    insert!(fwhm_stats, 1, (median_fwhm = 1.0f0, mad_fwhm = 0.2f0))
+
+    results = Pioneer.FirstPassSearchResults(
+        fwhm_stats,
+        Base.Ref(DataFrame()),
+        Base.Ref(Pioneer.MassErrorModel(0.0f0, (0.0f0, 0.0f0))),
+        Float32[],
+        Plots.Plot[],
+        joinpath(Pioneer.getDataOutDir(ctx), "qc_plots")
+    )
+
+    params = Pioneer.FirstPassSearchParameters{Pioneer.FullPrecCapture()}(
+        (UInt8(0), UInt8(0)),
+        0.0f0,
+        0.0f0,
+        0.0f0,
+        0.0f0,
+        UInt8(0),
+        Int64(0),
+        0.0f0,
+        0.0f0,
+        (Int64(0), Int64(0)),
+        UInt8(0),
+        Int64(0),
+        UInt8(0),
+        Set{Int64}(),
+        false,
+        0.0f0,
+        Int64(0),
+        Int64(0),
+        0.0f0,
+        0.0f0,
+        Int64(0),
+        0.0f0,
+        0.0f0,
+        0.1f0,
+        1.0f0,
+        1.0f0,
+        1.0f0,
+        false,
+        false,
+        Pioneer.FullPrecCapture()
+    )
+
+    Pioneer.create_rt_indices!(ctx, results, precursor_dict, params)
+
+    rt_index_path = Pioneer.getRtIndex(Pioneer.getMSData(ctx), 1)
+    rt_index_df = DataFrame(Arrow.Table(rt_index_path))
+
+    pred_lookup = Pioneer.getPredIrt(ctx)
+    @test all(isapprox(rt_index_df.irt[i], pred_lookup[rt_index_df.precursor_idx[i]]; atol = 1f-6) for i in 1:nrow(rt_index_df))
 end
 
 @testset "First pass iRT error correction" begin

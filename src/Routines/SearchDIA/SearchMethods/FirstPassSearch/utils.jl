@@ -566,9 +566,13 @@ function create_rt_indices!(
 
     setIrtErrors!(search_context, irt_errs)
 
-    # Create precursor to iRT mapping
-    prec_to_irt = map(x -> (irt=x[:best_irt], mz=x[:mz]), 
-                      precursor_dict)
+    # Create precursor to iRT mapping using calibrated predictions when available
+    predicted_irts = getPredIrt(search_context)
+    prec_to_irt = Dictionary{UInt32, NamedTuple{(:irt, :mz), Tuple{Float32, Float32}}}()
+    for (prec_idx, stats) in precursor_dict
+        irt_value = haskey(predicted_irts, prec_idx) ? predicted_irts[prec_idx] : stats[:best_irt]
+        insert!(prec_to_irt, prec_idx, (irt = Float32(irt_value), mz = stats[:mz]))
+    end
 
     # Set up indices folder
     rt_indices_folder = joinpath(getDataOutDir(search_context), "temp_data", "rt_indices")
