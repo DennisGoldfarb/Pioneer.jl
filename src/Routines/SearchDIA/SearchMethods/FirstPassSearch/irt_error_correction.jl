@@ -16,13 +16,14 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 const CANONICAL_AMINO_ACIDS = collect("ACDEFGHIKLMNPQRSTVWY")
+const N_CANONICAL_AA = length(CANONICAL_AMINO_ACIDS)
 const CANONICAL_AA_TO_INDEX = Dict{Char, Int}(aa => idx for (idx, aa) in enumerate(CANONICAL_AMINO_ACIDS))
 const MOD_ANNOTATION_REGEX = r"\(.*?\)"
 
 """
     correct_first_pass_irt_errors!(search_context::SearchContext;
                                    q_value_threshold::Float32 = 0.01f0,
-                                   min_samples::Int = length(CANONICAL_AMINO_ACIDS) + 1)
+                                   min_samples::Int = N_CANONICAL_AA + 1)
 
 Estimate systematic iRT prediction errors from high-confidence PSMs and
 update the observed iRT dictionary stored in the search context.
@@ -31,8 +32,10 @@ The routine loads the cached first-pass PSM Arrow tables, filters to target
 PSMs with q-values less than or equal to `q_value_threshold`, and computes
 signed iRT errors (`predicted - observed`). Sequence features are generated
 from modification-stripped peptide sequences by counting the occurrences of
-canonical amino acids. A linear system is solved to estimate regression
-coefficients that map these counts to iRT errors. If insufficient training
+canonical amino acids, forming pairwise interaction terms (including
+self-interactions), and flagging the
+N-terminal residue. A linear system is solved to estimate regression
+coefficients that map these features to iRT errors. If insufficient training
 data are available or the design matrix is rank-deficient, the correction is
 skipped and library iRT values are retained.
 
@@ -42,7 +45,7 @@ library iRT values.
 """
 function correct_first_pass_irt_errors!(search_context::SearchContext;
                                         q_value_threshold::Float32 = 0.01f0,
-                                        min_samples::Int = length(CANONICAL_AMINO_ACIDS) + 1)
+                                        min_samples::Int = N_CANONICAL_AA + 1)
     precursors = getPrecursors(getSpecLib(search_context))
     library_irt = Vector{Float32}(getIrt(precursors))
     n_precursors = length(library_irt)
@@ -104,8 +107,10 @@ end
 function compute_precursor_aa_features(precursors)
     sequences_raw = getSequence(precursors)
     n_precursors = length(sequences_raw)
-    n_features = length(CANONICAL_AMINO_ACIDS)
+    n_interactions = N_CANONICAL_AA * (N_CANONICAL_AA + 1) ÷ 2
+    n_features = N_CANONICAL_AA + n_interactions + N_CANONICAL_AA
     features = zeros(Float64, n_precursors, n_features)
+    counts = zeros(Float64, N_CANONICAL_AA)
 
     for prec_idx in 1:n_precursors
         seq_raw = sequences_raw[prec_idx]
@@ -114,10 +119,31 @@ function compute_precursor_aa_features(precursors)
         end
         seq_clean = normalize_sequence(seq_raw)
         feature_row = @view features[prec_idx, :]
+        fill!(counts, 0.0)
         for aa in seq_clean
             feature_idx = get(CANONICAL_AA_TO_INDEX, aa, 0)
             if feature_idx != 0
-                feature_row[feature_idx] += 1.0
+                counts[feature_idx] += 1.0
+            end
+        end
+
+        feature_row[1:N_CANONICAL_AA] .= counts
+
+        interaction_offset = N_CANONICAL_AA
+        interaction_idx = 1
+        for i in 1:N_CANONICAL_AA
+            count_i = counts[i]
+            for j in i:N_CANONICAL_AA
+                feature_row[interaction_offset + interaction_idx] = count_i * counts[j]
+                interaction_idx += 1
+            end
+        end
+
+        nt_offset = interaction_offset + n_interactions
+        if !isempty(seq_clean)
+            nt_idx = get(CANONICAL_AA_TO_INDEX, seq_clean[1], 0)
+            if nt_idx != 0
+                feature_row[nt_offset + nt_idx] = 1.0
             end
         end
     end
