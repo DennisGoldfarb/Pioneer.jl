@@ -350,6 +350,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             fold_models[itr] = bst
 
             # Print feature importances for each iteration and fold
+            print_importance = true
             if print_importance
                 importances = lightgbm_feature_importances(bst)
                 if importances === nothing
