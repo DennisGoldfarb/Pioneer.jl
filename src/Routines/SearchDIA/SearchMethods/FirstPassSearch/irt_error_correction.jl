@@ -174,7 +174,7 @@ function parse_sequence_tokens(seq::AbstractString)
         token = String(base)
 
         if next_i <= last && seq_str[next_i] == '('
-            close_idx = findnext(==')', seq_str, next_i)
+            close_idx = findnext(c -> c == ')', seq_str, next_i)
             if close_idx !== nothing
                 inner_start = nextind(seq_str, next_i)
                 inner_end = prevind(seq_str, close_idx)
