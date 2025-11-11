@@ -1213,6 +1213,14 @@ function generate_ms1_mass_error_plot(
     #p = histogram(results.ppm_errs)
     #savefig(p, plot_path)
     mem = results.ms1_mass_err_model[]
+    if !(mem isa MassErrorModel)
+        return Plots.plot(
+            title = fname * "\n No MS1 mass error model available",
+            xlabel = "Count",
+            ylabel = "Mass Error (ppm)",
+            legend = false,
+        )
+    end
     errs = results.ms1_ppm_errs .+ getMassOffset(mem)
     n = length(errs)
     plot_title = fname

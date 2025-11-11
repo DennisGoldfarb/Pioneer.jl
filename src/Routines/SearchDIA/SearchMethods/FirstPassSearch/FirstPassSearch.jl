@@ -74,7 +74,7 @@ Holds FWHM statistics, PSM file paths, and model updates.
 struct FirstPassSearchResults <: SearchResults
     fwhms::Dictionary{Int64, @NamedTuple{median_fwhm::Float32,mad_fwhm::Float32}}
     psms::Base.Ref{DataFrame}
-    ms1_mass_err_model::Base.Ref{<:MassErrorModel}
+    ms1_mass_err_model::Base.Ref{Union{Nothing, MassErrorModel}}
     ms1_ppm_errs::Vector{Float32}
     ms1_mass_plots::Vector{Plots.Plot}
     qc_plots_folder_path::String
@@ -318,7 +318,14 @@ Interface Implementation
 ==========================================================#
 
 get_parameters(::FirstPassSearch, params::Any) = FirstPassSearchParameters(params)
-getMs1MassErrorModel(ptsr::FirstPassSearchResults) = ptsr.ms1_mass_err_model[]
+function getMs1MassErrorModel(results::FirstPassSearchResults)
+    model = results.ms1_mass_err_model[]
+    if model isa MassErrorModel
+        return model
+    end
+    @user_warn "MS1 mass error model missing on first-pass results. Falling back to ±30 ppm default."
+    return MassErrorModel(zero(Float32), (30.0f0, 30.0f0))
+end
 getMs1TolPpm(params::FirstPassSearchParameters) = params.ms1_tol_ppm
 
 function init_search_results(
@@ -336,7 +343,7 @@ function init_search_results(
     return FirstPassSearchResults(
         Dictionary{Int64, NamedTuple{(:median_fwhm, :mad_fwhm), Tuple{Float32, Float32}}}(),
         Base.Ref{DataFrame}(),
-        Base.Ref{MassErrorModel}(),
+        Base.Ref{Union{Nothing, MassErrorModel}}(nothing),
         Vector{Float32}(),
         Plots.Plot[],
         qc_dir,
@@ -642,7 +649,12 @@ function process_search_results!(
     # Generate mass error plot
     push!(results.ms1_mass_plots, generate_ms1_mass_error_plot(results, parsed_fname))
     # Update models in search context
-    setMs1MassErrorModel!(search_context, ms_file_idx, getMs1MassErrorModel(results))
+    model = results.ms1_mass_err_model[]
+    if model isa MassErrorModel
+        setMs1MassErrorModel!(search_context, ms_file_idx, model)
+    else
+        setMs1MassErrorModel!(search_context, ms_file_idx, getMassErrorModel(search_context, ms_file_idx))
+    end
 end
 
 """
