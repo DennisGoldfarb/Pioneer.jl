@@ -78,6 +78,7 @@ struct FirstPassSearchResults <: SearchResults
     ms1_ppm_errs::Vector{Float32}
     ms1_mass_plots::Vector{Plots.Plot}
     qc_plots_folder_path::String
+    probit_precursor_candidates::Set{UInt32}
 end
 
 """
@@ -204,7 +205,8 @@ function init_search_results(
         Base.Ref{MassErrorModel}(),
         Vector{Float32}(),
         Plots.Plot[],
-        qc_dir
+        qc_dir,
+        Set{UInt32}()
     )
 end
 
@@ -268,6 +270,11 @@ function process_file!(
         
         # Score PSMs
         score_psms!(psms, params, search_context)
+
+        for prec in psms[!, :precursor_idx]
+            push!(results.probit_precursor_candidates, UInt32(prec))
+        end
+
         # Get best PSMs
         select_best_psms!(
             psms,
@@ -563,33 +570,96 @@ function summarize_results!(
     # Process precursors
     precursor_dict = get_best_precursors_accross_runs!(search_context, results, params)
 
-    if false==true#params.match_between_runs==true
-        #######
-        #Each target has a corresponding decoy and vice versa
-        #Add the complement targets/decoys to the precursor dict 
-        #if the `sibling_peptide_scores` parameter is set to true
-        #In the target/decoy scoring (see SearchMethods/ScoringSearch)
-        #the maximum score for each target/decoy pair is shared accross runs
-        #in an iterative training scheme. 
-        precursors = getPrecursors(getSpecLib(search_context))
-        i = 1
-        for (pid, val) in pairs(precursor_dict)
-            i += 1
-            setPredIrt!(search_context, pid, getPredIrt(search_context, pid))
-            partner_pid = getPartnerPrecursorIdx(precursors)[pid]
-            if ismissing(partner_pid)
-                continue
+    # Ensure all charge states of identified peptides are available for downstream searches
+    precursors = getPrecursors(getSpecLib(search_context))
+    sequences = getSequence(precursors)
+    structural_mods = getStructuralMods(precursors)
+    isotopic_mods = getIsotopicMods(precursors)
+    is_decoy = getIsDecoy(precursors)
+    mz_vals = getMz(precursors)
+    irt_vals = getIrt(precursors)
+
+    peptide_to_precursors = Dict{Tuple{Bool, Any, Any, Any}, Vector{UInt32}}()
+    for prec_idx in 1:length(mz_vals)
+        key = (
+            is_decoy[prec_idx],
+            sequences[prec_idx],
+            structural_mods[prec_idx],
+            isotopic_mods[prec_idx],
+        )
+        push!(get!(peptide_to_precursors, key, UInt32[]), UInt32(prec_idx))
+    end
+
+    passing_peptides = Set{Tuple{Bool, Any, Any, Any}}()
+    for prec_idx in keys(precursor_dict)
+        idx = Int(prec_idx)
+        push!(passing_peptides, (
+            is_decoy[idx],
+            sequences[idx],
+            structural_mods[idx],
+            isotopic_mods[idx],
+        ))
+    end
+
+    probit_candidates = results.probit_precursor_candidates
+
+    for key in passing_peptides
+        precursors_for_peptide = get(peptide_to_precursors, key, UInt32[])
+
+        best_existing_entry = nothing
+        best_existing_prob = typemin(Float32)
+        for prec_idx in precursors_for_peptide
+            if haskey(precursor_dict, prec_idx)
+                entry = precursor_dict[prec_idx]
+                if best_existing_entry === nothing || entry.best_prob > best_existing_prob
+                    best_existing_entry = entry
+                    best_existing_prob = entry.best_prob
+                end
+            end
+        end
+
+        if best_existing_entry !== nothing
+            best_irt_seed = best_existing_entry.best_irt
+            mean_irt_seed = best_existing_entry.mean_irt
+            var_irt_seed = best_existing_entry.var_irt
+
+            for prec_idx in precursors_for_peptide
+                if !haskey(precursor_dict, prec_idx) && in(prec_idx, probit_candidates)
+                    idx = Int(prec_idx)
+                    mz_value = mz_vals[idx]
+
+                    insert!(
+                        precursor_dict,
+                        prec_idx,
+                        (
+                            best_prob = 0f0,
+                            best_ms_file_idx = zero(UInt32),
+                            best_scan_idx = zero(UInt32),
+                            best_irt = best_irt_seed,
+                            mean_irt = mean_irt_seed,
+                            var_irt = var_irt_seed,
+                            n = zero(UInt16),
+                            mz = Float32(coalesce(mz_value, 0f0)),
+                        ),
+                    )
+                end
             end
 
-            # If the partner needs to be added, then give it the irt of the currently identified precursor
-            # Otherwise if the partner was ID'ed, it should keep its original predicted iRT
-            if !haskey(precursor_dict, partner_pid)
-                insert!(precursor_dict, partner_pid, val)
-                setPredIrt!(search_context, partner_pid, getPredIrt(search_context, pid))
-            else
-                setPredIrt!(search_context, partner_pid, getPredIrt(search_context, partner_pid))
+            for prec_idx in precursors_for_peptide
+                if haskey(precursor_dict, prec_idx)
+                    entry = precursor_dict[prec_idx]
+                    precursor_dict[prec_idx] = (
+                        best_prob = entry.best_prob,
+                        best_ms_file_idx = entry.best_ms_file_idx,
+                        best_scan_idx = entry.best_scan_idx,
+                        best_irt = best_irt_seed,
+                        mean_irt = mean_irt_seed,
+                        var_irt = var_irt_seed,
+                        n = entry.n,
+                        mz = entry.mz,
+                    )
+                end
             end
-            
         end
     end
 
