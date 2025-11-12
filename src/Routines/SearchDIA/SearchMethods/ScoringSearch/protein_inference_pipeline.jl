@@ -237,6 +237,53 @@ end
 Transform PSMs into protein groups by aggregating peptides.
 Returns a DataFrame with one row per protein group.
 """
+const PROTEIN_SCORE_EPS = 1f-6
+
+"""
+    combine_probability_evidence(probs::AbstractVector{Float32})
+
+Combine probabilities assuming independent evidence, returning a probability in (0, 1).
+Values are clamped slightly below 1.0 to avoid singularities in downstream logarithms.
+"""
+function combine_probability_evidence(probs::AbstractVector{Float32})
+    log_prod = 0.0f0
+    has_positive = false
+    for prob in probs
+        if prob <= 0f0
+            continue
+        end
+        has_positive = true
+        clamped = min(prob, 1.0f0 - PROTEIN_SCORE_EPS)
+        log_prod += log1p(-clamped)
+    end
+
+    if !has_positive
+        return 0.0f0
+    end
+
+    combined = 1.0f0 - exp(log_prod)
+    return clamp(combined, 0.0f0, 1.0f0 - PROTEIN_SCORE_EPS)
+end
+
+"""
+    accumulate_log_evidence(probs::AbstractVector{Float32})
+
+Accumulate log-evidence style scores from probabilities using `-log(1 - p)`.
+Probabilities at or below zero contribute no evidence, while values near one are
+clamped to maintain numerical stability.
+"""
+function accumulate_log_evidence(probs::AbstractVector{Float32})
+    total = 0.0f0
+    for prob in probs
+        if prob <= 0f0
+            continue
+        end
+        clamped = min(prob, 1.0f0 - PROTEIN_SCORE_EPS)
+        total += -log1p(-clamped)
+    end
+    return total
+end
+
 function group_psms_by_protein(df::DataFrame)
     if nrow(df) == 0
         # Return empty protein groups DataFrame with expected schema
@@ -263,35 +310,102 @@ function group_psms_by_protein(df::DataFrame)
     
     # Aggregate to protein groups
     protein_groups = combine(grouped) do gdf
-        # Get unique peptides that are used for quantification
-        quant_peptides = unique(gdf[gdf.use_for_protein_quant .== true, :sequence])
-        n_peptides = length(quant_peptides)
-        
-        # Calculate initial protein score (log-sum)
-        peptide_probs = gdf[gdf.use_for_protein_quant .== true, prob_col]
-        if isempty(peptide_probs)
-            pg_score = 0.0f0
-        else
-            # Use best probability per peptide
-            unique_pep_probs = Float32[]
-            for pep in quant_peptides
-                pep_mask = (gdf.sequence .== pep) .& (gdf.use_for_protein_quant .== true)
-                if any(pep_mask)
-                    push!(unique_pep_probs, maximum(gdf[pep_mask, prob_col]))
-                end
+       
+        quant_mask = gdf.use_for_protein_quant .== true
+        quant_indices = findall(quant_mask)
+
+        if isempty(quant_indices)
+            has_common = any((gdf.missed_cleavage .== 0) .& (gdf.Mox .== 0))
+            return DataFrame(
+                n_peptides = 0,
+                peptide_list = "",
+                pg_score = 0.0f0,
+                any_common_peps = has_common
+            )
+        end
+
+        sequences = gdf.sequence
+        precursor_idx = gdf.precursor_idx
+        probabilities = gdf[!, prob_col]
+        has_structural_mods = hasproperty(gdf, :structural_mods)
+        has_isotopic_mods = hasproperty(gdf, :isotopic_mods)
+
+        structural_mods = has_structural_mods ? gdf.structural_mods : nothing
+        isotopic_mods = has_isotopic_mods ? gdf.isotopic_mods : nothing
+
+        seen_peptides = Set{String}()
+        peptide_order = String[]
+        precursor_best = Dict{UInt32, Float32}()
+        precursor_to_mod = Dict{UInt32, Tuple{String, String, String}}()
+
+        for idx in quant_indices
+            seq = sequences[idx]
+            if !(seq in seen_peptides)
+                push!(peptide_order, seq)
+                push!(seen_peptides, seq)
             end
-            pg_score = -sum(log.(1.0f0 .- unique_pep_probs))
-        end        
+
+            struct_mod = ""
+            if has_structural_mods
+                val = structural_mods[idx]
+                struct_mod = String(something(val, ""))
+            end
+
+            iso_mod = ""
+            if has_isotopic_mods
+                val = isotopic_mods[idx]
+                iso_mod = String(something(val, ""))
+            end
+
+            key = (seq, struct_mod, iso_mod)
+            prec_idx = UInt32(precursor_idx[idx])
+            prob = Float32(probabilities[idx])
+
+            if !haskey(precursor_best, prec_idx) || prob > precursor_best[prec_idx]
+                precursor_best[prec_idx] = prob
+            end
+            precursor_to_mod[prec_idx] = key
+        end
+
+        mod_to_precursor_probs = Dict{Tuple{String, String, String}, Vector{Float32}}()
+        for (prec_idx, prob) in precursor_best
+            key = precursor_to_mod[prec_idx]
+            push!(get!(mod_to_precursor_probs, key, Float32[]), prob)
+        end
+
+        mod_scores = Dict{Tuple{String, String, String}, Float32}()
+        for (key, prob_vec) in mod_to_precursor_probs
+            mod_scores[key] = combine_probability_evidence(prob_vec)
+        end
+
+        peptide_to_mod_probs = Dict{String, Vector{Float32}}()
+        for ((seq, _, _), mod_prob) in mod_scores
+            push!(get!(peptide_to_mod_probs, seq, Float32[]), mod_prob)
+        end
+
+        peptide_scores = Dict{String, Float32}()
+        for (seq, mod_probs) in peptide_to_mod_probs
+            peptide_scores[seq] = combine_probability_evidence(mod_probs)
+        end
+
+        peptide_probs_ordered = Float32[]
+        for seq in peptide_order
+            if haskey(peptide_scores, seq)
+                push!(peptide_probs_ordered, peptide_scores[seq])
+            end
+        end
+
+        pg_score = accumulate_log_evidence(peptide_probs_ordered)
 
         has_common = any(
-            (gdf.use_for_protein_quant .== true) .&
+            quant_mask .&
             (gdf.missed_cleavage .== 0) .&
             (gdf.Mox .== 0)
         )
         
         DataFrame(
-            n_peptides = n_peptides,
-            peptide_list = join(quant_peptides, ";"),
+            n_peptides = length(peptide_scores),
+            peptide_list = join(peptide_order, ";"),
             pg_score = pg_score,
             any_common_peps = has_common
         )
