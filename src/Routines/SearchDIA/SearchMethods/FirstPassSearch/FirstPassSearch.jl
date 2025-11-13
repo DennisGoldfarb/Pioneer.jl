@@ -301,9 +301,14 @@ function process_file!(
             search_context::SearchContext
         )
             fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
+            precursors = getPrecursors(getSpecLib(search_context))
+            sequences = getSequence(precursors)
+            structural_mods = getStructuralMods(precursors)
             get_best_psms!(
                 psms,
                 precursor_mzs,
+                sequences,
+                structural_mods,
                 max_PEP=params.max_PEP,
                 fdr_scale_factor=fdr_scale_factor
             )
@@ -640,24 +645,12 @@ function summarize_results!(
             return Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_irt::Float32, mean_irt::Union{Missing, Float32}, var_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}}()
         end
         
-        precursors = getPrecursors(getSpecLib(search_context))
-        prec_mzs = getMz(precursors)
-        is_decoy = getIsDecoy(precursors)
-        sequences = getSequence(precursors)
-        structural_mods = getStructuralMods(precursors)
-        fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
-
         # Get best precursors from valid files only
         return get_best_precursors_accross_runs(
             valid_psms_paths,
-            prec_mzs,#[:mz],
+            getMz(getPrecursors(getSpecLib(search_context))),
             valid_rt_irt,
-            is_decoy,
-            sequences,
-            structural_mods;
-            max_q_val=params.max_q_val_for_irt,
-            pep_threshold=params.max_PEP,
-            fdr_scale_factor=fdr_scale_factor
+            max_q_val=params.max_q_val_for_irt
         )
     end
     # Map retention times and update iRT observations

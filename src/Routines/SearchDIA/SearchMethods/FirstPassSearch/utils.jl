@@ -212,98 +212,159 @@ end
 
 
 """
-    get_best_psms!(psms::DataFrame, prec_mz::Arrow.Primitive{T, Vector{T}}; 
-                   max_PEP::Float32=0.9f0, fdr_scale_factor::Float32=1.0f0) where {T<:AbstractFloat}
+    get_best_psms!(psms::DataFrame,
+                   prec_mz::Arrow.Primitive{T, Vector{T}},
+                   sequences::AbstractVector,
+                   structural_mods::AbstractVector;
+                   max_PEP::Float32=0.9f0,
+                   fdr_scale_factor::Float32=1.0f0) where {T<:AbstractFloat}
 
-Processes PSMs to identify the best matches and calculate peak characteristics.
+Processes PSMs to identify the best precursor evidence within a single run and calculate aggregated precursor probabilities.
 
 # Arguments
 - `psms`: DataFrame containing peptide-spectrum matches
 - `prec_mz`: Vector of precursor m/z values
-- `max_PEP`: Maximum local FDR threshold for filtering PSMs
-- `fdr_scale_factor`: Scale factor to correct for library target/decoy ratio
+- `sequences`: Peptide sequences indexed by precursor identifier
+- `structural_mods`: Structural modification annotations indexed by precursor identifier
+- `max_PEP`: Maximum local FDR threshold for filtering precursors
+- `fdr_scale_factor`: Scale factor to correct for library target/decoy ratio when estimating PEP
 
 # Modifies PSMs DataFrame to add:
-- `best_psm`: Boolean indicating highest scoring PSM for each precursor
+- `best_psm`: Boolean indicating representative PSM for each precursor
 - `fwhm`: Full width at half maximum of chromatographic peak
-- `scan_count`: Number of scans below q-value threshold
+- `scan_count`: Number of scans above half-maximum intensity
 - `prec_mz`: Precursor m/z values
 
 Note: Assumes psms is sorted by retention time in ascending order.
 """
 function get_best_psms!(psms::DataFrame,
-                        prec_mz::Arrow.Primitive{T, Vector{T}};
+                        prec_mz::Arrow.Primitive{T, Vector{T}},
+                        sequences::AbstractVector,
+                        structural_mods::AbstractVector;
                         max_PEP::Float32 = 0.9f0,
                         fdr_scale_factor::Float32 = 1.0f0
 ) where {T<:AbstractFloat}
 
-    #highest scoring psm for a given precursor
-    psms[!,:PEP] = zeros(Float16, size(psms, 1))
-    #highest scoring psm for a given precursor
-    psms[!,:best_psm] = zeros(Bool, size(psms, 1))
-    #fwhm estimate of the precursor
-    psms[!,:fwhm] = zeros(Union{Missing, Float32}, size(psms, 1))
-    #number of scans below the q value threshold for hte precursor
-    psms[!,:scan_count] = zeros(UInt16,size(psms, 1))
+    n_rows = size(psms, 1)
+    psms[!, :PEP] = zeros(Float16, n_rows)
+    psms[!, :best_psm] = falses(n_rows)
+    psms[!, :fwhm] = zeros(Union{Missing, Float32}, n_rows)
+    psms[!, :scan_count] = zeros(UInt16, n_rows)
 
-    
-    #Get best psm for each precursor 
-    #ASSUMES psms IS SOrtED BY rt IN ASCENDING ORDER
-    gpsms = groupby(psms,:precursor_idx)
-    for (precursor_idx, prec_psms) in pairs(gpsms)
+    has_isotopes = :isotopes_captured in names(psms)
 
-        #Get the best scoring psm, and the its row index. 
-        #Get the maximum intensity psm (under the q_value threshold) and its row index. 
-        max_irt, min_irt = missing, missing
-        max_log2_intensity, max_idx = missing, one(Int64)
-        best_psm_score, best_psm_idx = zero(Float32), one(Int64)
-        scan_count = one(UInt8)
-        for i in range(1, size(prec_psms, 1))
-            if coalesce(max_log2_intensity, zero(Float32)) < prec_psms[i,:log2_summed_intensity]
-                max_log2_intensity = prec_psms[i,:log2_summed_intensity]
-                max_idx = i
+    @inline function combine_probabilities(probabilities::AbstractVector{Float32})
+        combined = 0.0f0
+        @inbounds for p in probabilities
+            p_clamped = clamp(p, 0.0f0, 1.0f0)
+            combined = 1.0f0 - (1.0f0 - combined) * (1.0f0 - p_clamped)
+        end
+        return combined
+    end
+
+    @inline function combine_probabilities(existing::Float32, new::Float32)
+        return 1.0f0 - (1.0f0 - clamp(existing, 0.0f0, 1.0f0)) * (1.0f0 - clamp(new, 0.0f0, 1.0f0))
+    end
+
+    @inline function prob_to_score(prob::Float32)
+        clamped = clamp(prob, eps(Float32), 1.0f0 - eps(Float32))
+        return Float32(sqrt(2.0f0) * SpecialFunctions.erfinv(2.0f0 * clamped - 1.0f0))
+    end
+
+    precursor_probs = Dict{UInt32, Float32}()
+    precursor_keys = Dict{UInt32, Tuple{Bool, Any, Any}}()
+    precursor_best_rows = Dict{UInt32, Int}()
+
+    gpsms = groupby(psms, :precursor_idx)
+    for prec_psms in gpsms
+        parent_rows = parentindices(prec_psms)[1]
+        precursor_idx = prec_psms[1, :precursor_idx]
+        target_flag = prec_psms[1, :target]
+        seq = sequences[Int(precursor_idx)]
+        struct_mod = structural_mods[Int(precursor_idx)]
+        precursor_keys[precursor_idx] = (target_flag, seq, struct_mod)
+
+        combo_to_local_idx = Dict{Any, Int}()
+        max_log2_intensity = typemin(Float32)
+        max_idx = 1
+        n_group_rows = size(prec_psms, 1)
+
+        for local_idx in 1:n_group_rows
+            intensity = prec_psms[local_idx, :log2_summed_intensity]
+            if intensity > max_log2_intensity
+                max_log2_intensity = intensity
+                max_idx = local_idx
             end
-            if prec_psms[i,:score]>best_psm_score
-                best_psm_idx = i
-                best_psm_score = prec_psms[i,:score]
+
+            combo_key = has_isotopes ? prec_psms[local_idx, :isotopes_captured] : nothing
+            prev_idx = get(combo_to_local_idx, combo_key, 0)
+            if prev_idx == 0 || prec_psms[local_idx, :score] > prec_psms[prev_idx, :score]
+                combo_to_local_idx[combo_key] = local_idx
             end
         end
-        #Mark the best psm 
-        prec_psms[best_psm_idx,:best_psm] = true
 
-        #Try to estimate the fwhm. 
+        combo_local_idxs = collect(values(combo_to_local_idx))
+        if isempty(combo_local_idxs)
+            push!(combo_local_idxs, 1)
+        end
+        combo_probs = Float32[Float32(prec_psms[idx, :prob]) for idx in combo_local_idxs]
+        precursor_prob = combine_probabilities(combo_probs)
+        precursor_probs[precursor_idx] = precursor_prob
+
+        best_combo_idx = combo_local_idxs[argmax(combo_probs)]
+
+        max_irt = missing
+        min_irt = missing
+        scan_count = UInt16(1)
+
         i = max_idx - 1
         while i > 0
-            #Is the i'th psm above half the maximum 
-            if (prec_psms[i,:log2_summed_intensity] > (max_log2_intensity - 1.0))
-                scan_count += 1
-                min_irt = prec_psms[i,:irt]
+            if prec_psms[i, :log2_summed_intensity] > (max_log2_intensity - 1.0f0)
+                scan_count += UInt16(1)
+                min_irt = prec_psms[i, :irt]
             else
                 break
             end
             i -= 1
         end
-        
+
         i = max_idx + 1
-        while i <= size(prec_psms, 1)
-            #Is the i'th psm above half the maximum 
-            if (prec_psms[i,:log2_summed_intensity] > (max_log2_intensity - 1.0))
-                scan_count += 1
-                max_irt = prec_psms[i,:irt]
+        while i <= n_group_rows
+            if prec_psms[i, :log2_summed_intensity] > (max_log2_intensity - 1.0f0)
+                scan_count += UInt16(1)
+                max_irt = prec_psms[i, :irt]
             else
                 break
             end
             i += 1
         end
 
-        prec_psms[best_psm_idx,:fwhm] = max_irt - min_irt
-        prec_psms[best_psm_idx,:scan_count] = scan_count
+        prec_psms[best_combo_idx, :best_psm] = true
+        prec_psms[best_combo_idx, :fwhm] = max_irt - min_irt
+        prec_psms[best_combo_idx, :scan_count] = scan_count
+
+        precursor_best_rows[precursor_idx] = parent_rows[best_combo_idx]
     end
 
-    filter!(x->x.best_psm, psms);
-    sort!(psms,:score, rev = true)
-    # Will use PEP for final filter
-    get_PEP!(psms[!,:score], psms[!,:target], psms[!,:PEP]; doSort=false, fdr_scale_factor=fdr_scale_factor);
+    peptide_probs = Dict{Tuple{Bool, Any, Any}, Float32}()
+    for (prec_idx, prob) in precursor_probs
+        key = precursor_keys[prec_idx]
+        existing = get(peptide_probs, key, 0.0f0)
+        peptide_probs[key] = combine_probabilities(existing, prob)
+    end
+
+    for (prec_idx, row_idx) in precursor_best_rows
+        key = precursor_keys[prec_idx]
+        precursor_prob = precursor_probs[prec_idx]
+        peptide_prob = peptide_probs[key]
+        final_prob = max(precursor_prob, peptide_prob)
+        psms[row_idx, :prob] = final_prob
+        psms[row_idx, :score] = prob_to_score(final_prob)
+    end
+
+    filter!(x -> x.best_psm, psms)
+    sort!(psms, :score, rev=true)
+    get_PEP!(psms[!, :score], psms[!, :target], psms[!, :PEP]; doSort=false, fdr_scale_factor=fdr_scale_factor)
 
     n = size(psms, 1)
     kept_cols = [:precursor_idx, :log2_summed_intensity, :rt, :irt_predicted, :q_value,
@@ -313,18 +374,17 @@ function get_best_psms!(psms::DataFrame,
     end
     select!(psms, kept_cols)
 
-    first_fail = searchsortedfirst(psms[!,:PEP], Float16(max_PEP))
+    first_fail = searchsortedfirst(psms[!, :PEP], Float16(max_PEP))
     if first_fail <= n
         deleteat!(psms, first_fail:n)
     end
-    #println("unique IDs prefilter: ", n, " ", first_fail, "\n\n")
 
-    mz = zeros(T, size(psms, 1));
-    precursor_idx = psms[!,:precursor_idx]::Vector{UInt32}
+    mz = zeros(T, size(psms, 1))
+    precursor_idx = psms[!, :precursor_idx]::Vector{UInt32}
     Threads.@threads for i in range(1, size(psms, 1))
-        mz[i] = prec_mz[precursor_idx[i]];
+        mz[i] = prec_mz[precursor_idx[i]]
     end
-    psms[!,:prec_mz] = mz
+    psms[!, :prec_mz] = mz
 
     return
 end
