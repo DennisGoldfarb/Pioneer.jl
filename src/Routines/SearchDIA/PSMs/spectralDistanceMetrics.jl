@@ -17,6 +17,9 @@
 
 abstract type SpectralScores{T<:AbstractFloat} end
 
+const FRAG_COMP_PRIOR_STRENGTH = 1.0
+const FRAG_COMP_PRIOR_OFFSET = 1.0e-3
+
 struct SpectralScoresComplex{T<:AbstractFloat} <: SpectralScores{T}
     spectral_contrast::T
     fitted_spectral_contrast::T
@@ -27,6 +30,7 @@ struct SpectralScoresComplex{T<:AbstractFloat} <: SpectralScores{T}
     matched_ratio::T
     scribe::T
     percent_theoretical_ignored::T
+    frag_compensation_loglik::T
     #entropy_score::T
 end
 
@@ -267,12 +271,12 @@ function getDistanceMetrics(w::Vector{T},
         num_matching_peaks = min_frags
 
         while num_matching_peaks ≥ min_frags
-            scr, spectral_contrast, fitted_spectral_contrast, gof, max_matched_residual, max_unmatched_residual, 
-            fitted_manhattan_distance, matched_ratio, worst_pos, worst_pred, num_matching_peaks = computeFittedMetricsFor(w, H, r, col, incl)
+            scr, spectral_contrast, fitted_spectral_contrast, gof, max_matched_residual, max_unmatched_residual,
+            fitted_manhattan_distance, matched_ratio, frag_loglik, worst_pos, worst_pred, num_matching_peaks = computeFittedMetricsFor(w, H, r, col, incl)
 
             if best === nothing || scr > best.scribe * relative_improvement_threshold
-                best = (scribe=scr, sc=spectral_contrast, fsc=fitted_spectral_contrast, gof=gof, mmr=max_matched_residual, 
-                        mur=max_unmatched_residual, fmd=fitted_manhattan_distance, mr=matched_ratio)
+                best = (scribe=scr, sc=spectral_contrast, fsc=fitted_spectral_contrast, gof=gof, mmr=max_matched_residual,
+                        mur=max_unmatched_residual, fmd=fitted_manhattan_distance, mr=matched_ratio, loglik=frag_loglik)
                 pct_ignored += worst_pred
             else
                 break                     # improvement too small
@@ -294,7 +298,8 @@ function getDistanceMetrics(w::Vector{T},
             Float16(best.fmd),                        # fitted manhattan (−log)
             Float16(best.mr),                         # matched / unmatched
             Float16(best.scribe),                     # scribe
-            Float16(pct_ignored)                      # percent_theoretical_ignored
+            Float16(pct_ignored),                     # percent_theoretical_ignored
+            Float16(best.loglik)                      # frag_compensation_loglik
         )
     end
 end
@@ -320,6 +325,18 @@ function computeFittedMetricsFor(w::Vector{T}, H::SparseArray{Ti,T}, r::Vector{T
             num_matching_peaks += 1
         end
     end
+
+    total_h = max(total_h, eps(T))
+    total_x = max(total_x, eps(T))
+    total_counts = max(total_x, eps(T))
+
+    prior_strength = convert(T, FRAG_COMP_PRIOR_STRENGTH)
+    prior_offset = convert(T, FRAG_COMP_PRIOR_OFFSET)
+
+    alpha_sum = zero(T)
+    sum_lgamma_counts = zero(T)
+    sum_lgamma_prior = zero(T)
+    sum_lgamma_post = zero(T)
 
     h_sqrt_sum = zero(T)
     x_sqrt_sum = zero(T)
@@ -357,9 +374,11 @@ function computeFittedMetricsFor(w::Vector{T}, H::SparseArray{Ti,T}, r::Vector{T
 
         fitted_peak = w[col]*H.nzval[i]
         shadow_peak = fitted_peak - r[H.rowval[i]]
+        fitted_val = max(fitted_peak, eps(T))
+        shadow_val = max(shadow_peak, eps(T))
 
         r_abs = abs(r[H.rowval[i]])
-        sum_of_residuals += r_abs  
+        sum_of_residuals += r_abs
 
          #For scribe
          h_sqrt_sum += sqrt(fitted_peak)
@@ -386,8 +405,19 @@ function computeFittedMetricsFor(w::Vector{T}, H::SparseArray{Ti,T}, r::Vector{T
 
 
         # "normalized" predicted and observed, so we can know which peak is the worst for spectral angle
-        h_val_v2 = fitted_peak / total_h
-        x_val_v2 = shadow_peak / total_x
+        h_val_v2 = fitted_val / total_h
+        x_val_v2 = shadow_val / total_x
+
+        fitted_norm = h_val_v2
+        shadow_norm = x_val_v2
+
+        alpha_i = prior_strength * fitted_norm + prior_offset
+        observed_count = shadow_norm * total_counts
+
+        alpha_sum += alpha_i
+        sum_lgamma_counts += lgamma(observed_count + one(T))
+        sum_lgamma_prior += lgamma(alpha_i)
+        sum_lgamma_post += lgamma(observed_count + alpha_i)
 
         diff = x_val_v2 - h_val_v2 # only look for positive difference because it implies there's interference
         if (diff > worst_val) && (x_val_v2 > 0)
@@ -426,8 +456,16 @@ function computeFittedMetricsFor(w::Vector{T}, H::SparseArray{Ti,T}, r::Vector{T
     matched_ratio = log2(matched_sum/unmatched_sum)
     worst_intensity_ignored = worst_idx > 0 ? H.nzval[worst_idx] : 0.0
 
-    return (scribe_score, spectral_contrast, fitted_spectral_contrast, gof, max_matched_residual, max_unmatched_residual, 
-            fitted_manhattan_distance, matched_ratio, worst_pos, worst_intensity_ignored, num_matching_peaks)
+    log_comb = lgamma(total_counts + one(T)) - sum_lgamma_counts
+    log_prior = lgamma(alpha_sum) - lgamma(total_counts + alpha_sum)
+    log_post = sum_lgamma_post - sum_lgamma_prior
+    frag_loglik = log_comb + log_prior + log_post
+    if !isfinite(frag_loglik)
+        frag_loglik = zero(T)
+    end
+
+    return (scribe_score, spectral_contrast, fitted_spectral_contrast, gof, max_matched_residual, max_unmatched_residual,
+            fitted_manhattan_distance, matched_ratio, frag_loglik, worst_pos, worst_intensity_ignored, num_matching_peaks)
 end
 
 function getDistanceMetrics(w::Vector{T}, 

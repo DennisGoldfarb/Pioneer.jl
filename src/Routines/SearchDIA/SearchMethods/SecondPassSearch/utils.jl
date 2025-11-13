@@ -990,6 +990,8 @@ function init_summary_columns!(
         (:max_matched_ratio,        Float16)
         (:num_scans,        UInt16)
         (:smoothness,        Float32)
+        (:mean_frag_compensation_loglik, Float32)
+        (:std_frag_compensation_loglik, Float32)
         (:weights,        Vector{Float32})
         (:irts,         Vector{Float32})
         ];
@@ -1021,6 +1023,7 @@ function get_summary_scores!(
                             weight::AbstractVector{Float32},
                             gof::AbstractVector{Float16},
                             matched_ratio::AbstractVector{Float16},
+                            frag_comp_loglik::AbstractVector{<:AbstractFloat},
                             #entropy::AbstractVector{Float16},
                             fitted_manhattan_distance::AbstractVector{Float16},
                             fitted_spectral_contrast::AbstractVector{Float16},
@@ -1039,9 +1042,11 @@ function get_summary_scores!(
     y_ions_sum = 0
     max_y_ions = 0
     smoothness = 0.0f0
+    frag_loglik_sum = 0.0f0
+    frag_loglik_sum_sq = 0.0f0
 
     apex_scan = argmax(psms[!,:weight])
-    #Need to make sure there is not a big gap. 
+    #Need to make sure there is not a big gap.
     start = max(1, apex_scan - 2)
     stop = min(length(weight), apex_scan + 2)
 
@@ -1075,8 +1080,12 @@ function get_summary_scores!(
             max_y_ions = y_count[i]
         end
 
+        val = Float32(frag_comp_loglik[i])
+        frag_loglik_sum += val
+        frag_loglik_sum_sq += val * val
+
         count += 1
-    end    
+    end
 
     irts = rt_to_irt_interp.(psms.rt)
     
@@ -1094,7 +1103,7 @@ function get_summary_scores!(
         end
     end
 
-   
+
 
     psms.max_gof[apex_scan] = max_gof
     psms.max_matched_ratio[apex_scan] = max_matched_ratio
@@ -1108,6 +1117,12 @@ function get_summary_scores!(
     psms.smoothness[apex_scan] = smoothness
     psms.weights[apex_scan] = weight
     psms.irts[apex_scan] = irts
+    if count > 0
+        mean_loglik = frag_loglik_sum / Float32(count)
+        variance = max(frag_loglik_sum_sq / Float32(count) - mean_loglik^2, 0.0f0)
+        psms.mean_frag_compensation_loglik[apex_scan] = mean_loglik
+        psms.std_frag_compensation_loglik[apex_scan] = sqrt(variance)
+    end
     psms.best_scan[apex_scan] = true
 
 end

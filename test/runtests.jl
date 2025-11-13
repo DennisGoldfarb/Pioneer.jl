@@ -176,6 +176,7 @@ end
     include("./utils/FileOperations/streaming/test_stream_sorted_merge_basic.jl")
     include("./Routines/SearchDIA/SearchMethods/FirstPassSearch/test_irt_error_correction.jl")
     include("./Routines/SearchDIA/SearchMethods/ParameterTuningSearch/test_irt_propagation.jl")
+    include("./Routines/SearchDIA/PSMs/test_frag_compensation_loglik.jl")
     # ScoringSearch interface tests
 
     #include("./Routines/SearchDIA/SearchMethods/ScoringSearch/test_scoring_interface.jl")
