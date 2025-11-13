@@ -20,8 +20,8 @@ using LinearAlgebra: Symmetric, eigvals
 using Statistics: cor
 
 #==========================================================
-Core Search Funtions
-==========================================================#
+# Core Search Functions
+#==========================================================#
 """
     perform_second_pass_search(spectra::MassSpecData, rt_index::retentionTimeIndex,
                              search_context::SearchContext, params::SecondPassSearchParameters,
@@ -967,8 +967,8 @@ function add_features!(psms::DataFrame,
 end
 
 #==========================================================
-Summary Statistics 
-==========================================================#
+# Summary Statistics
+#==========================================================#
 """
     init_summary_columns!(psms::DataFrame)
 
@@ -979,9 +979,7 @@ Initialize columns for summary statistics across PSM groups.
 - Peak intensity metrics
 - Ion coverage statistics
 """
-function init_summary_columns!(
-    psms::DataFrame,
-    )
+function init_summary_columns!(psms::DataFrame)
 
     new_cols = [
         (:max_entropy,              Float16)
