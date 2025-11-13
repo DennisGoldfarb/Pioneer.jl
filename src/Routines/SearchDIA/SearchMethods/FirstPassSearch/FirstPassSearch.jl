@@ -246,6 +246,51 @@ function process_file!(
         params::FirstPassSearchParameters,
         ms_file_idx::Int64)
 
+        file_label = try
+            getParsedFileName(search_context, ms_file_idx)
+        catch
+            "file_$(ms_file_idx)"
+        end
+
+        function to_isolation_key(value)
+            if value === missing
+                return typemin(Int64)
+            end
+            v = Float64(value)
+            if isnan(v)
+                return typemin(Int64)
+            end
+            return round(Int64, v * 10_000)
+        end
+
+        function compute_psm_stats(
+            psms::DataFrame,
+            mask::AbstractVector{Bool}
+        )
+            idxs = findall(mask)
+            n_entries = length(idxs)
+            if n_entries == 0
+                return (spectra = 0, precursor_windows = 0, precursors = 0)
+            end
+            combos = Set{Tuple{UInt32, Int64, Int64}}()
+            precursors = Set{UInt32}()
+            scan_idxs = psms[!, :scan_idx]
+            precursor_idxs = psms[!, :precursor_idx]
+            @inbounds for row_idx in idxs
+                prec = precursor_idxs[row_idx]
+                push!(precursors, prec)
+                scan_idx_val = Int(scan_idxs[row_idx])
+                center_key = to_isolation_key(getCenterMz(spectra, scan_idx_val))
+                width_key = to_isolation_key(getIsolationWidthMz(spectra, scan_idx_val))
+                push!(combos, (prec, center_key, width_key))
+            end
+            return (
+                spectra = n_entries,
+                precursor_windows = length(combos),
+                precursors = length(precursors)
+            )
+        end
+
         """
         Select best PSMs based on criteria.
         """
@@ -267,9 +312,23 @@ function process_file!(
         rt_model = getRtIrtModel(search_context, ms_file_idx)
         # Add columns
         add_psm_columns!(psms, spectra, search_context, rt_model, ms_file_idx)
+
+        if !isempty(psms)
+            target_mask_enter = psms[!, :target]
+            decoy_mask_enter = .!target_mask_enter
+            target_stats_enter = compute_psm_stats(psms, target_mask_enter)
+            decoy_stats_enter = compute_psm_stats(psms, decoy_mask_enter)
+            @user_info "FirstPassSearch file $(file_label) entering probit regression: " *
+                "targets=$(target_stats_enter.spectra) spectra (" *
+                "$(target_stats_enter.precursor_windows) precursor+isolation combos, " *
+                "$(target_stats_enter.precursors) unique precursors); " *
+                "decoys=$(decoy_stats_enter.spectra) spectra (" *
+                "$(decoy_stats_enter.precursor_windows) precursor+isolation combos, " *
+                "$(decoy_stats_enter.precursors) unique precursors)"
+        end
         
         # Score PSMs
-        score_psms!(psms, params, search_context)
+        score_psms!(psms, params, search_context, spectra)
 
         for prec in psms[!, :precursor_idx]
             push!(results.probit_precursor_candidates, UInt32(prec))
@@ -282,6 +341,22 @@ function process_file!(
             params,
             search_context
         )
+
+
+        if !isempty(psms)
+            target_mask_pep = psms[!, :target]
+            decoy_mask_pep = .!target_mask_pep
+            target_stats_pep = compute_psm_stats(psms, target_mask_pep)
+            decoy_stats_pep = compute_psm_stats(psms, decoy_mask_pep)
+            @user_info "FirstPassSearch file $(file_label) passed PEP threshold (PEP <= $(Float64(params.max_PEP))): " *
+                "targets=$(target_stats_pep.spectra) spectra (" *
+                "$(target_stats_pep.precursor_windows) precursor+isolation combos, " *
+                "$(target_stats_pep.precursors) unique precursors); " *
+                "decoys=$(decoy_stats_pep.spectra) spectra (" *
+                "$(decoy_stats_pep.precursor_windows) precursor+isolation combos, " *
+                "$(decoy_stats_pep.precursors) unique precursors)\n"
+        end
+
         return psms
     end
 
@@ -319,7 +394,8 @@ function process_file!(
     function score_psms!(
         psms::DataFrame,
         params::FirstPassSearchParameters,
-        search_context::SearchContext)
+        search_context::SearchContext,
+        spectra::MassSpecData)
         column_names = [
             :spectral_contrast, :city_block, :entropy_score, :scribe, :percent_theoretical_ignored,
             :charge2, :poisson, :irt_error, 
@@ -577,9 +653,8 @@ function summarize_results!(
     isotopic_mods = getIsotopicMods(precursors)
     is_decoy = getIsDecoy(precursors)
     mz_vals = getMz(precursors)
-    irt_vals = getIrt(precursors)
-
     peptide_to_precursors = Dict{Tuple{Bool, Any, Any, Any}, Vector{UInt32}}()
+
     for prec_idx in 1:length(mz_vals)
         key = (
             is_decoy[prec_idx],
@@ -664,6 +739,20 @@ function summarize_results!(
     end
 
     setPrecursorDict!(search_context, precursor_dict)
+
+    precursors = getPrecursors(getSpecLib(search_context))
+    is_decoy = getIsDecoy(precursors)
+    target_precursor_count = 0
+    decoy_precursor_count = 0
+    for pid in keys(precursor_dict)
+        if is_decoy[pid]
+            decoy_precursor_count += 1
+        else
+            target_precursor_count += 1
+        end
+    end
+    @user_info "FirstPassSearch shared library for second search contains $(target_precursor_count) target precursors and $(decoy_precursor_count) decoy precursors"
+
     # Calculate RT indices
     create_rt_indices!(search_context, results, precursor_dict, params)
     

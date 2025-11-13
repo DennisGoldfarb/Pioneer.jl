@@ -256,6 +256,46 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
                   print_importance::Bool = false,
                   show_progress::Bool = true,
                   verbose_logging::Bool = false)
+
+    required_cols = (:precursor_idx, :isotopes_captured, :target)
+    missing_cols = [col for col in required_cols if !hasproperty(psms, col)]
+
+    if isempty(missing_cols)
+        function compute_input_stats(mask::AbstractVector{Bool})
+            n_entries = count(identity, mask)
+            if n_entries == 0
+                return (entries = 0, precursor_windows = 0, precursors = 0)
+            end
+
+            precursors = psms[mask, :precursor_idx]
+            isolation_windows = psms[mask, :isotopes_captured]
+            precursor_windows = length(Set(zip(precursors, isolation_windows)))
+
+            return (
+                entries = n_entries,
+                precursor_windows = precursor_windows,
+                precursors = length(unique(precursors))
+            )
+        end
+
+        total_stats = compute_input_stats(trues(nrow(psms)))
+        target_mask = psms[!, :target]
+        decoy_mask = .!target_mask
+        target_stats = compute_input_stats(target_mask)
+        decoy_stats = compute_input_stats(decoy_mask)
+
+        @user_info "percolatorSortOf input summary: total=$(total_stats.entries) entries (" *
+            "$(total_stats.precursor_windows) precursor+isolation combos, " *
+            "$(total_stats.precursors) unique precursors); " *
+            "targets=$(target_stats.entries) entries (" *
+            "$(target_stats.precursor_windows) precursor+isolation combos, " *
+            "$(target_stats.precursors) unique precursors); " *
+            "decoys=$(decoy_stats.entries) entries (" *
+            "$(decoy_stats.precursor_windows) precursor+isolation combos, " *
+            "$(decoy_stats.precursors) unique precursors)"
+    else
+        @user_warn "percolatorSortOf input summary skipped: missing columns $(join(string.(missing_cols), ", "))."
+    end
     
     # Apply random target-decoy pairing before ML training
     assign_random_target_decoy_pairs!(psms)
@@ -350,7 +390,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             fold_models[itr] = bst
 
             # Print feature importances for each iteration and fold
-            print_importance = true
+            #print_importance = true
             if print_importance
                 importances = lightgbm_feature_importances(bst)
                 if importances === nothing
