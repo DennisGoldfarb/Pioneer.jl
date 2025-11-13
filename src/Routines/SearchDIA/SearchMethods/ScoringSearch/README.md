@@ -91,7 +91,11 @@ PSM Count Decision Tree:
 ### Feature Sets
 
 - **ADVANCED_FEATURE_SET**: 50+ features including all spectral, RT, MS1, and quality metrics
-- **REDUCED_FEATURE_SET**: 40+ core features for balanced performance  
+  - Includes chromatographic weight-trend regressions (:weight_scribe_slope, :weight_scribe_rho,
+    :weight_fitted_spectral_contrast_slope, :weight_fitted_spectral_contrast_rho,
+    :weight_matched_ratio_slope, :weight_matched_ratio_rho) derived from scan-level log-weight fits
+- **REDUCED_FEATURE_SET**: 40+ core features for balanced performance
+  - Shares the same weight-trend regression metrics to capture peak shape agreement between scores and log(weight)
 - **MINIMAL_FEATURE_SET**: 5 essential features (spectral contrast, residuals, error norms, intensity explained)
 - **MBR Features**: Automatically appended when match_between_runs=true
 
