@@ -194,58 +194,6 @@ mutable struct SimpleLibrarySearch{I<:IsotopeSplineModel} <: SearchDataStructure
     precursor_transmission::Vector{Float32}
 end
 
-function SimpleLibrarySearch(
-    ion_matches::Vector{FragmentMatch{Float32}},
-    ion_misses::Vector{FragmentMatch{Float32}},
-    mass_err_matches::Vector{FragmentMatch{Float32}},
-    id_to_col::ArrayDict{UInt32, UInt16},
-    prec_count::Counter{UInt32, UInt8},
-    ion_templates::Vector{DetailedFrag{Float32}},
-    iso_splines::I,
-    scored_psms::Vector{SimpleScoredPSM{Float32, Float16}},
-    unscored_psms::Vector{SimpleUnscoredPSM{Float32}},
-    spectral_scores::Vector{SpectralScoresSimple{Float16}},
-    complex_scored_psms::Vector{ComplexScoredPSM{Float32, Float16}},
-    complex_unscored_psms::Vector{ComplexUnscoredPSM{Float32}},
-    complex_spectral_scores::Vector{SpectralScoresComplex{Float16}},
-    ms1_scored_psms::Vector{Ms1ScoredPSM{Float32, Float16}},
-    ms1_unscored_psms::Vector{Ms1UnscoredPSM{Float32}},
-    ms1_spectral_scores::Vector{SpectralScoresMs1{Float16}},
-    Hs::SparseArray,
-    prec_ids::Vector{UInt32},
-    precursor_weights::Vector{Float32},
-    temp_weights::Vector{Float32},
-    residuals::Vector{Float32},
-    isotopes::Vector{Float32},
-    precursor_transmission::Vector{Float32},
-) where {I<:IsotopeSplineModel}
-    return SimpleLibrarySearch{I}(
-        ion_matches,
-        ion_misses,
-        mass_err_matches,
-        id_to_col,
-        prec_count,
-        ion_templates,
-        iso_splines,
-        scored_psms,
-        unscored_psms,
-        spectral_scores,
-        complex_scored_psms,
-        complex_unscored_psms,
-        complex_spectral_scores,
-        ms1_scored_psms,
-        ms1_unscored_psms,
-        ms1_spectral_scores,
-        Hs,
-        prec_ids,
-        precursor_weights,
-        temp_weights,
-        residuals,
-        isotopes,
-        precursor_transmission,
-    )
-end
-
 """
 Primary search context holding all data structures and state for search execution.
 """
