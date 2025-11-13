@@ -332,6 +332,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
 
     Random.seed!(1776)
     non_mbr_features = [f for f in features if !startswith(String(f), "MBR_")]
+    first_iter_features = [f for f in non_mbr_features if !startswith(String(f), "MWR_")]
 
     total_progress_steps = length(unique_cv_folds) * iterations_per_fold
     pbar = show_progress ? ProgressBar(total=total_progress_steps) : nothing
@@ -376,7 +377,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
                                                               min_PEP_neg_threshold_itr,
                                                               itr >= mbr_start_iter)
 
-            train_feats = itr < mbr_start_iter ? non_mbr_features : features
+            train_feats = itr == 1 ? first_iter_features : (itr < mbr_start_iter ? non_mbr_features : features)
 
             bst = train_booster(psms_train_itr, train_feats, num_round;
                                feature_fraction=feature_fraction,
@@ -899,6 +900,22 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
     unique_isotopes = unique(psms.isotopes_captured)
     n_unique_isotopes = length(unique_isotopes)
 
+    if hasproperty(psms, :MWR_iso_is_missing)
+        psms[!, :MWR_iso_is_missing] .= true
+    end
+    if hasproperty(psms, :MWR_iso_max_prob)
+        psms[!, :MWR_iso_max_prob] .= -1.0f0
+    end
+    if hasproperty(psms, :MWR_iso_log2_expected_ratio)
+        psms[!, :MWR_iso_log2_expected_ratio] .= -1.0f0
+    end
+    if hasproperty(psms, :MWR_iso_correlation)
+        psms[!, :MWR_iso_correlation] .= -1.0f0
+    end
+    if hasproperty(psms, :MWR_iso_apex_irt_diff)
+        psms[!, :MWR_iso_apex_irt_diff] .= -1.0f0
+    end
+
     # Compute pair specific features that rely on decoys and chromatograms
     pair_groups = collect(pairs(groupby(psms, [:pair_id, :isotopes_captured])))
     n_pair_isotope_groups = length(pair_groups)
@@ -982,6 +999,113 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
             sub_psms.MBR_is_best_decoy[i] = sub_psms.decoy[best_idx]
         end
     end
+
+    precursor_iso_groups = collect(pairs(groupby(psms, [:precursor_idx, :ms_file_idx])))
+    expected_fraction_col = if hasproperty(psms, :precursor_fraction_transmitted)
+        :precursor_fraction_transmitted
+    elseif hasproperty(psms, :percent_precursor_isolated)
+        :percent_precursor_isolated
+    else
+        nothing
+    end
+
+    Threads.@threads for idx in eachindex(precursor_iso_groups)
+        _, sub_psms = precursor_iso_groups[idx]
+        n_rows = nrow(sub_psms)
+
+        if n_rows <= 1
+            continue
+        end
+
+        total_weight = zero(Float32)
+        for val in sub_psms.weight
+            if !ismissing(val)
+                total_weight += Float32(val)
+            end
+        end
+
+        expected_vals = expected_fraction_col === nothing ? nothing : sub_psms[!, expected_fraction_col]
+        total_expected = zero(Float32)
+        if expected_vals !== nothing
+            for val in expected_vals
+                if !ismissing(val)
+                    total_expected += Float32(val)
+                end
+            end
+        end
+
+        for i in 1:n_rows
+            best_idx = 0
+            best_prob = -Inf32
+            current_isotopes = sub_psms.isotopes_captured[i]
+
+            for j in 1:n_rows
+                if j == i
+                    continue
+                end
+                if sub_psms.isotopes_captured[j] == current_isotopes
+                    continue
+                end
+                prob = sub_psms.trace_prob[j]
+                if prob > best_prob
+                    best_prob = prob
+                    best_idx = j
+                end
+            end
+
+            has_partner = best_idx != 0
+            sub_psms.MWR_iso_is_missing[i] = !has_partner
+
+            if has_partner
+                sub_psms.MWR_iso_max_prob[i] = Float32(best_prob)
+
+                weights_current = sub_psms.weights[i]
+                weights_partner = sub_psms.weights[best_idx]
+                padded_current, padded_partner = pad_equal_length(weights_current, weights_partner)
+                corr_val = if length(padded_current) > 1 && length(padded_partner) > 1
+                    Statistics.cor(padded_current, padded_partner)
+                else
+                    NaN
+                end
+                sub_psms.MWR_iso_correlation[i] = isfinite(corr_val) ? Float32(corr_val) : -1.0f0
+
+                irts_current = sub_psms.irts[i]
+                irts_partner = sub_psms.irts[best_idx]
+                if isempty(weights_current) || isempty(weights_partner) || isempty(irts_current) || isempty(irts_partner)
+                    sub_psms.MWR_iso_apex_irt_diff[i] = -1.0f0
+                else
+                    apex_idx_current = argmax(weights_current)
+                    apex_idx_partner = argmax(weights_partner)
+                    if apex_idx_current > length(irts_current) || apex_idx_partner > length(irts_partner)
+                        sub_psms.MWR_iso_apex_irt_diff[i] = -1.0f0
+                    else
+                        sub_psms.MWR_iso_apex_irt_diff[i] = Float32(irts_current[apex_idx_current] - irts_partner[apex_idx_partner])
+                    end
+                end
+            else
+                sub_psms.MWR_iso_max_prob[i] = -1.0f0
+                sub_psms.MWR_iso_correlation[i] = -1.0f0
+                sub_psms.MWR_iso_apex_irt_diff[i] = -1.0f0
+            end
+
+            weight_val = sub_psms.weight[i]
+            actual_weight = ismissing(weight_val) ? 0.0f0 : Float32(weight_val)
+            actual_fraction = (total_weight > 0) ? actual_weight / total_weight : 0.0f0
+            expected_fraction = 0.0f0
+            if expected_vals !== nothing
+                val = expected_vals[i]
+                if !ismissing(val) && total_expected > 0
+                    expected_fraction = Float32(val) / total_expected
+                end
+            end
+
+            if actual_fraction > 0 && expected_fraction > 0
+                sub_psms.MWR_iso_log2_expected_ratio[i] = log2(actual_fraction / expected_fraction)
+            else
+                sub_psms.MWR_iso_log2_expected_ratio[i] = -1.0f0
+            end
+        end
+    end
 end
 
 function initialize_prob_group_features!(
@@ -1002,6 +1126,11 @@ function initialize_prob_group_features!(
         psms[!, :MBR_num_runs]                  = zeros(Int32, n)
         psms[!, :MBR_transfer_candidate]        = falses(n)
         psms[!, :MBR_is_missing]                = falses(n)
+        psms[!, :MWR_iso_max_prob]              = fill(-1.0f0, n)
+        psms[!, :MWR_iso_log2_expected_ratio]   = fill(-1.0f0, n)
+        psms[!, :MWR_iso_correlation]           = fill(-1.0f0, n)
+        psms[!, :MWR_iso_apex_irt_diff]         = fill(-1.0f0, n)
+        psms[!, :MWR_iso_is_missing]            = trues(n)
     end
 
     return psms

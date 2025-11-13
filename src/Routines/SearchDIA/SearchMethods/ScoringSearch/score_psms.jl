@@ -344,8 +344,19 @@ function train_lightgbm_model_in_memory(
     best_psms[!,:q_value] = zeros(Float32, size(best_psms, 1))
     best_psms[!,:decoy] = best_psms[!,:target].==false
     
+    # Expose percent of the precursor isolated as an explicit feature name when available
+    if !hasproperty(best_psms, :percent_precursor_isolated) && hasproperty(best_psms, :precursor_fraction_transmitted)
+        best_psms[!, :percent_precursor_isolated] = [
+            ismissing(v) ? missing : Float32(100 * v) for v in best_psms.precursor_fraction_transmitted
+        ]
+    end
+
     # Get features and hyperparams from config
     features = [f for f in model_config.features if hasproperty(best_psms, f)]
+
+    if hasproperty(best_psms, :percent_precursor_isolated) && :percent_precursor_isolated ∉ features
+        push!(features, :percent_precursor_isolated)
+    end
     if match_between_runs
         append!(features, [
             #:MBR_num_runs,
@@ -356,6 +367,18 @@ function train_lightgbm_model_in_memory(
             #:MBR_best_irt_diff,
             :MBR_is_missing
         ])
+
+        for feat in (
+            :MWR_iso_max_prob,
+            :MWR_iso_log2_expected_ratio,
+            :MWR_iso_is_missing,
+            :MWR_iso_correlation,
+            :MWR_iso_apex_irt_diff,
+        )
+            if hasproperty(best_psms, feat) && feat ∉ features
+                push!(features, feat)
+            end
+        end
     end
 
     # Diagnostic: Report which quantile-binned features are being used
