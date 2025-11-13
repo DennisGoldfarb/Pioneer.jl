@@ -16,6 +16,10 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 #==========================================================
+using LinearAlgebra: Symmetric, eigvals
+using Statistics: cor
+
+#==========================================================
 Core Search Funtions
 ==========================================================#
 """
@@ -990,6 +994,9 @@ function init_summary_columns!(
         (:max_matched_ratio,        Float16)
         (:num_scans,        UInt16)
         (:smoothness,        Float32)
+        (:residual_corr_mean, Float32)
+        (:residual_corr_negative_fraction, Float32)
+        (:residual_corr_dom_eig_ratio, Float32)
         (:weights,        Vector{Float32})
         (:irts,         Vector{Float32})
         ];
@@ -1039,6 +1046,9 @@ function get_summary_scores!(
     y_ions_sum = 0
     max_y_ions = 0
     smoothness = 0.0f0
+    residual_corr_mean = 0.0f0
+    residual_corr_negative_fraction = 0.0f0
+    residual_corr_dom_eig_ratio = 0.0f0
 
     apex_scan = argmax(psms[!,:weight])
     #Need to make sure there is not a big gap. 
@@ -1078,6 +1088,53 @@ function get_summary_scores!(
         count += 1
     end    
 
+    raw_profiles = psms[!, :residual_profile]
+    profiles = [profile for profile in raw_profiles if !(profile isa Missing)]
+    if length(profiles) > 1
+        first_profile = profiles[1]
+        profile_length = length(first_profile)
+        consistent_length = profile_length > 0
+        profile_matrix = Matrix{Float32}(undef, length(profiles), profile_length)
+        @inbounds for (row_idx, profile) in enumerate(profiles)
+            if length(profile) != profile_length
+                consistent_length = false
+                break
+            end
+            @inbounds for col_idx in 1:profile_length
+                profile_matrix[row_idx, col_idx] = Float32(profile[col_idx])
+            end
+        end
+        if consistent_length && profile_length > 0
+            corr_matrix = cor(profile_matrix; dims=1)
+            corr_matrix = Float32.(corr_matrix)
+            @inbounds for idx in eachindex(corr_matrix)
+                if !isfinite(corr_matrix[idx])
+                    corr_matrix[idx] = 0.0f0
+                end
+            end
+            if profile_length > 1
+                total_pairs = profile_length * (profile_length - 1)
+                sum_corr = 0.0f0
+                negative_corr_count = 0
+                @inbounds @fastmath for i in 1:profile_length, j in 1:profile_length
+                    if i == j
+                        continue
+                    end
+                    val = corr_matrix[i, j]
+                    sum_corr += val
+                    negative_corr_count += val < 0.0f0
+                end
+                residual_corr_mean = sum_corr / Float32(total_pairs)
+                residual_corr_negative_fraction = Float32(negative_corr_count) / Float32(total_pairs)
+            end
+            eigenvalues = eigvals(Symmetric(corr_matrix))
+            total_eigen = sum(eigenvalues)
+            if total_eigen != 0
+                residual_corr_dom_eig_ratio = Float32(maximum(eigenvalues) / total_eigen)
+            end
+        end
+    end
+
     irts = rt_to_irt_interp.(psms.rt)
     
     @inbounds @fastmath for i in range(1, length(weight))
@@ -1106,6 +1163,9 @@ function get_summary_scores!(
     psms.max_y_ions[apex_scan] = max_y_ions
     psms.num_scans[apex_scan] = length(weight)
     psms.smoothness[apex_scan] = smoothness
+    psms.residual_corr_mean[apex_scan] = residual_corr_mean
+    psms.residual_corr_negative_fraction[apex_scan] = residual_corr_negative_fraction
+    psms.residual_corr_dom_eig_ratio[apex_scan] = residual_corr_dom_eig_ratio
     psms.weights[apex_scan] = weight
     psms.irts[apex_scan] = irts
     psms.best_scan[apex_scan] = true

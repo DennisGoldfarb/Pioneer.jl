@@ -82,6 +82,7 @@ struct ComplexScoredPSM{H,L<:AbstractFloat} <: ScoredPSM{H,L}
     percent_theoretical_ignored::L
     scribe::L
     #entropy_score::L
+    residual_profile::Vector{Float32}
     weight::H
 
     #Non-scores/Labels
@@ -312,6 +313,7 @@ function Score!(scored_psms::Vector{ComplexScoredPSM{H, L}},
             spectral_scores[scores_idx].matched_ratio,
             spectral_scores[scores_idx].percent_theoretical_ignored,
             spectral_scores[scores_idx].scribe,
+            Vector{Float32}(spectral_scores[scores_idx].residual_profile),
             #spectral_scores[scores_idx].entropy_score,
             weight[scores_idx],
 
