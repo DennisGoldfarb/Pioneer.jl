@@ -72,6 +72,9 @@ const ADVANCED_FEATURE_SET = [
     :fitted_spectral_contrast,
     :spectral_contrast,
     :max_matched_ratio,
+    :frag_compensation_loglik,
+    :mean_frag_compensation_loglik,
+    :std_frag_compensation_loglik,
     :err_norm,
     :poisson,
     :weight_qbin,      # Quantile-binned version of :weight
@@ -118,6 +121,7 @@ const REDUCED_FEATURE_SET = [
     :max_fitted_manhattan_distance, :max_fitted_spectral_contrast,
     :max_matched_residual, :max_unmatched_residual, :max_gof,
     :fitted_spectral_contrast, :spectral_contrast, :max_matched_ratio,
+    :frag_compensation_loglik, :mean_frag_compensation_loglik, :std_frag_compensation_loglik,
     :err_norm, :poisson, :weight_qbin, :log2_intensity_explained, :tic_qbin, :num_scans,
     :smoothness, :percent_theoretical_ignored, :scribe, :max_scribe,
     # MS1 features
