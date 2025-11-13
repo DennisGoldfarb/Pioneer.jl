@@ -990,6 +990,12 @@ function init_summary_columns!(
         (:max_matched_ratio,        Float16)
         (:num_scans,        UInt16)
         (:smoothness,        Float32)
+        (:weight_scribe_slope, Float32)
+        (:weight_scribe_rho, Float32)
+        (:weight_fitted_spectral_contrast_slope, Float32)
+        (:weight_fitted_spectral_contrast_rho, Float32)
+        (:weight_matched_ratio_slope, Float32)
+        (:weight_matched_ratio_rho, Float32)
         (:weights,        Vector{Float32})
         (:irts,         Vector{Float32})
         ];
@@ -1006,6 +1012,40 @@ function init_summary_columns!(
             end
         end
         return psms
+end
+
+function compute_weight_regression(
+    weight::AbstractVector,
+    feature::AbstractVector,
+)
+    valid_indices = Int[]
+    for idx in eachindex(weight, feature)
+        w = weight[idx]
+        f = feature[idx]
+        if !ismissing(w) && !ismissing(f) && w > 0 && isfinite(w) && isfinite(f)
+            push!(valid_indices, idx)
+        end
+    end
+
+    if length(valid_indices) < 2
+        return 0.0f0, 0.0f0
+    end
+
+    log_weight = log.(Float64.(view(weight, valid_indices)))
+    feature_vals = Float64.(view(feature, valid_indices))
+
+    centered_log_weight = log_weight .- Statistics.mean(log_weight)
+    centered_feature = feature_vals .- Statistics.mean(feature_vals)
+
+    numerator = sum(centered_log_weight .* centered_feature)
+    denom = sum(centered_log_weight .^ 2)
+    slope = denom > 0 ? numerator / denom : 0.0
+
+    denom_x = sqrt(denom)
+    denom_y = sqrt(sum(centered_feature .^ 2))
+    rho = (denom_x > 0 && denom_y > 0) ? numerator / (denom_x * denom_y) : 0.0
+
+    return Float32(slope), Float32(rho)
 end
 
 """
@@ -1108,6 +1148,15 @@ function get_summary_scores!(
     psms.smoothness[apex_scan] = smoothness
     psms.weights[apex_scan] = weight
     psms.irts[apex_scan] = irts
+    scribe_slope, scribe_rho = compute_weight_regression(weight, scribe)
+    fsc_slope, fsc_rho = compute_weight_regression(weight, fitted_spectral_contrast)
+    matched_ratio_slope, matched_ratio_rho = compute_weight_regression(weight, matched_ratio)
+    psms.weight_scribe_slope[apex_scan] = scribe_slope
+    psms.weight_scribe_rho[apex_scan] = scribe_rho
+    psms.weight_fitted_spectral_contrast_slope[apex_scan] = fsc_slope
+    psms.weight_fitted_spectral_contrast_rho[apex_scan] = fsc_rho
+    psms.weight_matched_ratio_slope[apex_scan] = matched_ratio_slope
+    psms.weight_matched_ratio_rho[apex_scan] = matched_ratio_rho
     psms.best_scan[apex_scan] = true
 
 end
