@@ -343,9 +343,47 @@ function train_lightgbm_model_in_memory(
     best_psms[!,:accession_numbers] = [getAccessionNumbers(precursors)[pid] for pid in best_psms[!,:precursor_idx]]
     best_psms[!,:q_value] = zeros(Float32, size(best_psms, 1))
     best_psms[!,:decoy] = best_psms[!,:target].==false
-    
+
+    n_rows = nrow(best_psms)
+    if !hasproperty(best_psms, :percent_precursor_isolated)
+        if hasproperty(best_psms, :precursor_fraction_transmitted)
+            best_psms[!, :percent_precursor_isolated] = Float32.(best_psms.precursor_fraction_transmitted)
+        else
+            best_psms[!, :percent_precursor_isolated] = zeros(Float32, n_rows)
+        end
+    end
+
+    mwr_iso_defaults = (
+        :MWR_iso_max_prob => () -> zeros(Float32, n_rows),
+        :MWR_iso_log2_expected_ratio => () -> zeros(Float32, n_rows),
+        :MWR_iso_correlation => () -> zeros(Float32, n_rows),
+        :MWR_iso_apex_irt_diff => () -> zeros(Float32, n_rows),
+        :MWR_iso_is_missing => () -> trues(n_rows),
+    )
+
+    for (col, init) in mwr_iso_defaults
+        if !hasproperty(best_psms, col)
+            best_psms[!, col] = init()
+        end
+    end
+
     # Get features and hyperparams from config
     features = [f for f in model_config.features if hasproperty(best_psms, f)]
+
+    mwr_iso_features = (
+        :MWR_iso_max_prob,
+        :MWR_iso_log2_expected_ratio,
+        :MWR_iso_correlation,
+        :MWR_iso_apex_irt_diff,
+        :MWR_iso_is_missing,
+        :percent_precursor_isolated,
+    )
+
+    for feat in mwr_iso_features
+        if hasproperty(best_psms, feat) && feat ∉ features
+            push!(features, feat)
+        end
+    end
     if match_between_runs
         append!(features, [
             #:MBR_num_runs,
