@@ -306,7 +306,12 @@ function get_best_psms!(psms::DataFrame,
     get_PEP!(psms[!,:score], psms[!,:target], psms[!,:PEP]; doSort=false, fdr_scale_factor=fdr_scale_factor);
 
     n = size(psms, 1)
-    select!(psms, [:precursor_idx,:log2_summed_intensity,:rt,:irt_predicted,:q_value,:score,:prob,:fwhm,:scan_count,:scan_idx,:PEP,:target])
+    kept_cols = [:precursor_idx, :log2_summed_intensity, :rt, :irt_predicted, :q_value,
+        :score, :prob, :fwhm, :scan_count, :scan_idx, :PEP, :target]
+    if :isotopes_captured in names(psms)
+        insert!(kept_cols, findfirst(==(:scan_idx), kept_cols) + 1, :isotopes_captured)
+    end
+    select!(psms, kept_cols)
 
     first_fail = searchsortedfirst(psms[!,:PEP], Float16(max_PEP))
     if first_fail <= n

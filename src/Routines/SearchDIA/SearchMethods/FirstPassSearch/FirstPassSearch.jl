@@ -413,8 +413,13 @@ function process_file!(
 
 
         # Select scoring columns
-        select!(psms, vcat(column_names, [:ms_file_idx, :score, :precursor_idx, :scan_idx,
-            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :target]))
+        has_isotopes = :isotopes_captured in names(psms)
+        preserved_cols = [:ms_file_idx, :score, :precursor_idx, :scan_idx,
+            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :target]
+        if has_isotopes
+            push!(preserved_cols, :isotopes_captured)
+        end
+        select!(psms, vcat(column_names, preserved_cols))
         sort!(psms, [:rt, :precursor_idx])
         # Score PSMs
         fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
@@ -443,8 +448,7 @@ function process_file!(
         end
         # Process scores
        
-        select!(psms, [:ms_file_idx, :score, :precursor_idx, :scan_idx,
-            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :target])
+        select!(psms, preserved_cols)
         get_probs!(psms, psms[!,:score])
     end
 
@@ -574,10 +578,14 @@ function process_search_results!(
     parsed_fname = getParsedFileName(search_context, ms_file_idx)
     temp_path = joinpath(getDataOutDir(search_context), "temp_data", "first_pass_psms", parsed_fname * ".arrow")
     psms[!, :ms_file_idx] .= UInt32(ms_file_idx)
+    write_cols = [:ms_file_idx, :scan_idx, :precursor_idx, :rt,
+        :irt_predicted, :q_value, :score, :prob, :scan_count]
+    if :isotopes_captured in names(psms)
+        insert!(write_cols, findfirst(==(:precursor_idx), write_cols) + 1, :isotopes_captured)
+    end
     Arrow.write(
         temp_path,
-        select!(psms, [:ms_file_idx, :scan_idx, :precursor_idx, :rt,
-            :irt_predicted, :q_value, :score, :prob, :scan_count])
+        select!(psms, write_cols)
     )
     setFirstPassPsms!(getMSData(search_context), ms_file_idx, temp_path)
 
@@ -632,12 +640,24 @@ function summarize_results!(
             return Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_irt::Float32, mean_irt::Union{Missing, Float32}, var_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}}()
         end
         
+        precursors = getPrecursors(getSpecLib(search_context))
+        prec_mzs = getMz(precursors)
+        is_decoy = getIsDecoy(precursors)
+        sequences = getSequence(precursors)
+        structural_mods = getStructuralMods(precursors)
+        fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
+
         # Get best precursors from valid files only
         return get_best_precursors_accross_runs(
             valid_psms_paths,
-            getMz(getPrecursors(getSpecLib(search_context))),#[:mz],
+            prec_mzs,#[:mz],
             valid_rt_irt,
-            max_q_val=params.max_q_val_for_irt
+            is_decoy,
+            sequences,
+            structural_mods;
+            max_q_val=params.max_q_val_for_irt,
+            pep_threshold=params.max_PEP,
+            fdr_scale_factor=fdr_scale_factor
         )
     end
     # Map retention times and update iRT observations
