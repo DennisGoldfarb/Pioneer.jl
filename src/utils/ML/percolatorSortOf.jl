@@ -301,6 +301,15 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     assign_random_target_decoy_pairs!(psms)
     #Faster if sorted first (handle missing pair_id values)
     sort!(psms, [:pair_id, :isotopes_captured, :precursor_idx, :ms_file_idx])
+
+    n_psms = nrow(psms)
+    if !hasproperty(psms, :percent_precursor_isolated)
+        if hasproperty(psms, :precursor_fraction_transmitted)
+            psms[!, :percent_precursor_isolated] = Float32.(psms.precursor_fraction_transmitted)
+        else
+            psms[!, :percent_precursor_isolated] = zeros(Float32, n_psms)
+        end
+    end
     # Display target/decoy/entrapment counts for training dataset
     if verbose_logging
         n_targets = sum(psms.target)
@@ -331,7 +340,10 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
     train_indices = Dict(fold => findall(!=(fold), cv_fold_col) for fold in unique_cv_folds)
 
     Random.seed!(1776)
-    non_mbr_features = [f for f in features if !startswith(String(f), "MBR_")]
+    base_features = [
+        f for f in features if !(startswith(String(f), "MBR_") || startswith(String(f), "MWR_"))
+    ]
+    mwr_features = [f for f in features if startswith(String(f), "MWR_")]
 
     total_progress_steps = length(unique_cv_folds) * iterations_per_fold
     pbar = show_progress ? ProgressBar(total=total_progress_steps) : nothing
@@ -376,7 +388,13 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
                                                               min_PEP_neg_threshold_itr,
                                                               itr >= mbr_start_iter)
 
-            train_feats = itr < mbr_start_iter ? non_mbr_features : features
+            if itr == 1
+                train_feats = base_features
+            elseif itr < mbr_start_iter
+                train_feats = vcat(base_features, mwr_features)
+            else
+                train_feats = features
+            end
 
             bst = train_booster(psms_train_itr, train_feats, num_round;
                                feature_fraction=feature_fraction,
@@ -412,11 +430,13 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             # **temporary predictions for training only**
             prob_train[train_idx] = predict(bst, psms_train)
             psms_train[!,:trace_prob] = prob_train[train_idx]
+            compute_mwr_isotope_features!(psms_train)
             get_qvalues!(psms_train.trace_prob, psms_train.target, psms_train.q_value)
 
             # **predict held-out fold**
             prob_test[test_idx] = predict(bst, psms_test)
             psms_test[!,:trace_prob] = prob_test[test_idx]
+            compute_mwr_isotope_features!(psms_test)
 
             #if itr == 1
             #    first_pass_estimates[test_idx] = prob_test[test_idx]
@@ -468,6 +488,8 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
         # Only store base trace probabilities
         psms[!, :trace_prob] = prob_test
     end
+
+    compute_mwr_isotope_features!(psms)
 
     return models
 end
@@ -984,6 +1006,127 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
     end
 end
 
+function compute_mwr_isotope_features!(psms::AbstractDataFrame)
+    if !hasproperty(psms, :precursor_idx) || !hasproperty(psms, :ms_file_idx)
+        return psms
+    end
+
+    groups = collect(pairs(groupby(psms, [:precursor_idx, :ms_file_idx])))
+    eps_val = eps(Float32)
+
+    Threads.@threads for idx in eachindex(groups)
+        _, sub_psms = groups[idx]
+        n = nrow(sub_psms)
+        if n == 0
+            continue
+        end
+
+        weights_scalar = Vector{Float32}(undef, n)
+        @inbounds for i in 1:n
+            weight_val = sub_psms.weight[i]
+            weights_scalar[i] = Float32(ismissing(weight_val) ? 0f0 : weight_val)
+        end
+        total_weight = sum(weights_scalar)
+
+        expected_vals = Vector{Float32}(undef, n)
+        if hasproperty(sub_psms, :percent_precursor_isolated)
+            @inbounds for i in 1:n
+                val = sub_psms.percent_precursor_isolated[i]
+                expected_vals[i] = Float32(ismissing(val) ? 0f0 : val)
+            end
+        elseif hasproperty(sub_psms, :precursor_fraction_transmitted)
+            @inbounds for i in 1:n
+                val = sub_psms.precursor_fraction_transmitted[i]
+                expected_vals[i] = Float32(ismissing(val) ? 0f0 : val)
+            end
+        else
+            fill!(expected_vals, 0f0)
+        end
+        total_expected = sum(expected_vals)
+
+        iso_keys = sub_psms.isotopes_captured
+        has_multiple_isotopes = length(unique(iso_keys)) > 1
+
+        @inbounds for i in 1:n
+            best_idx = 0
+            best_prob = -Inf32
+
+            if has_multiple_isotopes
+                iso_i = iso_keys[i]
+                for j in 1:n
+                    if j == i || iso_keys[j] == iso_i
+                        continue
+                    end
+                    prob = Float32(sub_psms.trace_prob[j])
+                    if prob > best_prob
+                        best_prob = prob
+                        best_idx = j
+                    end
+                end
+            end
+
+            if best_idx == 0
+                sub_psms.MWR_iso_is_missing[i] = true
+                sub_psms.MWR_iso_max_prob[i] = -1.0f0
+                sub_psms.MWR_iso_correlation[i] = 0.0f0
+                sub_psms.MWR_iso_apex_irt_diff[i] = 0.0f0
+            else
+                sub_psms.MWR_iso_is_missing[i] = false
+                sub_psms.MWR_iso_max_prob[i] = best_prob
+                sub_psms.MWR_iso_correlation[i] = trace_correlation(sub_psms.weights[i], sub_psms.weights[best_idx])
+                sub_psms.MWR_iso_apex_irt_diff[i] = Float32(sub_psms.irt_obs[i] - sub_psms.irt_obs[best_idx])
+            end
+
+            observed_fraction = total_weight > eps_val ? weights_scalar[i] / total_weight : 0f0
+            expected_fraction = total_expected > eps_val ? expected_vals[i] / total_expected : 0f0
+            ratio = (observed_fraction + eps_val) / (expected_fraction + eps_val)
+            sub_psms.MWR_iso_log2_expected_ratio[i] = Float32(log2(ratio))
+        end
+    end
+
+    return psms
+end
+
+@inline function trace_correlation(weights_a::AbstractVector, weights_b::AbstractVector)
+    if isempty(weights_a) || isempty(weights_b)
+        return 0.0f0
+    end
+
+    padded_a, padded_b = pad_equal_length(weights_a, weights_b)
+    len = length(padded_a)
+    if len == 0
+        return 0.0f0
+    end
+
+    sum_a = zero(Float32)
+    sum_b = zero(Float32)
+    @inbounds for i in 1:len
+        sum_a += Float32(padded_a[i])
+        sum_b += Float32(padded_b[i])
+    end
+
+    mean_a = sum_a / len
+    mean_b = sum_b / len
+
+    numerator = zero(Float32)
+    var_a = zero(Float32)
+    var_b = zero(Float32)
+    @inbounds for i in 1:len
+        da = Float32(padded_a[i]) - mean_a
+        db = Float32(padded_b[i]) - mean_b
+        numerator += da * db
+        var_a += da * da
+        var_b += db * db
+    end
+
+    denom = sqrt(var_a * var_b)
+    if denom == 0.0f0
+        return 0.0f0
+    end
+
+    return numerator / denom
+end
+
 function initialize_prob_group_features!(
     psms::AbstractDataFrame,
     match_between_runs::Bool
@@ -991,6 +1134,11 @@ function initialize_prob_group_features!(
     n = nrow(psms)
     psms[!, :trace_prob]      = zeros(Float32, n)
     psms[!, :q_value]   = zeros(Float64, n)
+    psms[!, :MWR_iso_max_prob]             = zeros(Float32, n)
+    psms[!, :MWR_iso_log2_expected_ratio]  = zeros(Float32, n)
+    psms[!, :MWR_iso_correlation]          = zeros(Float32, n)
+    psms[!, :MWR_iso_apex_irt_diff]        = zeros(Float32, n)
+    psms[!, :MWR_iso_is_missing]           = trues(n)
 
     if match_between_runs
         psms[!, :MBR_max_pair_prob]             = zeros(Float32, n)
