@@ -21,7 +21,7 @@ using Statistics: cor
 
 #==========================================================
 # Core Search Functions
-#==========================================================#
+#==========================================================
 """
     perform_second_pass_search(spectra::MassSpecData, rt_index::retentionTimeIndex,
                              search_context::SearchContext, params::SecondPassSearchParameters,
@@ -586,8 +586,8 @@ end
 
 
 #==========================================================
-Temporarry array management functions
-==========================================================#
+# Temporary array management functions
+#==========================================================
 """
     resize_arrays!(search_data::SearchDataStructures, weights::Vector{Float32})
 
@@ -968,7 +968,7 @@ end
 
 #==========================================================
 # Summary Statistics
-#==========================================================#
+#==========================================================
 """
     init_summary_columns!(psms::DataFrame)
 
@@ -1133,7 +1133,7 @@ function get_summary_scores!(
         end
     end
 
-    irts = rt_to_irt_interp.(psms.rt)
+    irts = collect(Float32, rt_to_irt_interp.(psms.rt))
     
     @inbounds @fastmath for i in range(1, length(weight))
         if length(weight) == 1
@@ -1164,7 +1164,7 @@ function get_summary_scores!(
     psms.residual_corr_mean[apex_scan] = residual_corr_mean
     psms.residual_corr_negative_fraction[apex_scan] = residual_corr_negative_fraction
     psms.residual_corr_dom_eig_ratio[apex_scan] = residual_corr_dom_eig_ratio
-    psms.weights[apex_scan] = weight
+    psms.weights[apex_scan] = collect(Float32, weight)
     psms.irts[apex_scan] = irts
     psms.best_scan[apex_scan] = true
 

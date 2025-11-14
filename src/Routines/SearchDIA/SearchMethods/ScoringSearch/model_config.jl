@@ -19,7 +19,7 @@
 # Model Configuration for ScoringSearch
 # This file contains only the minimal functionality needed for model selection.
 # The full model_comparison.jl file is deprecated and should not be used.
-#==========================================================#
+#==========================================================
 
 """
 Configuration for a single model in the scoring framework.
