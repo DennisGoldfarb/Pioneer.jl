@@ -179,7 +179,7 @@ function prepare_chromatogram_feature_source(psms::DataFrame)
         @user_warn "Chromatogram feature source missing mandatory columns: $(join(string.(missing_mandatory), ", "))"
     end
     if !isempty(missing_optional)
-        @user_debug "Chromatogram feature source missing optional columns: $(join(string.(missing_optional), ", "))"
+        @user_info "Chromatogram feature source missing optional columns: $(join(string.(missing_optional), ", "))"
     end
 
     return chrom_df
@@ -423,7 +423,7 @@ function score_chromatogram_features!(chrom_summary::DataFrame,
     end
 
     if !isempty(missing_for_scoring)
-        @user_debug "Skipping unavailable chromatogram-level features: $(join(string.(missing_for_scoring), ", "))"
+        @user_info "Skipping unavailable chromatogram-level features: $(join(string.(missing_for_scoring), ", "))"
     end
 
     push!(feature_candidates, :intercept)
