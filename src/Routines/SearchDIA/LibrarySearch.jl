@@ -90,6 +90,28 @@ function searchFragmentIndex(
     return precursors_passed_scoring[1:prec_id]
 end
 
+function empty_simple_psm_dataframe()
+    return DataFrame(
+        best_rank = UInt8[],
+        topn = UInt8[],
+        b_count = UInt8[],
+        y_count = UInt8[],
+        p_count = UInt8[],
+        i_count = UInt8[],
+        poisson = Float16[],
+        error = Float32[],
+        scribe = Float16[],
+        city_block = Float16[],
+        spectral_contrast = Float16[],
+        matched_ratio = Float16[],
+        log2_summed_intensity = Float16[],
+        entropy_score = Float16[],
+        percent_theoretical_ignored = Float16[],
+        precursor_idx = UInt32[],
+        scan_idx = UInt32[],
+    )
+end
+
 function getPSMS(
     ms_file_idx::UInt32,
     spectra::MassSpecData,
@@ -207,7 +229,18 @@ function getPSMS(
         reset!(getIdToCol(search_data))
         reset!(Hs)
     end
-    return DataFrame(@view(getScoredPsms(search_data)[1:last_val]))
+    if last_val == 0
+        return empty_simple_psm_dataframe()
+    end
+
+    df = DataFrame(@view(getScoredPsms(search_data)[1:last_val]))
+
+    if !hasproperty(df, :scribe)
+        available = join(string.(propertynames(df)), ", ")
+        @user_error "First-pass search expected :scribe column but found: [$available]"
+    end
+
+    return df
 end
 
 function library_search(spectra::MassSpecData, search_context::SearchContext, search_parameters::P, ms_file_idx::Int64) where {P<:ParameterTuningSearchParameters}
