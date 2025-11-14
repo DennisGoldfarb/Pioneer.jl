@@ -120,6 +120,23 @@ function add_main_search_columns!(psms::DataFrame,
     psms[!,:intercept] = ones(Float16, N)
 end
 
+const FIRST_PASS_PROBIT_FEATURE_COLUMNS = (
+    :spectral_contrast,
+    :city_block,
+    :entropy_score,
+    :scribe,
+    :percent_theoretical_ignored,
+    :charge2,
+    :poisson,
+    :irt_error,
+    :missed_cleavage,
+    :Mox,
+    :TIC,
+    :y_count,
+    :err_norm,
+    :spectrum_peak_count,
+)
+
 function prepare_chromatogram_feature_source(psms::DataFrame)
     if nrow(psms) == 0
         return DataFrame()
@@ -129,14 +146,7 @@ function prepare_chromatogram_feature_source(psms::DataFrame)
     mandatory_cols = (:precursor_idx, :scan_idx, :rt, :target)
     optional_cols = (
         :weight,
-        :gof,
-        :matched_ratio,
-        :fitted_manhattan_distance,
-        :fitted_spectral_contrast,
-        :scribe,
-        :y_count,
-        :log2_summed_intensity,
-        :precursor_fraction_transmitted,
+        FIRST_PASS_PROBIT_FEATURE_COLUMNS...,
     )
 
     missing_mandatory = Symbol[]
@@ -259,32 +269,52 @@ function summarize_chromatograms(chrom_df::DataFrame)
     summary_cols[:num_scans] = Vector{Float32}(undef, n_groups)
 
     has_weight = hasproperty(chrom_df, :weight)
-    has_gof = hasproperty(chrom_df, :gof)
-    has_matched_ratio = hasproperty(chrom_df, :matched_ratio)
-    has_fmd = hasproperty(chrom_df, :fitted_manhattan_distance)
-    has_fsc = hasproperty(chrom_df, :fitted_spectral_contrast)
+    has_spectral_contrast = hasproperty(chrom_df, :spectral_contrast)
+    has_city_block = hasproperty(chrom_df, :city_block)
+    has_entropy_score = hasproperty(chrom_df, :entropy_score)
     has_scribe = hasproperty(chrom_df, :scribe)
+    has_percent_theoretical_ignored = hasproperty(chrom_df, :percent_theoretical_ignored)
+    has_charge2 = hasproperty(chrom_df, :charge2)
+    has_poisson = hasproperty(chrom_df, :poisson)
+    has_irt_error = hasproperty(chrom_df, :irt_error)
+    has_missed_cleavage = hasproperty(chrom_df, :missed_cleavage)
+    has_Mox = hasproperty(chrom_df, :Mox)
+    has_TIC = hasproperty(chrom_df, :TIC)
     has_y_count = hasproperty(chrom_df, :y_count)
-    has_log2_sum = hasproperty(chrom_df, :log2_summed_intensity)
-    has_prob = hasproperty(chrom_df, :prob)
-    has_score = hasproperty(chrom_df, :score)
-    has_fraction = hasproperty(chrom_df, :precursor_fraction_transmitted)
+    has_err_norm = hasproperty(chrom_df, :err_norm)
+    has_spectrum_peaks = hasproperty(chrom_df, :spectrum_peak_count)
 
     if has_weight
         summary_cols[:smoothness] = Vector{Float32}(undef, n_groups)
-        summary_cols[:max_weight] = Vector{Float32}(undef, n_groups)
     end
-    has_gof && (summary_cols[:max_gof] = Vector{Float32}(undef, n_groups))
-    has_matched_ratio && (summary_cols[:max_matched_ratio] = Vector{Float32}(undef, n_groups))
-    has_fmd && (summary_cols[:max_fitted_manhattan_distance] = Vector{Float32}(undef, n_groups))
-    has_fsc && (summary_cols[:max_fitted_spectral_contrast] = Vector{Float32}(undef, n_groups))
+    has_spectral_contrast && (summary_cols[:max_spectral_contrast] = Vector{Float32}(undef, n_groups))
+    has_city_block && (summary_cols[:max_city_block] = Vector{Float32}(undef, n_groups))
+    has_entropy_score && (summary_cols[:max_entropy_score] = Vector{Float32}(undef, n_groups))
     has_scribe && (summary_cols[:max_scribe] = Vector{Float32}(undef, n_groups))
-    has_y_count && (summary_cols[:max_y_ions] = Vector{Float32}(undef, n_groups))
-    has_y_count && (summary_cols[:y_ions_sum] = Vector{Float32}(undef, n_groups))
-    has_log2_sum && (summary_cols[:max_log2_summed_intensity] = Vector{Float32}(undef, n_groups))
-    has_prob && (summary_cols[:max_psm_prob] = Vector{Float32}(undef, n_groups))
-    has_score && (summary_cols[:max_score] = Vector{Float32}(undef, n_groups))
-    has_fraction && (summary_cols[:precursor_fraction_transmitted] = Vector{Float32}(undef, n_groups))
+    has_percent_theoretical_ignored && (summary_cols[:max_percent_theoretical_ignored] = Vector{Float32}(undef, n_groups))
+    has_charge2 && (summary_cols[:max_charge2] = Vector{Float32}(undef, n_groups))
+    has_poisson && (summary_cols[:max_poisson] = Vector{Float32}(undef, n_groups))
+    has_irt_error && (summary_cols[:min_irt_error] = Vector{Float32}(undef, n_groups))
+    has_missed_cleavage && (summary_cols[:max_missed_cleavage] = Vector{Float32}(undef, n_groups))
+    has_Mox && (summary_cols[:max_Mox] = Vector{Float32}(undef, n_groups))
+    has_TIC && (summary_cols[:max_TIC] = Vector{Float32}(undef, n_groups))
+    has_y_count && (summary_cols[:max_y_count] = Vector{Float32}(undef, n_groups))
+    has_y_count && (summary_cols[:sum_y_count] = Vector{Float32}(undef, n_groups))
+    has_err_norm && (summary_cols[:max_err_norm] = Vector{Float32}(undef, n_groups))
+    has_spectrum_peaks && (summary_cols[:max_spectrum_peak_count] = Vector{Float32}(undef, n_groups))
+
+    max_or_zero(values) = begin
+        data = collect(skipmissing(values))
+        return isempty(data) ? 0.0f0 : Float32(maximum(data))
+    end
+    sum_or_zero(values) = begin
+        data = collect(skipmissing(values))
+        return isempty(data) ? 0.0f0 : Float32(sum(Float64.(data)))
+    end
+    min_or_zero(values) = begin
+        data = collect(skipmissing(values))
+        return isempty(data) ? 0.0f0 : Float32(minimum(data))
+    end
 
     for (i, group) in enumerate(grouped)
         order = sortperm(group[!, :rt])
@@ -298,39 +328,49 @@ function summarize_chromatograms(chrom_df::DataFrame)
 
         if has_weight
             summary_cols[:smoothness][i] = chromatogram_smoothness(weights, rts)
-            summary_cols[:max_weight][i] = isempty(weights) ? 0.0f0 : maximum(weights)
         end
-        if has_gof
-            summary_cols[:max_gof][i] = maximum(Float32.(coalesce.(group[!, :gof], 0.0f0)))
+        if has_spectral_contrast
+            summary_cols[:max_spectral_contrast][i] = max_or_zero(group[!, :spectral_contrast])
         end
-        if has_matched_ratio
-            summary_cols[:max_matched_ratio][i] = maximum(Float32.(coalesce.(group[!, :matched_ratio], 0.0f0)))
+        if has_city_block
+            summary_cols[:max_city_block][i] = max_or_zero(group[!, :city_block])
         end
-        if has_fmd
-            summary_cols[:max_fitted_manhattan_distance][i] = maximum(Float32.(coalesce.(group[!, :fitted_manhattan_distance], 0.0f0)))
-        end
-        if has_fsc
-            summary_cols[:max_fitted_spectral_contrast][i] = maximum(Float32.(coalesce.(group[!, :fitted_spectral_contrast], 0.0f0)))
+        if has_entropy_score
+            summary_cols[:max_entropy_score][i] = max_or_zero(group[!, :entropy_score])
         end
         if has_scribe
-            summary_cols[:max_scribe][i] = maximum(Float32.(coalesce.(group[!, :scribe], 0.0f0)))
+            summary_cols[:max_scribe][i] = max_or_zero(group[!, :scribe])
+        end
+        if has_percent_theoretical_ignored
+            summary_cols[:max_percent_theoretical_ignored][i] = max_or_zero(group[!, :percent_theoretical_ignored])
+        end
+        if has_charge2
+            summary_cols[:max_charge2][i] = max_or_zero(group[!, :charge2])
+        end
+        if has_poisson
+            summary_cols[:max_poisson][i] = max_or_zero(group[!, :poisson])
+        end
+        if has_irt_error
+            summary_cols[:min_irt_error][i] = min_or_zero(group[!, :irt_error])
+        end
+        if has_missed_cleavage
+            summary_cols[:max_missed_cleavage][i] = max_or_zero(group[!, :missed_cleavage])
+        end
+        if has_Mox
+            summary_cols[:max_Mox][i] = max_or_zero(group[!, :Mox])
+        end
+        if has_TIC
+            summary_cols[:max_TIC][i] = max_or_zero(group[!, :TIC])
         end
         if has_y_count
-            y_vals = Float32.(coalesce.(group[!, :y_count], 0.0f0))
-            summary_cols[:max_y_ions][i] = maximum(y_vals)
-            summary_cols[:y_ions_sum][i] = sum(y_vals)
+            summary_cols[:max_y_count][i] = max_or_zero(group[!, :y_count])
+            summary_cols[:sum_y_count][i] = sum_or_zero(group[!, :y_count])
         end
-        if has_log2_sum
-            summary_cols[:max_log2_summed_intensity][i] = maximum(Float32.(coalesce.(group[!, :log2_summed_intensity], 0.0f0)))
+        if has_err_norm
+            summary_cols[:max_err_norm][i] = max_or_zero(group[!, :err_norm])
         end
-        if has_prob
-            summary_cols[:max_psm_prob][i] = maximum(Float32.(coalesce.(group[!, :prob], 0.0f0)))
-        end
-        if has_score
-            summary_cols[:max_score][i] = maximum(Float32.(coalesce.(group[!, :score], 0.0f0)))
-        end
-        if has_fraction
-            summary_cols[:precursor_fraction_transmitted][i] = maximum(Float32.(coalesce.(group[!, :precursor_fraction_transmitted], 0.0f0)))
+        if has_spectrum_peaks
+            summary_cols[:max_spectrum_peak_count][i] = max_or_zero(group[!, :spectrum_peak_count])
         end
     end
 
@@ -345,9 +385,6 @@ function score_chromatogram_features!(chrom_summary::DataFrame,
         return chrom_summary
     end
 
-    if hasproperty(chrom_summary, :max_scribe)
-        chrom_summary[!, :scribe] = Float32.(chrom_summary[!, :max_scribe])
-    end
     chrom_summary[!, :intercept] = ones(Float32, n)
     chrom_summary[!, :score] = zeros(Float32, n)
     chrom_summary[!, :q_value] = ones(Float16, n)
@@ -356,27 +393,28 @@ function score_chromatogram_features!(chrom_summary::DataFrame,
     feature_candidates = Symbol[]
     has_num_scans = hasproperty(chrom_summary, :num_scans)
     has_num_scans && push!(feature_candidates, :num_scans)
-    if hasproperty(chrom_summary, :scribe)
-        push!(feature_candidates, :scribe)
-    end
+    hasproperty(chrom_summary, :smoothness) && push!(feature_candidates, :smoothness)
 
-    expected_optional = (
-        :max_gof,
-        :max_matched_ratio,
-        :max_fitted_manhattan_distance,
-        :max_fitted_spectral_contrast,
-        :smoothness,
-        :max_y_ions,
-        :y_ions_sum,
-        :max_log2_summed_intensity,
-        :max_weight,
-        :max_psm_prob,
-        :max_score,
-        :precursor_fraction_transmitted,
+    aggregate_feature_order = (
+        :max_spectral_contrast,
+        :max_city_block,
+        :max_entropy_score,
+        :max_scribe,
+        :max_percent_theoretical_ignored,
+        :max_charge2,
+        :max_poisson,
+        :min_irt_error,
+        :max_missed_cleavage,
+        :max_Mox,
+        :max_TIC,
+        :max_y_count,
+        :sum_y_count,
+        :max_err_norm,
+        :max_spectrum_peak_count,
     )
 
     missing_for_scoring = Symbol[]
-    for col in expected_optional
+    for col in aggregate_feature_order
         if hasproperty(chrom_summary, col)
             push!(feature_candidates, col)
         else
