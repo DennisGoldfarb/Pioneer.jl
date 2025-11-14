@@ -456,8 +456,19 @@ function process_file!(
         end
         # Process scores
        
-        select!(psms, [:ms_file_idx, :score, :precursor_idx, :scan_idx,
-            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :target])
+        select!(psms, [
+            :ms_file_idx,
+            :score,
+            :scribe,
+            :precursor_idx,
+            :scan_idx,
+            :q_value,
+            :log2_summed_intensity,
+            :irt,
+            :rt,
+            :irt_predicted,
+            :target,
+        ])
         get_probs!(psms, psms[!,:score])
     end
 
