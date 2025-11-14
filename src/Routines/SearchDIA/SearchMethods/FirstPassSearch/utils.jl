@@ -257,21 +257,63 @@ function summarize_chromatograms(chrom_df::DataFrame)
     has_err_norm = hasproperty(chrom_df, :err_norm)
     has_spectrum_peaks = hasproperty(chrom_df, :spectrum_peak_count)
 
-    has_spectral_contrast && (summary_cols[:max_spectral_contrast] = Vector{Float32}(undef, n_groups))
-    has_city_block && (summary_cols[:max_city_block] = Vector{Float32}(undef, n_groups))
-    has_entropy_score && (summary_cols[:max_entropy_score] = Vector{Float32}(undef, n_groups))
-    has_scribe && (summary_cols[:max_scribe] = Vector{Float32}(undef, n_groups))
-    has_percent_theoretical_ignored && (summary_cols[:max_percent_theoretical_ignored] = Vector{Float32}(undef, n_groups))
-    has_charge2 && (summary_cols[:max_charge2] = Vector{Float32}(undef, n_groups))
-    has_poisson && (summary_cols[:max_poisson] = Vector{Float32}(undef, n_groups))
-    has_irt_error && (summary_cols[:min_irt_error] = Vector{Float32}(undef, n_groups))
-    has_missed_cleavage && (summary_cols[:max_missed_cleavage] = Vector{Float32}(undef, n_groups))
-    has_Mox && (summary_cols[:max_Mox] = Vector{Float32}(undef, n_groups))
-    has_TIC && (summary_cols[:max_TIC] = Vector{Float32}(undef, n_groups))
-    has_y_count && (summary_cols[:max_y_count] = Vector{Float32}(undef, n_groups))
-    has_y_count && (summary_cols[:sum_y_count] = Vector{Float32}(undef, n_groups))
-    has_err_norm && (summary_cols[:max_err_norm] = Vector{Float32}(undef, n_groups))
-    has_spectrum_peaks && (summary_cols[:max_spectrum_peak_count] = Vector{Float32}(undef, n_groups))
+    has_spectral_contrast && begin
+        summary_cols[:spectral_contrast] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_spectral_contrast] = Vector{Float32}(undef, n_groups)
+    end
+    has_city_block && begin
+        summary_cols[:city_block] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_city_block] = Vector{Float32}(undef, n_groups)
+    end
+    has_entropy_score && begin
+        summary_cols[:entropy_score] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_entropy_score] = Vector{Float32}(undef, n_groups)
+    end
+    has_scribe && begin
+        summary_cols[:scribe] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_scribe] = Vector{Float32}(undef, n_groups)
+    end
+    has_percent_theoretical_ignored && begin
+        summary_cols[:percent_theoretical_ignored] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_percent_theoretical_ignored] = Vector{Float32}(undef, n_groups)
+    end
+    has_charge2 && begin
+        summary_cols[:charge2] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_charge2] = Vector{Float32}(undef, n_groups)
+    end
+    has_poisson && begin
+        summary_cols[:poisson] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_poisson] = Vector{Float32}(undef, n_groups)
+    end
+    has_irt_error && begin
+        summary_cols[:irt_error] = Vector{Float32}(undef, n_groups)
+        summary_cols[:min_irt_error] = Vector{Float32}(undef, n_groups)
+    end
+    has_missed_cleavage && begin
+        summary_cols[:missed_cleavage] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_missed_cleavage] = Vector{Float32}(undef, n_groups)
+    end
+    has_Mox && begin
+        summary_cols[:Mox] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_Mox] = Vector{Float32}(undef, n_groups)
+    end
+    has_TIC && begin
+        summary_cols[:TIC] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_TIC] = Vector{Float32}(undef, n_groups)
+    end
+    has_y_count && begin
+        summary_cols[:y_count] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_y_count] = Vector{Float32}(undef, n_groups)
+        summary_cols[:sum_y_count] = Vector{Float32}(undef, n_groups)
+    end
+    has_err_norm && begin
+        summary_cols[:err_norm] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_err_norm] = Vector{Float32}(undef, n_groups)
+    end
+    has_spectrum_peaks && begin
+        summary_cols[:spectrum_peak_count] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_spectrum_peak_count] = Vector{Float32}(undef, n_groups)
+    end
 
     max_or_zero(values) = begin
         data = collect(skipmissing(values))
@@ -293,47 +335,75 @@ function summarize_chromatograms(chrom_df::DataFrame)
         summary_cols[:target][i] = Bool(first(coalesce.(group[!, :target], false)))
         summary_cols[:num_scans][i] = Float32(nrow(group))
         if has_spectral_contrast
-            summary_cols[:max_spectral_contrast][i] = max_or_zero(group[!, :spectral_contrast])
+            val = max_or_zero(group[!, :spectral_contrast])
+            summary_cols[:spectral_contrast][i] = val
+            summary_cols[:max_spectral_contrast][i] = val
         end
         if has_city_block
-            summary_cols[:max_city_block][i] = max_or_zero(group[!, :city_block])
+            val = max_or_zero(group[!, :city_block])
+            summary_cols[:city_block][i] = val
+            summary_cols[:max_city_block][i] = val
         end
         if has_entropy_score
-            summary_cols[:max_entropy_score][i] = max_or_zero(group[!, :entropy_score])
+            val = max_or_zero(group[!, :entropy_score])
+            summary_cols[:entropy_score][i] = val
+            summary_cols[:max_entropy_score][i] = val
         end
         if has_scribe
-            summary_cols[:max_scribe][i] = max_or_zero(group[!, :scribe])
+            val = max_or_zero(group[!, :scribe])
+            summary_cols[:scribe][i] = val
+            summary_cols[:max_scribe][i] = val
         end
         if has_percent_theoretical_ignored
-            summary_cols[:max_percent_theoretical_ignored][i] = max_or_zero(group[!, :percent_theoretical_ignored])
+            val = max_or_zero(group[!, :percent_theoretical_ignored])
+            summary_cols[:percent_theoretical_ignored][i] = val
+            summary_cols[:max_percent_theoretical_ignored][i] = val
         end
         if has_charge2
-            summary_cols[:max_charge2][i] = max_or_zero(group[!, :charge2])
+            val = max_or_zero(group[!, :charge2])
+            summary_cols[:charge2][i] = val
+            summary_cols[:max_charge2][i] = val
         end
         if has_poisson
-            summary_cols[:max_poisson][i] = max_or_zero(group[!, :poisson])
+            val = max_or_zero(group[!, :poisson])
+            summary_cols[:poisson][i] = val
+            summary_cols[:max_poisson][i] = val
         end
         if has_irt_error
-            summary_cols[:min_irt_error][i] = min_or_zero(group[!, :irt_error])
+            val = min_or_zero(group[!, :irt_error])
+            summary_cols[:irt_error][i] = val
+            summary_cols[:min_irt_error][i] = val
         end
         if has_missed_cleavage
-            summary_cols[:max_missed_cleavage][i] = max_or_zero(group[!, :missed_cleavage])
+            val = max_or_zero(group[!, :missed_cleavage])
+            summary_cols[:missed_cleavage][i] = val
+            summary_cols[:max_missed_cleavage][i] = val
         end
         if has_Mox
-            summary_cols[:max_Mox][i] = max_or_zero(group[!, :Mox])
+            val = max_or_zero(group[!, :Mox])
+            summary_cols[:Mox][i] = val
+            summary_cols[:max_Mox][i] = val
         end
         if has_TIC
-            summary_cols[:max_TIC][i] = max_or_zero(group[!, :TIC])
+            val = max_or_zero(group[!, :TIC])
+            summary_cols[:TIC][i] = val
+            summary_cols[:max_TIC][i] = val
         end
         if has_y_count
-            summary_cols[:max_y_count][i] = max_or_zero(group[!, :y_count])
+            val = max_or_zero(group[!, :y_count])
+            summary_cols[:y_count][i] = val
+            summary_cols[:max_y_count][i] = val
             summary_cols[:sum_y_count][i] = sum_or_zero(group[!, :y_count])
         end
         if has_err_norm
-            summary_cols[:max_err_norm][i] = max_or_zero(group[!, :err_norm])
+            val = max_or_zero(group[!, :err_norm])
+            summary_cols[:err_norm][i] = val
+            summary_cols[:max_err_norm][i] = val
         end
         if has_spectrum_peaks
-            summary_cols[:max_spectrum_peak_count][i] = max_or_zero(group[!, :spectrum_peak_count])
+            val = max_or_zero(group[!, :spectrum_peak_count])
+            summary_cols[:spectrum_peak_count][i] = val
+            summary_cols[:max_spectrum_peak_count][i] = val
         end
     end
 
