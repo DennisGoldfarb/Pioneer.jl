@@ -396,10 +396,13 @@ function process_file!(
         params::FirstPassSearchParameters,
         search_context::SearchContext,
         spectra::MassSpecData)
+
+        add_first_pass_summary_features!(psms)
         column_names = [
             :spectral_contrast, :city_block, :entropy_score, :scribe, :percent_theoretical_ignored,
-            :charge2, :poisson, :irt_error, 
-            :missed_cleavage, 
+            :max_matched_residual, :y_ions_sum, :max_scribe, :max_gof,
+            :charge2, :poisson, :irt_error,
+            :missed_cleavage,
             :Mox,
             #:charge, Only works with charge 2 if at least 3 charge states presence. otherwise singular error
             #:b_count, might be good for non-tryptic enzymes
@@ -430,6 +433,7 @@ function process_file!(
         catch
             column_names = [
             :spectral_contrast, :city_block, :entropy_score, :scribe,
+            :max_matched_residual, :y_ions_sum, :max_scribe, :max_gof,
             :charge2, :poisson, :irt_error, :TIC, :y_count, :err_norm, :spectrum_peak_count, :intercept
             ]
             score_main_search_psms!(

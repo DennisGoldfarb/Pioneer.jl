@@ -47,7 +47,7 @@ Adds essential columns to PSM DataFrame for scoring and analysis.
 - Scoring columns: score, q_value
 - Analysis columns: target, spectrum_peak_count, err_norm
 """
-function add_main_search_columns!(psms::DataFrame, 
+function add_main_search_columns!(psms::DataFrame,
                                 rt_irt::T,
                                 structural_mods::AbstractVector{Union{Missing, String}},
                                 prec_missed_cleavages::Arrow.Primitive{UInt8, Vector{UInt8}},
@@ -118,6 +118,54 @@ function add_main_search_columns!(psms::DataFrame,
     psms[!,:score] = zeros(Float32, N);
     psms[!,:q_value] = zeros(Float16, N);
     psms[!,:intercept] = ones(Float16, N)
+end
+
+"""
+    add_first_pass_summary_features!(psms::DataFrame)
+
+Derive first-pass analogues of key second-pass probit features.
+
+For each precursor the function computes:
+- `max_scribe`: Maximum Scribe score observed across scans
+- `y_ions_sum`: Total Y-ion count observed across scans
+- `max_matched_residual`: Negative log2 of the minimum normalized error ratio
+- `max_gof`: Negative log2 of the minimum city-block distance
+
+Results are broadcast back to every row for the corresponding precursor.
+"""
+function add_first_pass_summary_features!(psms::DataFrame)
+    n_rows = nrow(psms)
+
+    psms[!, :max_scribe] = zeros(Float32, n_rows)
+    psms[!, :y_ions_sum] = zeros(Float32, n_rows)
+    psms[!, :max_matched_residual] = zeros(Float32, n_rows)
+    psms[!, :max_gof] = zeros(Float32, n_rows)
+
+    n_rows == 0 && return psms
+
+    for subdf in groupby(psms, :precursor_idx)
+        rows = parentindices(subdf)[1]
+
+        max_scribe_val = maximum(Float32.(subdf.scribe))
+        y_ions_sum_val = sum(Float32.(subdf.y_count))
+
+        err_norm_vals = Float32.(subdf.err_norm)
+        min_err_norm = isempty(err_norm_vals) ? 1f0 : minimum(err_norm_vals)
+        min_err_norm = max(min_err_norm, 1f-6)
+        max_matched_residual_val = -log2(min_err_norm)
+
+        city_block_vals = Float32.(subdf.city_block)
+        min_city_block = isempty(city_block_vals) ? 1f0 : minimum(city_block_vals)
+        min_city_block = max(min_city_block, 1f-6)
+        max_gof_val = -log2(min_city_block)
+
+        psms[rows, :max_scribe] .= max_scribe_val
+        psms[rows, :y_ions_sum] .= y_ions_sum_val
+        psms[rows, :max_matched_residual] .= max_matched_residual_val
+        psms[rows, :max_gof] .= max_gof_val
+    end
+
+    return psms
 end
 
 """
