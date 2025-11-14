@@ -327,12 +327,35 @@ function process_file!(
                 "$(decoy_stats_enter.precursors) unique precursors)"
         end
         
+        fallback_to_all_precursors = false
+        chrom_candidates = compute_chromatogram_candidates(psms, spectra, search_context, params, ms_file_idx)
+
+        if chrom_candidates === nothing
+            log_chrom_precursor_counts(file_label, 0, 0)
+            fallback_to_all_precursors = true
+        elseif nrow(chrom_candidates) == 0
+            log_chrom_precursor_counts(file_label, 0, 0)
+            fallback_to_all_precursors = true
+        elseif train_chromatogram_probit!(chrom_candidates, params, search_context, file_label)
+            update_precursor_candidates_from_chromatograms!(
+                results,
+                chrom_candidates,
+                params,
+                file_label,
+            )
+        else
+            log_chrom_precursor_counts(file_label, 0, 0)
+            fallback_to_all_precursors = true
+        end
+
+        if fallback_to_all_precursors
+            for prec in psms[!, :precursor_idx]
+                push!(results.probit_precursor_candidates, UInt32(prec))
+            end
+        end
+
         # Score PSMs
         score_psms!(psms, params, search_context, spectra)
-
-        for prec in psms[!, :precursor_idx]
-            push!(results.probit_precursor_candidates, UInt32(prec))
-        end
 
         # Get best PSMs
         select_best_psms!(
@@ -386,6 +409,307 @@ function process_file!(
         psms[!, :irt_error] = Float16.(abs.(psms[!, :irt_observed] .- psms[!, :irt_predicted]))
         psms[!, :charge2] = UInt8.(psms[!, :charge] .== 2)
         psms[!, :ms_file_idx] .= UInt32(ms_file_idx)
+    end
+
+    function compute_chromatogram_candidates(
+        psms::DataFrame,
+        spectra::MassSpecData,
+        search_context::SearchContext,
+        _params::FirstPassSearchParameters,
+        ms_file_idx::Int64,
+    )
+        required_cols = [
+            :precursor_idx,
+            :scan_idx,
+            :rt,
+            :weight,
+            :gof,
+            :matched_ratio,
+            :fitted_manhattan_distance,
+            :fitted_spectral_contrast,
+            :scribe,
+            :y_count,
+            :target,
+        ]
+
+        if any(!hasproperty(psms, col) for col in required_cols)
+            return nothing
+        end
+
+        chrom_source = select(psms, required_cols; copycols = true)
+        if isempty(chrom_source)
+            return DataFrame(
+                precursor_idx = UInt32[],
+                isotopes_captured = Tuple{Int8, Int8}[],
+                target = Bool[],
+                max_weight = Float32[],
+                max_gof = Float32[],
+                max_matched_ratio = Float32[],
+                max_fitted_manhattan_distance = Float32[],
+                max_fitted_spectral_contrast = Float32[],
+                max_scribe = Float32[],
+                y_ions_sum = Float32[],
+                max_y_ions = Float32[],
+                num_scans = Float32[],
+                smoothness = Float32[],
+                precursor_fraction_transmitted = Float32[],
+                intercept = Float32[],
+            )
+        end
+
+        chrom_source[!, :scan_idx] = UInt32.(chrom_source[!, :scan_idx])
+        sort!(chrom_source, [:precursor_idx, :rt])
+
+        precursors = getPrecursors(getSpecLib(search_context))
+        get_isotopes_captured!(
+            chrom_source,
+            SeperateTraces(),
+            getQuadTransmissionModel(search_context, ms_file_idx),
+            getSearchData(search_context),
+            chrom_source[!, :scan_idx],
+            getCharge(precursors),
+            getMz(precursors),
+            getSulfurCount(precursors),
+            getCenterMzs(spectra),
+            getIsolationWidthMzs(spectra),
+        )
+
+        function safe_max32(iter)
+            best = -Inf32
+            for v in iter
+                fv = Float32(v)
+                if isfinite(fv) && fv > best
+                    best = fv
+                end
+            end
+            return best == -Inf32 ? 0f0 : best
+        end
+
+        function safe_sum32(iter)
+            total = 0f0
+            for v in iter
+                fv = Float32(v)
+                if isfinite(fv)
+                    total += fv
+                end
+            end
+            return total
+        end
+
+        function compute_smoothness(weights::Vector{Float32}, rts::Vector{Float32}, apex_idx::Int)
+            apex_weight = weights[apex_idx]
+            if apex_weight == 0f0
+                return 0f0
+            end
+            n = length(weights)
+            if n == 1
+                return ((-2f0 * weights[1]) / apex_weight)^2
+            end
+
+            smoothness = 0f0
+            for i in 1:n
+                if i == 1
+                    Δrt = rts[i + 1] - rts[i]
+                    if Δrt != 0f0
+                        term = ((weights[i + 1] - weights[i]) / Δrt + (-weights[i]) / Δrt) / apex_weight
+                        smoothness += term^2
+                    end
+                elseif i == n
+                    Δrt = rts[i] - rts[i - 1]
+                    if Δrt != 0f0
+                        term = ((weights[i - 1] - weights[i]) / Δrt + (-weights[i]) / Δrt) / apex_weight
+                        smoothness += term^2
+                    end
+                else
+                    back_rt = rts[i] - rts[i - 1]
+                    fwd_rt = rts[i + 1] - rts[i]
+                    term = 0f0
+                    if back_rt != 0f0
+                        term += (weights[i - 1] - weights[i]) / back_rt
+                    end
+                    if fwd_rt != 0f0
+                        term += (weights[i + 1] - weights[i]) / fwd_rt
+                    end
+                    if term != 0f0
+                        smoothness += (term / apex_weight)^2
+                    end
+                end
+            end
+            return smoothness
+        end
+
+        rows = NamedTuple[]
+        grouped = groupby(chrom_source, [:precursor_idx, :isotopes_captured])
+        for sub in grouped
+            n = nrow(sub)
+            if n == 0
+                continue
+            end
+
+            weights = Float32.(sub[!, :weight])
+            if all(iszero, weights)
+                continue
+            end
+
+            rts = Float32.(sub[!, :rt])
+            _, apex_idx = findmax(weights)
+            window_start = max(1, apex_idx - 2)
+            window_stop = min(n, apex_idx + 2)
+            window = window_start:window_stop
+
+            max_weight = safe_max32(weights)
+            max_gof = safe_max32(sub[i, :gof] for i in window)
+            max_matched_ratio = safe_max32(sub[i, :matched_ratio] for i in window)
+            max_manhattan = safe_max32(sub[i, :fitted_manhattan_distance] for i in window)
+            max_spec = safe_max32(sub[i, :fitted_spectral_contrast] for i in window)
+            max_scribe = safe_max32(sub[i, :scribe] for i in window)
+            y_sum = safe_sum32(sub[i, :y_count] for i in window)
+            max_y = safe_max32(sub[i, :y_count] for i in window)
+            smoothness = compute_smoothness(weights, rts, apex_idx)
+            pct_trans = Float32(sub[apex_idx, :precursor_fraction_transmitted])
+            if !isfinite(pct_trans)
+                pct_trans = 0f0
+            end
+
+            target_val = Bool(sub[apex_idx, :target])
+            prec_idx_val = UInt32(sub[apex_idx, :precursor_idx])
+            iso_val = sub[apex_idx, :isotopes_captured]
+
+            push!(
+                rows,
+                (
+                    precursor_idx = prec_idx_val,
+                    isotopes_captured = iso_val,
+                    target = target_val,
+                    max_weight = max_weight,
+                    max_gof = max_gof,
+                    max_matched_ratio = max_matched_ratio,
+                    max_fitted_manhattan_distance = max_manhattan,
+                    max_fitted_spectral_contrast = max_spec,
+                    max_scribe = max_scribe,
+                    y_ions_sum = y_sum,
+                    max_y_ions = max_y,
+                    num_scans = Float32(n),
+                    smoothness = smoothness,
+                    precursor_fraction_transmitted = pct_trans,
+                    intercept = 1.0f0,
+                ),
+            )
+        end
+
+        return DataFrame(rows)
+    end
+
+    function train_chromatogram_probit!(
+        chrom_df::DataFrame,
+        params::FirstPassSearchParameters,
+        search_context::SearchContext,
+        file_label::String,
+    )
+        n = nrow(chrom_df)
+        if n == 0
+            return false
+        end
+
+        n_targets = count(t -> t, chrom_df[!, :target])
+        n_decoys = n - n_targets
+        if n_targets == 0 || n_decoys == 0
+            @user_warn "FirstPassSearch file $(file_label) has insufficient chromatogram targets/decoys for probit training"
+            return false
+        end
+
+        feature_cols = [
+            :max_weight,
+            :max_gof,
+            :max_matched_ratio,
+            :max_fitted_manhattan_distance,
+            :max_fitted_spectral_contrast,
+            :max_scribe,
+            :y_ions_sum,
+            :max_y_ions,
+            :num_scans,
+            :smoothness,
+            :precursor_fraction_transmitted,
+            :intercept,
+        ]
+
+        chrom_df[!, :score] = zeros(Float32, n)
+        chrom_df[!, :prob] = zeros(Float32, n)
+        chrom_df[!, :PEP] = zeros(Float32, n)
+
+        tasks_per_thread = 10
+        chunk_size = max(1, n ÷ (tasks_per_thread * Threads.nthreads()))
+        data_chunks = partition(1:n, chunk_size)
+        feature_df = select(chrom_df, feature_cols; copycols = false)
+
+        try
+            β = zeros(Float64, length(feature_cols))
+            β = ProbitRegression(
+                β,
+                feature_df,
+                chrom_df[!, :target],
+                data_chunks,
+                max_iter = params.max_iter_probit,
+            )
+
+            ModelPredict!(chrom_df[!, :score], feature_df, β, data_chunks)
+            chrom_df[!, :score] = Float32.(chrom_df[!, :score])
+            get_probs!(chrom_df, chrom_df[!, :score])
+
+            fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
+            get_PEP!(
+                chrom_df[!, :score],
+                chrom_df[!, :target],
+                chrom_df[!, :PEP];
+                doSort = false,
+                fdr_scale_factor = fdr_scale_factor,
+            )
+            return true
+        catch e
+            @user_warn "FirstPassSearch chromatogram probit failed for file $(file_label): $(e)"
+            return false
+        end
+    end
+
+    log_chrom_precursor_counts(file_label::String, target_count::Int, decoy_count::Int) =
+        @user_info "FirstPassSearch file $(file_label) chromatogram probit passed $(target_count) target precursors and $(decoy_count) decoy precursors"
+
+    function update_precursor_candidates_from_chromatograms!(
+        results::FirstPassSearchResults,
+        chrom_df::DataFrame,
+        params::FirstPassSearchParameters,
+        file_label::String,
+    )
+        pass_mask = chrom_df[!, :PEP] .<= Float32(params.max_PEP)
+        target_precursors = Set{UInt32}()
+        decoy_precursors = Set{UInt32}()
+
+        for (idx, pass) in enumerate(pass_mask)
+            if !pass
+                continue
+            end
+            prec = UInt32(chrom_df[idx, :precursor_idx])
+            if chrom_df[idx, :target]
+                push!(target_precursors, prec)
+            else
+                push!(decoy_precursors, prec)
+            end
+        end
+
+        log_chrom_precursor_counts(
+            file_label,
+            length(target_precursors),
+            length(decoy_precursors),
+        )
+
+        for prec in target_precursors
+            push!(results.probit_precursor_candidates, prec)
+        end
+        for prec in decoy_precursors
+            push!(results.probit_precursor_candidates, prec)
+        end
+
+        return !isempty(target_precursors) || !isempty(decoy_precursors)
     end
 
     """
