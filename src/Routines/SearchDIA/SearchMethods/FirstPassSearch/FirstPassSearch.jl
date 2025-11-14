@@ -456,7 +456,9 @@ function process_file!(
         end
         # Process scores
        
-        select!(psms, [
+        # Preserve the probit feature inputs alongside the metadata columns needed downstream so
+        # chromatogram aggregation and diagnostics can continue to access them.
+        base_columns = Symbol[
             :ms_file_idx,
             :score,
             :scribe,
@@ -468,7 +470,20 @@ function process_file!(
             :rt,
             :irt_predicted,
             :target,
-        ])
+            :charge,
+        ]
+        preserved_columns = Symbol[]
+        for col in base_columns
+            if hasproperty(psms, col)
+                push!(preserved_columns, col)
+            end
+        end
+        for col in FIRST_PASS_PROBIT_FEATURE_COLUMNS
+            if hasproperty(psms, col) && !(col in preserved_columns)
+                push!(preserved_columns, col)
+            end
+        end
+        select!(psms, preserved_columns)
         get_probs!(psms, psms[!,:score])
     end
 
