@@ -17,6 +17,8 @@
 
 abstract type SpectralScores{T<:AbstractFloat} end
 
+const RESIDUAL_PROFILE_LENGTH = 6
+
 struct SpectralScoresComplex{T<:AbstractFloat} <: SpectralScores{T}
     spectral_contrast::T
     fitted_spectral_contrast::T
@@ -28,6 +30,7 @@ struct SpectralScoresComplex{T<:AbstractFloat} <: SpectralScores{T}
     scribe::T
     percent_theoretical_ignored::T
     #entropy_score::T
+    residual_profile::NTuple{RESIDUAL_PROFILE_LENGTH, Float32}
 end
 
 struct SpectralScoresSimple{T<:AbstractFloat} <: SpectralScores{T} 
@@ -267,12 +270,13 @@ function getDistanceMetrics(w::Vector{T},
         num_matching_peaks = min_frags
 
         while num_matching_peaks ≥ min_frags
-            scr, spectral_contrast, fitted_spectral_contrast, gof, max_matched_residual, max_unmatched_residual, 
-            fitted_manhattan_distance, matched_ratio, worst_pos, worst_pred, num_matching_peaks = computeFittedMetricsFor(w, H, r, col, incl)
+            scr, spectral_contrast, fitted_spectral_contrast, gof, max_matched_residual, max_unmatched_residual,
+            fitted_manhattan_distance, matched_ratio, worst_pos, worst_pred, num_matching_peaks, residual_profile = computeFittedMetricsFor(w, H, r, col, incl)
 
             if best === nothing || scr > best.scribe * relative_improvement_threshold
-                best = (scribe=scr, sc=spectral_contrast, fsc=fitted_spectral_contrast, gof=gof, mmr=max_matched_residual, 
-                        mur=max_unmatched_residual, fmd=fitted_manhattan_distance, mr=matched_ratio)
+                best = (scribe=scr, sc=spectral_contrast, fsc=fitted_spectral_contrast, gof=gof, mmr=max_matched_residual,
+                        mur=max_unmatched_residual, fmd=fitted_manhattan_distance, mr=matched_ratio,
+                        residual_profile=residual_profile)
                 pct_ignored += worst_pred
             else
                 break                     # improvement too small
@@ -294,7 +298,8 @@ function getDistanceMetrics(w::Vector{T},
             Float16(best.fmd),                        # fitted manhattan (−log)
             Float16(best.mr),                         # matched / unmatched
             Float16(best.scribe),                     # scribe
-            Float16(pct_ignored)                      # percent_theoretical_ignored
+            Float16(pct_ignored),                     # percent_theoretical_ignored
+            best.residual_profile
         )
     end
 end
@@ -344,6 +349,9 @@ function computeFittedMetricsFor(w::Vector{T}, H::SparseArray{Ti,T}, r::Vector{T
     sum_of_fitted_peaks_unmatched_squared = zero(T)
 
     N = 0
+    residual_rank_keys = fill(-Inf32, RESIDUAL_PROFILE_LENGTH)
+    residual_profile_values = fill(0f0, RESIDUAL_PROFILE_LENGTH)
+
     @inbounds @fastmath for (local_pos, i) in enumerate(included_indices)
         #Fitted Manhattan Distance
         x_sum += H.x[i]
@@ -359,7 +367,7 @@ function computeFittedMetricsFor(w::Vector{T}, H::SparseArray{Ti,T}, r::Vector{T
         shadow_peak = fitted_peak - r[H.rowval[i]]
 
         r_abs = abs(r[H.rowval[i]])
-        sum_of_residuals += r_abs  
+        sum_of_residuals += r_abs
 
          #For scribe
          h_sqrt_sum += sqrt(fitted_peak)
@@ -382,6 +390,23 @@ function computeFittedMetricsFor(w::Vector{T}, H::SparseArray{Ti,T}, r::Vector{T
             if r_abs > max_unmatched_residual
                 max_unmatched_residual = r_abs
             end
+        end
+
+        # Track the strongest normalized residuals using absolute residual magnitude
+        fitted_peak_nonzero = max(fitted_peak, eps(T))
+        normalized_residual = Float32(r_abs / fitted_peak_nonzero)
+        key = Float32(r_abs)
+        min_idx = 1
+        min_val = residual_rank_keys[1]
+        @inbounds @fastmath for j in 2:RESIDUAL_PROFILE_LENGTH
+            if residual_rank_keys[j] < min_val
+                min_val = residual_rank_keys[j]
+                min_idx = j
+            end
+        end
+        if key > residual_rank_keys[min_idx]
+            residual_rank_keys[min_idx] = key
+            residual_profile_values[min_idx] = normalized_residual
         end
 
 
@@ -426,8 +451,11 @@ function computeFittedMetricsFor(w::Vector{T}, H::SparseArray{Ti,T}, r::Vector{T
     matched_ratio = log2(matched_sum/unmatched_sum)
     worst_intensity_ignored = worst_idx > 0 ? H.nzval[worst_idx] : 0.0
 
-    return (scribe_score, spectral_contrast, fitted_spectral_contrast, gof, max_matched_residual, max_unmatched_residual, 
-            fitted_manhattan_distance, matched_ratio, worst_pos, worst_intensity_ignored, num_matching_peaks)
+    order = sortperm(residual_rank_keys; rev=true)
+    ordered_profile = ntuple(i -> residual_profile_values[order[i]], RESIDUAL_PROFILE_LENGTH)
+
+    return (scribe_score, spectral_contrast, fitted_spectral_contrast, gof, max_matched_residual, max_unmatched_residual,
+            fitted_manhattan_distance, matched_ratio, worst_pos, worst_intensity_ignored, num_matching_peaks, ordered_profile)
 end
 
 function getDistanceMetrics(w::Vector{T}, 

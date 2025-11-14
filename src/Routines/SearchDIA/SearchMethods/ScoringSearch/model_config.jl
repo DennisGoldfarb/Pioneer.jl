@@ -16,10 +16,10 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 #==========================================================
-Model Configuration for ScoringSearch
-This file contains only the minimal functionality needed for model selection.
-The full model_comparison.jl file is deprecated and should not be used.
-==========================================================#
+# Model Configuration for ScoringSearch
+# This file contains only the minimal functionality needed for model selection.
+# The full model_comparison.jl file is deprecated and should not be used.
+#==========================================================
 
 """
 Configuration for a single model in the scoring framework.
@@ -81,7 +81,10 @@ const ADVANCED_FEATURE_SET = [
     #:tic,
     :num_scans,
     :smoothness,
-    
+    :residual_corr_mean,
+    :residual_corr_negative_fraction,
+    :residual_corr_dom_eig_ratio,
+
     :ms1_ms2_rt_diff,  # MS1-MS2 RT difference in iRT space
     #:ms1_irt_diff,
     #:weight_ms1,
@@ -119,7 +122,8 @@ const REDUCED_FEATURE_SET = [
     :max_matched_residual, :max_unmatched_residual, :max_gof,
     :fitted_spectral_contrast, :spectral_contrast, :max_matched_ratio,
     :err_norm, :poisson, :weight_qbin, :log2_intensity_explained, :tic_qbin, :num_scans,
-    :smoothness, :percent_theoretical_ignored, :scribe, :max_scribe,
+    :smoothness, :residual_corr_mean, :residual_corr_negative_fraction,
+    :residual_corr_dom_eig_ratio, :percent_theoretical_ignored, :scribe, :max_scribe,
     # MS1 features
     :weight_ms1,
     :gof_ms1, :max_matched_residual_ms1, :max_unmatched_residual_ms1,
