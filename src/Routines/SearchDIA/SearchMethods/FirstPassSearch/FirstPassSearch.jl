@@ -313,6 +313,8 @@ function process_file!(
         # Add columns
         add_psm_columns!(psms, spectra, search_context, rt_model, ms_file_idx)
 
+        chrom_source = prepare_chromatogram_feature_source(psms)
+
         if !isempty(psms)
             target_mask_enter = psms[!, :target]
             decoy_mask_enter = .!target_mask_enter
@@ -330,8 +332,19 @@ function process_file!(
         # Score PSMs
         score_psms!(psms, params, search_context, spectra)
 
-        for prec in psms[!, :precursor_idx]
-            push!(results.probit_precursor_candidates, UInt32(prec))
+        chrom_candidates, target_prec_count, decoy_prec_count = chromatogram_precursor_candidates!(
+            chrom_source,
+            psms,
+            params,
+            search_context,
+            spectra,
+            ms_file_idx
+        )
+
+        @user_info "FirstPassSearch file $(file_label) chromatogram-level probit filter passed $(target_prec_count) target precursors and $(decoy_prec_count) decoy precursors"
+
+        for prec in chrom_candidates
+            push!(results.probit_precursor_candidates, prec)
         end
 
         # Get best PSMs
@@ -443,8 +456,34 @@ function process_file!(
         end
         # Process scores
        
-        select!(psms, [:ms_file_idx, :score, :precursor_idx, :scan_idx,
-            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :target])
+        # Preserve the probit feature inputs alongside the metadata columns needed downstream so
+        # chromatogram aggregation and diagnostics can continue to access them.
+        base_columns = Symbol[
+            :ms_file_idx,
+            :score,
+            :scribe,
+            :precursor_idx,
+            :scan_idx,
+            :q_value,
+            :log2_summed_intensity,
+            :irt,
+            :rt,
+            :irt_predicted,
+            :target,
+            :charge,
+        ]
+        preserved_columns = Symbol[]
+        for col in base_columns
+            if hasproperty(psms, col)
+                push!(preserved_columns, col)
+            end
+        end
+        for col in FIRST_PASS_PROBIT_FEATURE_COLUMNS
+            if hasproperty(psms, col) && !(col in preserved_columns)
+                push!(preserved_columns, col)
+            end
+        end
+        select!(psms, preserved_columns)
         get_probs!(psms, psms[!,:score])
     end
 

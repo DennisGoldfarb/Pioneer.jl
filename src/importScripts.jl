@@ -218,6 +218,7 @@ function importScripts()
     # Include remaining SearchMethods files (excluding old FileReferences and FileOperations)
     # Skip ParameterTuningSearch and ScoringSearch since we loaded them above
     safe_include!(joinpath(search_methods_dir, "FirstPassSearch", "irt_error_correction.jl"))
+    safe_include!(joinpath(search_methods_dir, "FirstPassSearch", "utils.jl"))
     for (root, dirs, files) in walkdir(search_methods_dir)
         # Skip ParameterTuningSearch and ScoringSearch directories
         if occursin("ParameterTuningSearch", root) || occursin("ScoringSearch", root)

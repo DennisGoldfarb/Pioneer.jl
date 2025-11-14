@@ -90,6 +90,28 @@ function searchFragmentIndex(
     return precursors_passed_scoring[1:prec_id]
 end
 
+function empty_simple_psm_dataframe()
+    return DataFrame(
+        best_rank = UInt8[],
+        topn = UInt8[],
+        b_count = UInt8[],
+        y_count = UInt8[],
+        p_count = UInt8[],
+        i_count = UInt8[],
+        poisson = Float16[],
+        error = Float32[],
+        scribe = Float16[],
+        city_block = Float16[],
+        spectral_contrast = Float16[],
+        matched_ratio = Float16[],
+        log2_summed_intensity = Float16[],
+        entropy_score = Float16[],
+        percent_theoretical_ignored = Float16[],
+        precursor_idx = UInt32[],
+        scan_idx = UInt32[],
+    )
+end
+
 function getPSMS(
     ms_file_idx::UInt32,
     spectra::MassSpecData,
@@ -207,7 +229,102 @@ function getPSMS(
         reset!(getIdToCol(search_data))
         reset!(Hs)
     end
-    return DataFrame(@view(getScoredPsms(search_data)[1:last_val]))
+    if last_val == 0
+        @user_info "LibrarySearch.getPSMS produced 0 scored PSMs for file $(ms_file_idx); returning empty schema"
+        return empty_simple_psm_dataframe()
+    end
+
+    scored_slice = @view(getScoredPsms(search_data)[1:last_val])
+    df = build_simple_psm_dataframe(scored_slice)
+
+    if !hasproperty(df, :scribe)
+        available = join(string.(propertynames(df)), ", ")
+        first_type = eltype(scored_slice)
+        @user_error "First-pass search expected :scribe column but found: [$available] from slice type $(first_type)"
+    end
+
+    return df
+end
+
+function build_simple_psm_dataframe(psms::AbstractVector)
+    n = length(psms)
+    if n == 0
+        return empty_simple_psm_dataframe()
+    end
+
+    required_fields = (
+        :best_rank,
+        :topn,
+        :b_count,
+        :y_count,
+        :p_count,
+        :i_count,
+        :poisson,
+        :error,
+        :scribe,
+        :city_block,
+        :spectral_contrast,
+        :matched_ratio,
+        :log2_summed_intensity,
+        :entropy_score,
+        :percent_theoretical_ignored,
+        :precursor_idx,
+        :scan_idx,
+    )
+
+    first_psm = psms[1]
+    fields = fieldnames(typeof(first_psm))
+    has_required = all(field -> field in fields, required_fields)
+
+    if !has_required
+        df = DataFrame(psms)
+        available = join(string.(propertynames(df)), ", ")
+        @user_info "PSM slice converted without schema optimization; available columns: [$available]"
+        return df
+    end
+
+    df = DataFrame(
+        best_rank = Vector{typeof(getfield(first_psm, :best_rank))}(undef, n),
+        topn = Vector{typeof(getfield(first_psm, :topn))}(undef, n),
+        b_count = Vector{typeof(getfield(first_psm, :b_count))}(undef, n),
+        y_count = Vector{typeof(getfield(first_psm, :y_count))}(undef, n),
+        p_count = Vector{typeof(getfield(first_psm, :p_count))}(undef, n),
+        i_count = Vector{typeof(getfield(first_psm, :i_count))}(undef, n),
+        poisson = Vector{typeof(getfield(first_psm, :poisson))}(undef, n),
+        error = Vector{typeof(getfield(first_psm, :error))}(undef, n),
+        scribe = Vector{typeof(getfield(first_psm, :scribe))}(undef, n),
+        city_block = Vector{typeof(getfield(first_psm, :city_block))}(undef, n),
+        spectral_contrast = Vector{typeof(getfield(first_psm, :spectral_contrast))}(undef, n),
+        matched_ratio = Vector{typeof(getfield(first_psm, :matched_ratio))}(undef, n),
+        log2_summed_intensity = Vector{typeof(getfield(first_psm, :log2_summed_intensity))}(undef, n),
+        entropy_score = Vector{typeof(getfield(first_psm, :entropy_score))}(undef, n),
+        percent_theoretical_ignored = Vector{typeof(getfield(first_psm, :percent_theoretical_ignored))}(undef, n),
+        precursor_idx = Vector{typeof(getfield(first_psm, :precursor_idx))}(undef, n),
+        scan_idx = Vector{typeof(getfield(first_psm, :scan_idx))}(undef, n),
+    )
+
+    @inbounds for i in 1:n
+        psm = psms[i]
+        df.best_rank[i] = getfield(psm, :best_rank)
+        df.topn[i] = getfield(psm, :topn)
+        df.b_count[i] = getfield(psm, :b_count)
+        df.y_count[i] = getfield(psm, :y_count)
+        df.p_count[i] = getfield(psm, :p_count)
+        df.i_count[i] = getfield(psm, :i_count)
+        df.poisson[i] = getfield(psm, :poisson)
+        df.error[i] = getfield(psm, :error)
+        df.scribe[i] = getfield(psm, :scribe)
+        df.city_block[i] = getfield(psm, :city_block)
+        df.spectral_contrast[i] = getfield(psm, :spectral_contrast)
+        df.matched_ratio[i] = getfield(psm, :matched_ratio)
+        df.log2_summed_intensity[i] = getfield(psm, :log2_summed_intensity)
+        df.entropy_score[i] = getfield(psm, :entropy_score)
+        df.percent_theoretical_ignored[i] = getfield(psm, :percent_theoretical_ignored)
+        df.precursor_idx[i] = getfield(psm, :precursor_idx)
+        df.scan_idx[i] = getfield(psm, :scan_idx)
+    end
+
+    return df
 end
 
 function library_search(spectra::MassSpecData, search_context::SearchContext, search_parameters::P, ms_file_idx::Int64) where {P<:ParameterTuningSearchParameters}

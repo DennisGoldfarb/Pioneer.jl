@@ -47,16 +47,16 @@ Adds essential columns to PSM DataFrame for scoring and analysis.
 - Scoring columns: score, q_value
 - Analysis columns: target, spectrum_peak_count, err_norm
 """
-function add_main_search_columns!(psms::DataFrame, 
+function add_main_search_columns!(psms::DataFrame,
                                 rt_irt::T,
                                 structural_mods::AbstractVector{Union{Missing, String}},
                                 prec_missed_cleavages::Arrow.Primitive{UInt8, Vector{UInt8}},
                                 prec_is_decoy::Arrow.BoolVector{Bool},
                                 prec_irt::Arrow.Primitive{U, Vector{U}},
                                 prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
-                                scan_retention_time::AbstractVector{Float32},
-                                tic::AbstractVector{Float32},
-                                masses::AbstractArray;
+    scan_retention_time::AbstractVector{Float32},
+    tic::AbstractVector{Float32},
+    masses::AbstractArray;
 ) where {T,U<:AbstractFloat}
     
     ###########################
@@ -118,6 +118,404 @@ function add_main_search_columns!(psms::DataFrame,
     psms[!,:score] = zeros(Float32, N);
     psms[!,:q_value] = zeros(Float16, N);
     psms[!,:intercept] = ones(Float16, N)
+end
+
+const FIRST_PASS_PROBIT_FEATURE_COLUMNS = (
+    :spectral_contrast,
+    :city_block,
+    :entropy_score,
+    :scribe,
+    :percent_theoretical_ignored,
+    :charge2,
+    :poisson,
+    :irt_error,
+    :missed_cleavage,
+    :Mox,
+    :TIC,
+    :y_count,
+    :err_norm,
+    :spectrum_peak_count,
+)
+
+function prepare_chromatogram_feature_source(psms::DataFrame)
+    if nrow(psms) == 0
+        return DataFrame()
+    end
+
+    chrom_df = DataFrame()
+    mandatory_cols = (:precursor_idx, :scan_idx, :rt, :target)
+    optional_cols = (
+        FIRST_PASS_PROBIT_FEATURE_COLUMNS...,
+    )
+
+    missing_mandatory = Symbol[]
+    for col in mandatory_cols
+        if hasproperty(psms, col)
+            chrom_df[!, col] = copy(psms[!, col])
+        else
+            push!(missing_mandatory, col)
+            default_value = if col === :target
+                false
+            elseif col === :rt
+                0.0f0
+            else
+                UInt32(0)
+            end
+            chrom_df[!, col] = fill(default_value, nrow(psms))
+        end
+    end
+
+    missing_optional = Symbol[]
+    for col in optional_cols
+        if hasproperty(psms, col)
+            chrom_df[!, col] = copy(psms[!, col])
+        else
+            push!(missing_optional, col)
+        end
+    end
+
+    if !isempty(missing_mandatory)
+        @user_warn "Chromatogram feature source missing mandatory columns: $(join(string.(missing_mandatory), ", "))"
+    end
+    if !isempty(missing_optional)
+        @user_info "Chromatogram feature source missing optional columns: $(join(string.(missing_optional), ", "))"
+    end
+
+    return chrom_df
+end
+
+function assign_pair_indices!(chrom_df::DataFrame, search_context::SearchContext)
+    if nrow(chrom_df) == 0 || hasproperty(chrom_df, :pair_idx)
+        return chrom_df
+    end
+    pair_ids = getPairIdx(getPrecursors(getSpecLib(search_context)))
+    chrom_df[!, :pair_idx] = Vector{UInt32}(undef, nrow(chrom_df))
+    @inbounds for (idx, prec_idx) in enumerate(chrom_df[!, :precursor_idx])
+        chrom_df[idx, :pair_idx] = extract_pair_idx(pair_ids, prec_idx)
+    end
+    return chrom_df
+end
+
+function annotate_isotopes!(chrom_df::DataFrame,
+                            search_context::SearchContext,
+                            spectra::MassSpecData,
+                            ms_file_idx::Int)
+    if nrow(chrom_df) == 0
+        return chrom_df
+    end
+    quad_model = getQuadTransmissionModel(search_context, ms_file_idx)
+    precursors = getPrecursors(getSpecLib(search_context))
+    get_isotopes_captured!(
+        chrom_df,
+        SeperateTraces(),
+        quad_model,
+        getSearchData(search_context),
+        chrom_df[!, :scan_idx],
+        getCharge(precursors),
+        getMz(precursors),
+        getSulfurCount(precursors),
+        getCenterMzs(spectra),
+        getIsolationWidthMzs(spectra)
+    )
+    return chrom_df
+end
+
+function summarize_chromatograms(chrom_df::DataFrame)
+    if nrow(chrom_df) == 0 || !hasproperty(chrom_df, :isotopes_captured)
+        return DataFrame()
+    end
+
+    grouped = groupby(chrom_df, [:precursor_idx, :pair_idx, :isotopes_captured])
+    n_groups = length(grouped)
+    if n_groups == 0
+        return DataFrame()
+    end
+
+    precursor_type = eltype(chrom_df[!, :precursor_idx])
+    pair_type = hasproperty(chrom_df, :pair_idx) ? eltype(chrom_df[!, :pair_idx]) : UInt32
+    isotope_type = eltype(chrom_df[!, :isotopes_captured])
+
+    summary_cols = Dict{Symbol, AbstractVector}()
+    summary_cols[:precursor_idx] = Vector{precursor_type}(undef, n_groups)
+    summary_cols[:pair_idx] = Vector{pair_type}(undef, n_groups)
+    summary_cols[:isotopes_captured] = Vector{isotope_type}(undef, n_groups)
+    summary_cols[:target] = Vector{Bool}(undef, n_groups)
+    summary_cols[:num_scans] = Vector{Float32}(undef, n_groups)
+
+    has_spectral_contrast = hasproperty(chrom_df, :spectral_contrast)
+    has_city_block = hasproperty(chrom_df, :city_block)
+    has_entropy_score = hasproperty(chrom_df, :entropy_score)
+    has_scribe = hasproperty(chrom_df, :scribe)
+    has_percent_theoretical_ignored = hasproperty(chrom_df, :percent_theoretical_ignored)
+    has_charge2 = hasproperty(chrom_df, :charge2)
+    has_poisson = hasproperty(chrom_df, :poisson)
+    has_irt_error = hasproperty(chrom_df, :irt_error)
+    has_missed_cleavage = hasproperty(chrom_df, :missed_cleavage)
+    has_Mox = hasproperty(chrom_df, :Mox)
+    has_TIC = hasproperty(chrom_df, :TIC)
+    has_y_count = hasproperty(chrom_df, :y_count)
+    has_err_norm = hasproperty(chrom_df, :err_norm)
+    has_spectrum_peaks = hasproperty(chrom_df, :spectrum_peak_count)
+
+    has_spectral_contrast && begin
+        summary_cols[:spectral_contrast] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_spectral_contrast] = Vector{Float32}(undef, n_groups)
+    end
+    has_city_block && begin
+        summary_cols[:city_block] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_city_block] = Vector{Float32}(undef, n_groups)
+    end
+    has_entropy_score && begin
+        summary_cols[:entropy_score] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_entropy_score] = Vector{Float32}(undef, n_groups)
+    end
+    has_scribe && begin
+        summary_cols[:scribe] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_scribe] = Vector{Float32}(undef, n_groups)
+    end
+    has_percent_theoretical_ignored && begin
+        summary_cols[:percent_theoretical_ignored] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_percent_theoretical_ignored] = Vector{Float32}(undef, n_groups)
+    end
+    has_charge2 && begin
+        summary_cols[:charge2] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_charge2] = Vector{Float32}(undef, n_groups)
+    end
+    has_poisson && begin
+        summary_cols[:poisson] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_poisson] = Vector{Float32}(undef, n_groups)
+    end
+    has_irt_error && begin
+        summary_cols[:irt_error] = Vector{Float32}(undef, n_groups)
+        summary_cols[:min_irt_error] = Vector{Float32}(undef, n_groups)
+    end
+    has_missed_cleavage && begin
+        summary_cols[:missed_cleavage] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_missed_cleavage] = Vector{Float32}(undef, n_groups)
+    end
+    has_Mox && begin
+        summary_cols[:Mox] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_Mox] = Vector{Float32}(undef, n_groups)
+    end
+    has_TIC && begin
+        summary_cols[:TIC] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_TIC] = Vector{Float32}(undef, n_groups)
+    end
+    has_y_count && begin
+        summary_cols[:y_count] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_y_count] = Vector{Float32}(undef, n_groups)
+        summary_cols[:sum_y_count] = Vector{Float32}(undef, n_groups)
+    end
+    has_err_norm && begin
+        summary_cols[:err_norm] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_err_norm] = Vector{Float32}(undef, n_groups)
+    end
+    has_spectrum_peaks && begin
+        summary_cols[:spectrum_peak_count] = Vector{Float32}(undef, n_groups)
+        summary_cols[:max_spectrum_peak_count] = Vector{Float32}(undef, n_groups)
+    end
+
+    max_or_zero(values) = begin
+        data = collect(skipmissing(values))
+        return isempty(data) ? 0.0f0 : Float32(maximum(data))
+    end
+    sum_or_zero(values) = begin
+        data = collect(skipmissing(values))
+        return isempty(data) ? 0.0f0 : Float32(sum(Float64.(data)))
+    end
+    min_or_zero(values) = begin
+        data = collect(skipmissing(values))
+        return isempty(data) ? 0.0f0 : Float32(minimum(data))
+    end
+
+    for (i, group) in enumerate(grouped)
+        summary_cols[:precursor_idx][i] = first(group[!, :precursor_idx])
+        summary_cols[:pair_idx][i] = first(group[!, :pair_idx])
+        summary_cols[:isotopes_captured][i] = first(group[!, :isotopes_captured])
+        summary_cols[:target][i] = Bool(first(coalesce.(group[!, :target], false)))
+        summary_cols[:num_scans][i] = Float32(nrow(group))
+        if has_spectral_contrast
+            val = max_or_zero(group[!, :spectral_contrast])
+            summary_cols[:spectral_contrast][i] = val
+            summary_cols[:max_spectral_contrast][i] = val
+        end
+        if has_city_block
+            val = max_or_zero(group[!, :city_block])
+            summary_cols[:city_block][i] = val
+            summary_cols[:max_city_block][i] = val
+        end
+        if has_entropy_score
+            val = max_or_zero(group[!, :entropy_score])
+            summary_cols[:entropy_score][i] = val
+            summary_cols[:max_entropy_score][i] = val
+        end
+        if has_scribe
+            val = max_or_zero(group[!, :scribe])
+            summary_cols[:scribe][i] = val
+            summary_cols[:max_scribe][i] = val
+        end
+        if has_percent_theoretical_ignored
+            val = max_or_zero(group[!, :percent_theoretical_ignored])
+            summary_cols[:percent_theoretical_ignored][i] = val
+            summary_cols[:max_percent_theoretical_ignored][i] = val
+        end
+        if has_charge2
+            val = max_or_zero(group[!, :charge2])
+            summary_cols[:charge2][i] = val
+            summary_cols[:max_charge2][i] = val
+        end
+        if has_poisson
+            val = max_or_zero(group[!, :poisson])
+            summary_cols[:poisson][i] = val
+            summary_cols[:max_poisson][i] = val
+        end
+        if has_irt_error
+            val = min_or_zero(group[!, :irt_error])
+            summary_cols[:irt_error][i] = val
+            summary_cols[:min_irt_error][i] = val
+        end
+        if has_missed_cleavage
+            val = max_or_zero(group[!, :missed_cleavage])
+            summary_cols[:missed_cleavage][i] = val
+            summary_cols[:max_missed_cleavage][i] = val
+        end
+        if has_Mox
+            val = max_or_zero(group[!, :Mox])
+            summary_cols[:Mox][i] = val
+            summary_cols[:max_Mox][i] = val
+        end
+        if has_TIC
+            val = max_or_zero(group[!, :TIC])
+            summary_cols[:TIC][i] = val
+            summary_cols[:max_TIC][i] = val
+        end
+        if has_y_count
+            val = max_or_zero(group[!, :y_count])
+            summary_cols[:y_count][i] = val
+            summary_cols[:max_y_count][i] = val
+            summary_cols[:sum_y_count][i] = sum_or_zero(group[!, :y_count])
+        end
+        if has_err_norm
+            val = max_or_zero(group[!, :err_norm])
+            summary_cols[:err_norm][i] = val
+            summary_cols[:max_err_norm][i] = val
+        end
+        if has_spectrum_peaks
+            val = max_or_zero(group[!, :spectrum_peak_count])
+            summary_cols[:spectrum_peak_count][i] = val
+            summary_cols[:max_spectrum_peak_count][i] = val
+        end
+    end
+
+    return DataFrame(summary_cols)
+end
+
+function score_chromatogram_features!(chrom_summary::DataFrame,
+                                      params::FirstPassSearchParameters,
+                                      search_context::SearchContext)
+    n = nrow(chrom_summary)
+    if n == 0
+        return chrom_summary
+    end
+
+    chrom_summary[!, :intercept] = ones(Float32, n)
+    chrom_summary[!, :score] = zeros(Float32, n)
+    chrom_summary[!, :q_value] = ones(Float16, n)
+    chrom_summary[!, :PEP] = ones(Float16, n)
+
+    feature_candidates = Symbol[]
+    has_num_scans = hasproperty(chrom_summary, :num_scans)
+    has_num_scans && push!(feature_candidates, :num_scans)
+
+    aggregate_feature_order = (
+        :max_spectral_contrast,
+        :max_city_block,
+        :max_entropy_score,
+        :max_scribe,
+        :max_percent_theoretical_ignored,
+        :max_charge2,
+        :max_poisson,
+        :min_irt_error,
+        :max_missed_cleavage,
+        :max_Mox,
+        :max_TIC,
+        :max_y_count,
+        :sum_y_count,
+        :max_err_norm,
+        :max_spectrum_peak_count,
+    )
+
+    missing_for_scoring = Symbol[]
+    for col in aggregate_feature_order
+        if hasproperty(chrom_summary, col)
+            push!(feature_candidates, col)
+        else
+            push!(missing_for_scoring, col)
+        end
+    end
+
+    if !isempty(missing_for_scoring)
+        @user_info "Skipping unavailable chromatogram-level features: $(join(string.(missing_for_scoring), ", "))"
+    end
+
+    push!(feature_candidates, :intercept)
+    feature_columns = feature_candidates
+
+    zero_var_cols = Symbol[]
+    for col in feature_columns
+        col === :intercept && continue
+        min_val, max_val = extrema(chrom_summary[!, col])
+        if min_val == max_val
+            push!(zero_var_cols, col)
+        end
+    end
+    if !isempty(zero_var_cols)
+        dropped = join(string.(zero_var_cols), ", ")
+        @user_warn "Dropping $(length(zero_var_cols)) zero-variance chromatogram features: $dropped"
+        filter!(col -> !(col in zero_var_cols), feature_columns)
+    end
+    if length(feature_columns) <= 1
+        @user_warn "Skipping chromatogram-level probit scoring because no varying features remain after filtering"
+        return chrom_summary
+    end
+
+    fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
+    score_main_search_psms!(
+        chrom_summary,
+        feature_columns,
+        n_train_rounds = params.n_train_rounds_probit,
+        max_iter_per_round = params.max_iter_probit,
+        max_q_value = Float64(params.max_q_value_probit_rescore),
+        fdr_scale_factor = fdr_scale_factor
+    )
+    get_probs!(chrom_summary, chrom_summary[!, :score])
+    get_PEP!(chrom_summary[!, :score], chrom_summary[!, :target], chrom_summary[!, :PEP]; doSort=false, fdr_scale_factor=fdr_scale_factor)
+    return chrom_summary
+end
+
+function chromatogram_precursor_candidates!(chrom_source::DataFrame,
+                                            scored_psms::DataFrame,
+                                            params::FirstPassSearchParameters,
+                                            search_context::SearchContext,
+                                            spectra::MassSpecData,
+                                            ms_file_idx::Int)
+    if nrow(chrom_source) == 0 || nrow(scored_psms) == 0
+        return (Set{UInt32}(), 0, 0)
+    end
+    scores_df = select(scored_psms, [:precursor_idx, :scan_idx, :score, :prob])
+    chrom_data = leftjoin(chrom_source, scores_df, on=[:precursor_idx, :scan_idx]; makeunique=true)
+    assign_pair_indices!(chrom_data, search_context)
+    annotate_isotopes!(chrom_data, search_context, spectra, ms_file_idx)
+    chrom_summary = summarize_chromatograms(chrom_data)
+    chrom_summary = score_chromatogram_features!(chrom_summary, params, search_context)
+    if nrow(chrom_summary) == 0
+        return (Set{UInt32}(), 0, 0)
+    end
+    passing_mask = chrom_summary[!, :PEP] .<= Float16(params.max_PEP)
+    passing = chrom_summary[passing_mask, :]
+    targets = Set{UInt32}(passing[passing[!, :target], :precursor_idx])
+    decoys = Set{UInt32}(passing[.!passing[!, :target], :precursor_idx])
+    return (Set{UInt32}(passing[!, :precursor_idx]), length(targets), length(decoys))
 end
 
 """
