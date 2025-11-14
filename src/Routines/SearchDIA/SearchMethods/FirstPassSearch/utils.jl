@@ -290,9 +290,12 @@ function score_chromatogram_features!(chrom_summary::DataFrame,
         end
     end
     if !isempty(zero_var_cols)
-        feature_columns = filter(col -> !(col in zero_var_cols), feature_columns)
+        dropped = join(string.(zero_var_cols), ", ")
+        @user_warn "Dropping $(length(zero_var_cols)) zero-variance chromatogram features: $dropped"
+        filter!(col -> !(col in zero_var_cols), feature_columns)
     end
-    if isempty(feature_columns)
+    if length(feature_columns) <= 1
+        @user_warn "Skipping chromatogram-level probit scoring because no varying features remain after filtering"
         return chrom_summary
     end
 
