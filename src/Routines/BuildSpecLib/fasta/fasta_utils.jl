@@ -841,6 +841,8 @@ end
 
 Group-aware decoy generation that ensures all modification variants of the same
 base peptide sequence share a single decoy sequence and mod position mapping.
+Only a random 10% of peptide groups receive decoys to reduce overall decoy
+count during library construction.
 
 # Parameters
 - `target_fasta_entries::Vector{FastaEntry}`: Peptide entries to generate decoys for (typically includes targets and entrapments)
@@ -854,9 +856,10 @@ base peptide sequence share a single decoy sequence and mod position mapping.
 # Details
 Algorithm:
 1. Group by base sequence (ignoring modifications)
-2. For each base sequence, generate one decoy sequence once (respect I/L equivalence and charges)
-3. Apply the same position mapping to all modification variants in the group
-4. Preserve metadata and set `is_decoy = true`
+2. Randomly select ~10% of these groups for decoy generation
+3. For each selected base sequence, generate one decoy sequence once (respect I/L equivalence and charges)
+4. Apply the same position mapping to all modification variants in the selected group
+5. Preserve metadata and set `is_decoy = true`
 """
 function add_decoy_sequences_grouped(
     target_fasta_entries::Vector{FastaEntry};
@@ -897,9 +900,24 @@ function add_decoy_sequences_grouped(
     fallback_to_shuffle_count = 0
     total_groups = length(groups)
 
+    # Randomly select approximately 10% of peptide groups for decoy generation
+    selected_groups = Set{String}()
+    if total_groups > 0
+        n_selected = clamp(Int(ceil(total_groups * 0.10)), 0, total_groups)
+        if n_selected > 0
+            group_keys = collect(keys(groups))
+            for idx in randperm(total_groups)[1:n_selected]
+                push!(selected_groups, group_keys[idx])
+            end
+        end
+    end
+
     sample_logged = 0
     exhausted_groups = 0
     for (base_seq, idxs) in groups
+        if !(base_seq in selected_groups)
+            continue
+        end
         # Unique charges across variants in this group
         charges = unique([get_charge(target_fasta_entries[i]) for i in idxs])
 
