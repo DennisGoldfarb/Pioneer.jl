@@ -145,7 +145,6 @@ function prepare_chromatogram_feature_source(psms::DataFrame)
     chrom_df = DataFrame()
     mandatory_cols = (:precursor_idx, :scan_idx, :rt, :target)
     optional_cols = (
-        :weight,
         FIRST_PASS_PROBIT_FEATURE_COLUMNS...,
     )
 
@@ -221,31 +220,6 @@ function annotate_isotopes!(chrom_df::DataFrame,
     return chrom_df
 end
 
-function chromatogram_smoothness(weights::Vector{<:Real}, rts::Vector{<:Real})
-    n = length(weights)
-    if n == 0
-        return 0.0f0
-    end
-    apex_idx = argmax(weights)
-    apex_weight = weights[apex_idx]
-    if apex_weight == 0
-        return 0.0f0
-    end
-    smoothness = 0.0f0
-    for i in 1:n
-        if n == 1
-            smoothness += (-2 * weights[i] / apex_weight)^2
-        elseif i == 1
-            smoothness += (((weights[i+1] - weights[i]) / (rts[i+1] - rts[i]) + (-weights[i]) / (rts[i+1] - rts[i])) / apex_weight)^2
-        elseif i == n
-            smoothness += (((weights[i-1] - weights[i]) / (rts[i] - rts[i-1]) + (-weights[i]) / (rts[i] - rts[i-1])) / apex_weight)^2
-        else
-            smoothness += (((weights[i-1] - weights[i]) / (rts[i] - rts[i-1]) + (weights[i+1] - weights[i]) / (rts[i+1] - rts[i])) / apex_weight)^2
-        end
-    end
-    return Float32(smoothness)
-end
-
 function summarize_chromatograms(chrom_df::DataFrame)
     if nrow(chrom_df) == 0 || !hasproperty(chrom_df, :isotopes_captured)
         return DataFrame()
@@ -268,7 +242,6 @@ function summarize_chromatograms(chrom_df::DataFrame)
     summary_cols[:target] = Vector{Bool}(undef, n_groups)
     summary_cols[:num_scans] = Vector{Float32}(undef, n_groups)
 
-    has_weight = hasproperty(chrom_df, :weight)
     has_spectral_contrast = hasproperty(chrom_df, :spectral_contrast)
     has_city_block = hasproperty(chrom_df, :city_block)
     has_entropy_score = hasproperty(chrom_df, :entropy_score)
@@ -284,9 +257,6 @@ function summarize_chromatograms(chrom_df::DataFrame)
     has_err_norm = hasproperty(chrom_df, :err_norm)
     has_spectrum_peaks = hasproperty(chrom_df, :spectrum_peak_count)
 
-    if has_weight
-        summary_cols[:smoothness] = Vector{Float32}(undef, n_groups)
-    end
     has_spectral_contrast && (summary_cols[:max_spectral_contrast] = Vector{Float32}(undef, n_groups))
     has_city_block && (summary_cols[:max_city_block] = Vector{Float32}(undef, n_groups))
     has_entropy_score && (summary_cols[:max_entropy_score] = Vector{Float32}(undef, n_groups))
@@ -317,18 +287,11 @@ function summarize_chromatograms(chrom_df::DataFrame)
     end
 
     for (i, group) in enumerate(grouped)
-        order = sortperm(group[!, :rt])
-        weights = has_weight ? Float32.(coalesce.(group[order, :weight], 0.0f0)) : Float32[]
-        rts = Float32.(coalesce.(group[order, :rt], 0.0f0))
         summary_cols[:precursor_idx][i] = first(group[!, :precursor_idx])
         summary_cols[:pair_idx][i] = first(group[!, :pair_idx])
         summary_cols[:isotopes_captured][i] = first(group[!, :isotopes_captured])
         summary_cols[:target][i] = Bool(first(coalesce.(group[!, :target], false)))
         summary_cols[:num_scans][i] = Float32(nrow(group))
-
-        if has_weight
-            summary_cols[:smoothness][i] = chromatogram_smoothness(weights, rts)
-        end
         if has_spectral_contrast
             summary_cols[:max_spectral_contrast][i] = max_or_zero(group[!, :spectral_contrast])
         end
@@ -393,7 +356,6 @@ function score_chromatogram_features!(chrom_summary::DataFrame,
     feature_candidates = Symbol[]
     has_num_scans = hasproperty(chrom_summary, :num_scans)
     has_num_scans && push!(feature_candidates, :num_scans)
-    hasproperty(chrom_summary, :smoothness) && push!(feature_candidates, :smoothness)
 
     aggregate_feature_order = (
         :max_spectral_contrast,
