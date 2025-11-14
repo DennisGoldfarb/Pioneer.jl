@@ -262,6 +262,7 @@ function score_chromatogram_features!(chrom_summary::DataFrame,
     chrom_summary[!, :score] = zeros(Float32, n)
     chrom_summary[!, :q_value] = ones(Float16, n)
     chrom_summary[!, :PEP] = ones(Float16, n)
+
     feature_columns = [
         :scribe,
         :max_gof,
@@ -279,6 +280,22 @@ function score_chromatogram_features!(chrom_summary::DataFrame,
         :precursor_fraction_transmitted,
         :intercept
     ]
+
+    zero_var_cols = Symbol[]
+    for col in feature_columns
+        col === :intercept && continue
+        min_val, max_val = extrema(chrom_summary[!, col])
+        if min_val == max_val
+            push!(zero_var_cols, col)
+        end
+    end
+    if !isempty(zero_var_cols)
+        feature_columns = filter(col -> !(col in zero_var_cols), feature_columns)
+    end
+    if isempty(feature_columns)
+        return chrom_summary
+    end
+
     fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
     score_main_search_psms!(
         chrom_summary,
