@@ -47,16 +47,16 @@ Adds essential columns to PSM DataFrame for scoring and analysis.
 - Scoring columns: score, q_value
 - Analysis columns: target, spectrum_peak_count, err_norm
 """
-function add_main_search_columns!(psms::DataFrame, 
+function add_main_search_columns!(psms::DataFrame,
                                 rt_irt::T,
                                 structural_mods::AbstractVector{Union{Missing, String}},
                                 prec_missed_cleavages::Arrow.Primitive{UInt8, Vector{UInt8}},
                                 prec_is_decoy::Arrow.BoolVector{Bool},
                                 prec_irt::Arrow.Primitive{U, Vector{U}},
                                 prec_charge::Arrow.Primitive{UInt8, Vector{UInt8}},
-                                scan_retention_time::AbstractVector{Float32},
-                                tic::AbstractVector{Float32},
-                                masses::AbstractArray;
+    scan_retention_time::AbstractVector{Float32},
+    tic::AbstractVector{Float32},
+    masses::AbstractArray;
 ) where {T,U<:AbstractFloat}
     
     ###########################
@@ -118,6 +118,204 @@ function add_main_search_columns!(psms::DataFrame,
     psms[!,:score] = zeros(Float32, N);
     psms[!,:q_value] = zeros(Float16, N);
     psms[!,:intercept] = ones(Float16, N)
+end
+
+function prepare_chromatogram_feature_source(psms::DataFrame)
+    if nrow(psms) == 0
+        return DataFrame()
+    end
+    required_cols = (
+        :precursor_idx,
+        :scan_idx,
+        :rt,
+        :weight,
+        :gof,
+        :matched_ratio,
+        :fitted_manhattan_distance,
+        :fitted_spectral_contrast,
+        :scribe,
+        :y_count,
+        :log2_summed_intensity,
+        :target
+    )
+
+    chrom_df = DataFrame()
+    for col in required_cols
+        if hasproperty(psms, col)
+            chrom_df[!, col] = copy(psms[!, col])
+        else
+            default_value = col === :target ? false : 0
+            chrom_df[!, col] = fill(default_value, nrow(psms))
+        end
+    end
+    return chrom_df
+end
+
+function assign_pair_indices!(chrom_df::DataFrame, search_context::SearchContext)
+    if nrow(chrom_df) == 0 || hasproperty(chrom_df, :pair_idx)
+        return chrom_df
+    end
+    pair_ids = getPairIdx(getPrecursors(getSpecLib(search_context)))
+    chrom_df[!, :pair_idx] = Vector{UInt32}(undef, nrow(chrom_df))
+    @inbounds for (idx, prec_idx) in enumerate(chrom_df[!, :precursor_idx])
+        chrom_df[idx, :pair_idx] = extract_pair_idx(pair_ids, prec_idx)
+    end
+    return chrom_df
+end
+
+function annotate_isotopes!(chrom_df::DataFrame,
+                            search_context::SearchContext,
+                            spectra::MassSpecData,
+                            ms_file_idx::Int)
+    if nrow(chrom_df) == 0
+        return chrom_df
+    end
+    quad_model = getQuadTransmissionModel(search_context, ms_file_idx)
+    precursors = getPrecursors(getSpecLib(search_context))
+    get_isotopes_captured!(
+        chrom_df,
+        SeperateTraces(),
+        quad_model,
+        getSearchData(search_context),
+        chrom_df[!, :scan_idx],
+        getCharge(precursors),
+        getMz(precursors),
+        getSulfurCount(precursors),
+        getCenterMzs(spectra),
+        getIsolationWidthMzs(spectra)
+    )
+    return chrom_df
+end
+
+function chromatogram_smoothness(weights::Vector{<:Real}, rts::Vector{<:Real})
+    n = length(weights)
+    if n == 0
+        return 0.0f0
+    end
+    apex_idx = argmax(weights)
+    apex_weight = weights[apex_idx]
+    if apex_weight == 0
+        return 0.0f0
+    end
+    smoothness = 0.0f0
+    for i in 1:n
+        if n == 1
+            smoothness += (-2 * weights[i] / apex_weight)^2
+        elseif i == 1
+            smoothness += (((weights[i+1] - weights[i]) / (rts[i+1] - rts[i]) + (-weights[i]) / (rts[i+1] - rts[i])) / apex_weight)^2
+        elseif i == n
+            smoothness += (((weights[i-1] - weights[i]) / (rts[i] - rts[i-1]) + (-weights[i]) / (rts[i] - rts[i-1])) / apex_weight)^2
+        else
+            smoothness += (((weights[i-1] - weights[i]) / (rts[i] - rts[i-1]) + (weights[i+1] - weights[i]) / (rts[i+1] - rts[i])) / apex_weight)^2
+        end
+    end
+    return Float32(smoothness)
+end
+
+function summarize_chromatograms(chrom_df::DataFrame)
+    if nrow(chrom_df) == 0 || !hasproperty(chrom_df, :isotopes_captured)
+        return DataFrame()
+    end
+    grouped = groupby(chrom_df, [:precursor_idx, :pair_idx, :isotopes_captured])
+    rows = Vector{NamedTuple}(undef, length(grouped))
+    for (i, group) in enumerate(grouped)
+        order = sortperm(group[!, :rt])
+        weights = Float32.(coalesce.(group[order, :weight], 0.0f0))
+        rts = Float32.(coalesce.(group[order, :rt], 0.0f0))
+        smoothness = chromatogram_smoothness(weights, rts)
+        score_vals = Float32.(coalesce.(group[!, :score], 0.0f0))
+        prob_vals = hasproperty(group, :prob) ? Float32.(coalesce.(group[!, :prob], 0.0f0)) : fill(0.5f0, nrow(group))
+        fraction_vals = hasproperty(group, :precursor_fraction_transmitted) ? Float32.(coalesce.(group[!, :precursor_fraction_transmitted], 0.0f0)) : fill(0.0f0, nrow(group))
+        rows[i] = (
+            precursor_idx = first(group[!, :precursor_idx]),
+            pair_idx = first(group[!, :pair_idx]),
+            isotopes_captured = first(group[!, :isotopes_captured]),
+            target = Bool(first(coalesce.(group[!, :target], false))),
+            max_gof = maximum(Float32.(coalesce.(group[!, :gof], 0.0f0))),
+            max_matched_ratio = maximum(Float32.(coalesce.(group[!, :matched_ratio], 0.0f0))),
+            max_fitted_manhattan_distance = maximum(Float32.(coalesce.(group[!, :fitted_manhattan_distance], 0.0f0))),
+            max_fitted_spectral_contrast = maximum(Float32.(coalesce.(group[!, :fitted_spectral_contrast], 0.0f0))),
+            max_scribe = maximum(Float32.(coalesce.(group[!, :scribe], 0.0f0))),
+            max_y_ions = maximum(Float32.(coalesce.(group[!, :y_count], 0.0f0))),
+            y_ions_sum = Float32(sum(coalesce.(group[!, :y_count], 0))),
+            num_scans = Float32(nrow(group)),
+            smoothness = smoothness,
+            max_log2_summed_intensity = maximum(Float32.(coalesce.(group[!, :log2_summed_intensity], 0.0f0))),
+            max_weight = maximum(weights),
+            max_psm_prob = maximum(prob_vals),
+            max_score = maximum(score_vals),
+            precursor_fraction_transmitted = maximum(fraction_vals)
+        )
+    end
+    return DataFrame(rows)
+end
+
+function score_chromatogram_features!(chrom_summary::DataFrame,
+                                      params::FirstPassSearchParameters,
+                                      search_context::SearchContext)
+    n = nrow(chrom_summary)
+    if n == 0
+        return chrom_summary
+    end
+    chrom_summary[!, :scribe] = Float32.(chrom_summary[!, :max_scribe])
+    chrom_summary[!, :intercept] = ones(Float32, n)
+    chrom_summary[!, :score] = zeros(Float32, n)
+    chrom_summary[!, :q_value] = ones(Float16, n)
+    chrom_summary[!, :PEP] = ones(Float16, n)
+    feature_columns = [
+        :scribe,
+        :max_gof,
+        :max_matched_ratio,
+        :max_fitted_manhattan_distance,
+        :max_fitted_spectral_contrast,
+        :smoothness,
+        :num_scans,
+        :max_y_ions,
+        :y_ions_sum,
+        :max_log2_summed_intensity,
+        :max_weight,
+        :max_psm_prob,
+        :max_score,
+        :precursor_fraction_transmitted,
+        :intercept
+    ]
+    fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
+    score_main_search_psms!(
+        chrom_summary,
+        feature_columns,
+        n_train_rounds = params.n_train_rounds_probit,
+        max_iter_per_round = params.max_iter_probit,
+        max_q_value = Float64(params.max_q_value_probit_rescore),
+        fdr_scale_factor = fdr_scale_factor
+    )
+    get_probs!(chrom_summary, chrom_summary[!, :score])
+    get_PEP!(chrom_summary[!, :score], chrom_summary[!, :target], chrom_summary[!, :PEP]; doSort=false, fdr_scale_factor=fdr_scale_factor)
+    return chrom_summary
+end
+
+function chromatogram_precursor_candidates!(chrom_source::DataFrame,
+                                            scored_psms::DataFrame,
+                                            params::FirstPassSearchParameters,
+                                            search_context::SearchContext,
+                                            spectra::MassSpecData,
+                                            ms_file_idx::Int)
+    if nrow(chrom_source) == 0 || nrow(scored_psms) == 0
+        return (Set{UInt32}(), 0, 0)
+    end
+    scores_df = select(scored_psms, [:precursor_idx, :scan_idx, :score, :prob])
+    chrom_data = leftjoin(chrom_source, scores_df, on=[:precursor_idx, :scan_idx]; makeunique=true)
+    assign_pair_indices!(chrom_data, search_context)
+    annotate_isotopes!(chrom_data, search_context, spectra, ms_file_idx)
+    chrom_summary = summarize_chromatograms(chrom_data)
+    chrom_summary = score_chromatogram_features!(chrom_summary, params, search_context)
+    if nrow(chrom_summary) == 0
+        return (Set{UInt32}(), 0, 0)
+    end
+    passing_mask = chrom_summary[!, :PEP] .<= Float16(params.max_PEP)
+    passing = chrom_summary[passing_mask, :]
+    targets = Set{UInt32}(passing[passing[!, :target], :precursor_idx])
+    decoys = Set{UInt32}(passing[.!passing[!, :target], :precursor_idx])
+    return (Set{UInt32}(passing[!, :precursor_idx]), length(targets), length(decoys))
 end
 
 """
