@@ -318,7 +318,7 @@ function process_file!(
             decoy_mask_enter = .!target_mask_enter
             target_stats_enter = compute_psm_stats(psms, target_mask_enter)
             decoy_stats_enter = compute_psm_stats(psms, decoy_mask_enter)
-            @user_info "FirstPassSearch file $(file_label) entering probit regression: " *
+            @user_info "FirstPassSearch file $(file_label) entering LightGBM rescoring: " *
                 "targets=$(target_stats_enter.spectra) spectra (" *
                 "$(target_stats_enter.precursor_windows) precursor+isolation combos, " *
                 "$(target_stats_enter.precursors) unique precursors); " *
@@ -389,7 +389,7 @@ function process_file!(
     end
 
     """
-    Score PSMs using probit model.
+    Score PSMs using a LightGBM model.
     """
     function score_psms!(
         psms::DataFrame,

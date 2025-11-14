@@ -127,20 +127,20 @@ end
                            max_q_value::Float64=0.01,
                            fdr_scale_factor::Float32=1.0f0)
 
-Performs iterative probit regression scoring of PSMs.
+Iteratively score PSMs with a LightGBM classifier.
 
 # Arguments
 - `psms`: DataFrame containing PSMs to score
 - `column_names`: Column names to use for scoring
-- `n_train_rounds`: Number of training iterations
-- `max_iter_per_round`: Maximum iterations per training round
+- `n_train_rounds`: Number of training iterations (semi-supervised rounds)
+- `max_iter_per_round`: Boosting rounds per LightGBM fit
 - `max_q_value`: Maximum q-value threshold for filtering
 - `fdr_scale_factor`: Scale factor to correct for library target/decoy ratio
 
 # Process
-1. First round: Trains on all data
-2. Subsequent rounds: Trains on decoys and high-scoring targets
-3. Updates scores and q-values after each round
+1. Initialize q-values from the `scribe` score for the first round
+2. Train LightGBM on high-confidence targets plus all decoys
+3. Update probabilities, q-values, and repeat for remaining rounds
 """
 function score_main_search_psms!(psms::DataFrame, column_names::Vector{Symbol};
                              n_train_rounds::Int64 = 2,
@@ -149,49 +149,81 @@ function score_main_search_psms!(psms::DataFrame, column_names::Vector{Symbol};
                              fdr_scale_factor::Float32 = 1.0f0
 )
 
-    β = zeros(Float64, length(column_names));
-    best_psms = nothing#ones(Bool, size(psms, 1))
-
-    tasks_per_thread = 10
-    M = size(psms, 1)
-    chunk_size = max(1, M ÷ (tasks_per_thread * Threads.nthreads()))
-    data_chunks = partition(1:M, chunk_size) # partition your data into chunks
-
-    for i in range(1, n_train_rounds)
-        if i < 2 #Train on top scribe data during first round
-            get_qvalues!(psms[!,:scribe], psms[!,:target], psms[!,:q_value]; fdr_scale_factor = fdr_scale_factor)
-        end
-
-        if i < n_train_rounds #Get Data to train on
-            best_psms = ((psms[!,:q_value].<=max_q_value).&(psms[!,:target])) .| (psms[!,:target].==false);
-        end
-
-        psms_targets = psms[best_psms,:target]
-        M = size(psms_targets, 1)
-        sub_chunk_size = max(1, M ÷ (tasks_per_thread * Threads.nthreads()))
-        sub_data_chunks = partition(1:M, sub_chunk_size) # partition your data into chunks that
-        β = ProbitRegression(β, psms[best_psms,column_names], psms_targets, sub_data_chunks, max_iter = max_iter_per_round);
-        ModelPredict!(psms[!,:score], psms[!,column_names], β, data_chunks); #Get Z-scores 
+    n_psms = nrow(psms)
+    if n_psms == 0
+        return
     end
 
-    return 
+    # Default to using every observation the first time through the loop.
+    best_psms = trues(n_psms)
+
+    for iter in 1:n_train_rounds
+        if iter == 1
+            # Bootstrap semi-supervised training with the library scribe score.
+            get_qvalues!(psms[!, :scribe], psms[!, :target], psms[!, :q_value];
+                         fdr_scale_factor = fdr_scale_factor)
+        else
+            # Use LightGBM scores from the previous iteration.
+            get_qvalues!(psms[!, :score], psms[!, :target], psms[!, :q_value];
+                         fdr_scale_factor = fdr_scale_factor)
+        end
+
+        if iter < n_train_rounds
+            best_psms = ((psms[!, :q_value] .<= max_q_value) .& psms[!, :target]) .|
+                        .!psms[!, :target]
+        end
+
+        train_frame = psms[best_psms, column_names]
+        labels = psms[best_psms, :target]
+
+        classifier = build_lightgbm_classifier(
+            num_iterations = max_iter_per_round,
+            learning_rate = 0.1,
+            max_depth = 6,
+            num_leaves = 31,
+            feature_fraction = 0.7,
+            bagging_fraction = 0.7,
+            bagging_freq = 1,
+            min_data_in_leaf = 20,
+            min_gain_to_split = 0.0,
+            lambda_l2 = 1.0,
+        )
+
+        model = fit_lightgbm_model(classifier, train_frame, labels; positive_label = true)
+        predictions = lightgbm_predict(model, psms[:, column_names]; output_type = Float32)
+        psms[!, :score] = predictions
+
+        # Update q-values so subsequent iterations refine the positive set.
+        get_qvalues!(psms[!, :score], psms[!, :target], psms[!, :q_value];
+                     fdr_scale_factor = fdr_scale_factor)
+    end
+
+    return
 end
 
 """
     get_probs!(psms::DataFrame, psms_scores::Vector{Float32})
 
-Calculates probability scores for PSMs based on their Z-scores using error function.
+Populate the probability column for scored PSMs.
 
 # Arguments
 - `psms`: DataFrame to modify
-- `psms_scores`: Vector of PSM Z-scores
+- `psms_scores`: Vector of PSM scores (either probabilities or z-scores)
 
-Adds 'prob' column to psms DataFrame containing probability scores.
-Uses parallel processing for efficiency.
+If the incoming scores are already probabilities, they are copied directly.
+Otherwise the scores are interpreted as z-scores and converted using the
+standard normal CDF. Uses parallel processing for efficiency when conversion
+is required.
 """
 function get_probs!(psms::DataFrame,
                     psms_scores::Vector{Float32}
 )
+
+    # If scores already represent probabilities, store them directly.
+    if all(x -> !isnan(x) && 0f0 <= x <= 1f0, psms_scores)
+        psms[!, :prob] = copy(psms_scores)
+        return nothing
+    end
 
     psms_probs = zeros(Float32, size(psms, 1))
     tasks_per_thread = 10
