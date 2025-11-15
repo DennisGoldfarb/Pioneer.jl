@@ -71,6 +71,8 @@ const ADVANCED_FEATURE_SET = [
     :max_gof,
     :fitted_spectral_contrast,
     :spectral_contrast,
+    :fragment_coverage,
+    :unique_fragment_coverage,
     :max_matched_ratio,
     :err_norm,
     :poisson,
@@ -117,7 +119,7 @@ const REDUCED_FEATURE_SET = [
     # Quality metrics
     :max_fitted_manhattan_distance, :max_fitted_spectral_contrast,
     :max_matched_residual, :max_unmatched_residual, :max_gof,
-    :fitted_spectral_contrast, :spectral_contrast, :max_matched_ratio,
+    :fitted_spectral_contrast, :spectral_contrast, :fragment_coverage, :unique_fragment_coverage, :max_matched_ratio,
     :err_norm, :poisson, :weight_qbin, :log2_intensity_explained, :tic_qbin, :num_scans,
     :smoothness, :percent_theoretical_ignored, :scribe, :max_scribe,
     # MS1 features
@@ -156,7 +158,9 @@ const MINIMAL_FEATURE_SET = [
     :max_matched_residual,
     :max_unmatched_residual,
     :err_norm,
-    :log2_intensity_explained
+    :log2_intensity_explained,
+    :fragment_coverage,
+    :unique_fragment_coverage
 ]
 
 """
@@ -238,6 +242,8 @@ function create_model_configurations(ms1_scoring::Bool = true)
                 :scribe,
                 :irt_error,
                 :err_norm,
+                :fragment_coverage,
+                :unique_fragment_coverage,
                 :y_count,
                 :tic
             ], [:intercept]),
