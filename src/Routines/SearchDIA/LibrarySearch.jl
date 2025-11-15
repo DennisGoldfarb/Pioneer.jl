@@ -60,7 +60,8 @@ function searchFragmentIndex(
             irt_hi,
             mem,
             getQuadTransmissionFunction(qtm, getCenterMz(spectra, scan_idx), getIsolationWidthMz(spectra, scan_idx)),
-            getIsotopeErrBounds(params)
+            getIsotopeErrBounds(params),
+            scan_idx
         )
 
         # Filter precursor matches based on score

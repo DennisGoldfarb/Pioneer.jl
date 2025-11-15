@@ -285,20 +285,24 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
     return lower_bound_guess, upper_bound_guess
 end
 
-function searchScan!(prec_id_to_score::Counter{UInt32, UInt8}, 
+function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
                     rt_bins::AbstractArray{FragIndexBin},
                     frag_bins::AbstractArray{FragIndexBin},
                     fragments::AbstractArray{IndexFragment},
-                    masses::AbstractArray{Union{Missing, U}}, 
-                    intensities::AbstractArray{Union{Missing, U}}, 
+                    masses::AbstractArray{Union{Missing, U}},
+                    intensities::AbstractArray{Union{Missing, U}},
                     rt_bin_idx::Int64,
-                    irt_high::Float32, 
+                    irt_high::Float32,
                     mass_err_model::MassErrorModel,
                     quad_transmission_func::QuadTransmissionFunction,
-                    isotope_err_bounds::Tuple{UInt8, UInt8}
+                    isotope_err_bounds::Tuple{UInt8, UInt8},
+                    scan_idx::Int64
                     ) where {U<:AbstractFloat}
     prec_min = U(getPrecMinBound(quad_transmission_func) - NEUTRON*first(isotope_err_bounds)/2)
     prec_max = U(getPrecMaxBound(quad_transmission_func) + NEUTRON*last(isotope_err_bounds)/2)
+    target_scan_idx = 108651
+    target_precursor_idx = UInt32(2794202)
+    target_precursor_index = Int(target_precursor_idx)
 
     #@inbounds @fastmath while getLow(rt_bins[rt_bin_idx]) < irt_high
     while getLow(rt_bins[rt_bin_idx]) < irt_high
@@ -307,7 +311,15 @@ function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
         min_frag_bin, max_frag_bin = first(sub_bin_range), last(sub_bin_range)
         lower_bound_guess, upper_bound_guess = min_frag_bin, min_frag_bin
 
-        for mass in masses
+        for (mass_idx, mass) in enumerate(masses)
+            if ismissing(mass)
+                if scan_idx == target_scan_idx
+                    score = target_precursor_index <= length(prec_id_to_score.counts) ?
+                            Int(getCount(prec_id_to_score, target_precursor_idx)) : missing
+                    @info "Target precursor score" scan_idx=scan_idx precursor_idx=target_precursor_idx mass_index=mass_idx mass=missing score=score
+                end
+                continue
+            end
             #Get intensity dependent fragment tolerance.
             corrected_mz = getCorrectedMz(mass_err_model, mass)
             frag_min, frag_max = getMzBoundsReverse(mass_err_model, corrected_mz)
@@ -320,10 +332,15 @@ function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
                                             frag_bins,
                                             fragments,
                                             frag_min, 
-                                            frag_max, 
-                                            prec_min, 
+                                            frag_max,
+                                            prec_min,
                                             prec_max
                                         )
+            if scan_idx == target_scan_idx
+                score = target_precursor_index <= length(prec_id_to_score.counts) ?
+                        Int(getCount(prec_id_to_score, target_precursor_idx)) : missing
+                @info "Target precursor score" scan_idx=scan_idx precursor_idx=target_precursor_idx mass_index=mass_idx mass=Float64(mass) score=score
+            end
         end
 
         rt_bin_idx += 1
