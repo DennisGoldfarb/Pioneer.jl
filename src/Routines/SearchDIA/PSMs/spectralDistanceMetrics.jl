@@ -168,10 +168,11 @@ function computeMetricsFor(H::SparseArray{Ti,T}, col, included_indices) where {T
         h_sqrt_sum += sqrt(H.nzval[i])
         x_sqrt_sum += sqrt(H.x[i])#/Xsum
 
-        transformed_intensity = sqrt(max(H.x[i], zero(T)))
-        intensity_denominator += transformed_intensity
+        transformed_observed = sqrt(max(H.x[i], zero(T)))
+        transformed_theoretical = sqrt(max(H.nzval[i], zero(T)))
+        intensity_denominator += transformed_theoretical
         if H.matched[i]
-            intensity_numerator += transformed_intensity
+            intensity_numerator += transformed_observed
         end
 
         h2_norm += H.nzval[i]^2
