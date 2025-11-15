@@ -389,6 +389,7 @@ function summarize_results!(
                 second_pass_folder,
                 valid_second_pass_psms,
                 getPrecursors(getSpecLib(search_context)),
+                getFragmentLookupTable(getSpecLib(search_context)),
                 params.match_between_runs,
                 params.max_q_value_lightgbm_rescore,
                 params.max_q_value_mbr_itr,

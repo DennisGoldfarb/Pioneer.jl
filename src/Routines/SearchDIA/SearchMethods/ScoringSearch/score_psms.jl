@@ -25,9 +25,82 @@ const MAX_FOR_MODEL_SELECTION = 200_000
 const MAX_FOR_MODEL_SELECTION_PSMS = MAX_FOR_MODEL_SELECTION
 
 """
-    score_precursor_isotope_traces(second_pass_folder::String, 
+    recompute_fragment_coverages!(psms::DataFrame, fragment_lookup::LibraryFragmentLookup)
+
+Recompute fragment coverage metrics using second-pass search outputs.
+
+Adds/overwrites two columns:
+- `:fragment_coverage`: Fraction of predicted fragments (including isotopes) observed
+- `:unique_fragment_coverage`: Fraction of unique non-isotopic fragments observed
+
+Fragment definitions are taken from the provided library fragment lookup so the
+coverage metrics align with the fragments available during the second pass.
+"""
+function recompute_fragment_coverages!(
+    psms::DataFrame,
+    fragment_lookup::LibraryFragmentLookup,
+)
+    if nrow(psms) == 0 || !hasproperty(psms, :precursor_idx)
+        return psms
+    end
+
+    observed_columns = Dict{Symbol,Union{AbstractVector{<:Number},Nothing}}(
+        :b_count => hasproperty(psms, :b_count) ? psms.b_count : nothing,
+        :y_count => hasproperty(psms, :y_count) ? psms.y_count : nothing,
+        :p_count => hasproperty(psms, :p_count) ? psms.p_count : nothing,
+        :non_cannonical_count => hasproperty(psms, :non_cannonical_count) ? psms.non_cannonical_count : nothing,
+        :isotope_count => hasproperty(psms, :isotope_count) ? psms.isotope_count : nothing,
+    )
+
+    fragments = getFragments(fragment_lookup)
+    precursor_totals = Dict{UInt32,Tuple{Int,Int}}()
+
+    for prec_idx in unique(psms[!, :precursor_idx])
+        frag_range = getPrecFragRange(fragment_lookup, Int(prec_idx))
+        total_predicted = length(frag_range)
+
+        unique_keys = Set{Tuple{UInt16,UInt8,UInt8}}()
+        for frag_idx in frag_range
+            frag = fragments[frag_idx]
+            if !frag.is_isotope
+                push!(unique_keys, (frag.ion_type, frag.ion_position, frag.frag_charge))
+            end
+        end
+        precursor_totals[prec_idx] = (total_predicted, length(unique_keys))
+    end
+
+    n = nrow(psms)
+    fragment_cov = Vector{Float32}(undef, n)
+    unique_fragment_cov = Vector{Float32}(undef, n)
+
+    for i in 1:n
+        prec_idx = psms.precursor_idx[i]
+        total_predicted, unique_predicted = precursor_totals[prec_idx]
+
+        matched_unique = zero(Float32)
+        matched_unique += observed_columns[:b_count] === nothing ? 0f0 : Float32(observed_columns[:b_count][i])
+        matched_unique += observed_columns[:y_count] === nothing ? 0f0 : Float32(observed_columns[:y_count][i])
+        matched_unique += observed_columns[:p_count] === nothing ? 0f0 : Float32(observed_columns[:p_count][i])
+        matched_unique += observed_columns[:non_cannonical_count] === nothing ? 0f0 : Float32(observed_columns[:non_cannonical_count][i])
+
+        matched_total = matched_unique
+        matched_total += observed_columns[:isotope_count] === nothing ? 0f0 : Float32(observed_columns[:isotope_count][i])
+
+        fragment_cov[i] = total_predicted > 0 ? clamp(matched_total / total_predicted, 0f0, 1f0) : 0f0
+        unique_fragment_cov[i] = unique_predicted > 0 ? clamp(matched_unique / unique_predicted, 0f0, 1f0) : 0f0
+    end
+
+    psms[!, :fragment_coverage] = fragment_cov
+    psms[!, :unique_fragment_coverage] = unique_fragment_cov
+
+    return psms
+end
+
+"""
+    score_precursor_isotope_traces(second_pass_folder::String,
                                   file_paths::Vector{String},
                                   precursors::LibraryPrecursors,
+                                  fragment_lookup::LibraryFragmentLookup,
                                   match_between_runs::Bool,
                                   max_q_value_lightgbm_rescore::Float32,
                                   max_q_value_mbr_itr::Float32,
@@ -45,6 +118,7 @@ Main entry point for PSM scoring with automatic model selection based on dataset
 - `second_pass_folder`: Folder containing second pass PSM files
 - `file_paths`: Vector of PSM file paths
 - `precursors`: Library precursors
+- `fragment_lookup`: Fragment lookup table used to derive theoretical fragment counts
 - `match_between_runs`: Whether to perform match between runs
 - `max_q_value_lightgbm_rescore`: Max q-value for LightGBM rescoring
 - `max_q_value_mbr_itr`: Max q-value for MBR transfers retained during iterative training (ITR)
@@ -61,6 +135,7 @@ function score_precursor_isotope_traces(
     second_pass_folder::String,
     file_paths::Vector{String},
     precursors::LibraryPrecursors,
+    fragment_lookup::LibraryFragmentLookup,
     match_between_runs::Bool,
     max_q_value_lightgbm_rescore::Float32,
     max_q_value_mbr_itr::Float32,
@@ -78,6 +153,7 @@ function score_precursor_isotope_traces(
         # Case 1: Out-of-memory processing with default LightGBM (DISABLED)
         @user_info "Using out-of-memory processing for $psms_count PSMs (≥ $max_psms_in_memory)"
         best_psms = sample_psms_for_lightgbm(second_pass_folder, psms_count, max_psms_in_memory)
+        recompute_fragment_coverages!(best_psms, fragment_lookup)
 
         # Add quantile-binned features before training
         features_to_bin = [:prec_mz, :irt_pred, :weight, :tic]
@@ -98,6 +174,7 @@ function score_precursor_isotope_traces(
     else
         # In-memory processing - load PSMs first
         best_psms = load_psms_for_lightgbm(second_pass_folder)
+        recompute_fragment_coverages!(best_psms, fragment_lookup)
 
         # Add quantile-binned features before training
         features_to_bin = [:prec_mz, :irt_pred, :weight, :tic]
