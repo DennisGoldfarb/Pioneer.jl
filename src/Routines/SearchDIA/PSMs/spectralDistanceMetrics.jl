@@ -30,11 +30,12 @@ struct SpectralScoresComplex{T<:AbstractFloat} <: SpectralScores{T}
     #entropy_score::T
 end
 
-struct SpectralScoresSimple{T<:AbstractFloat} <: SpectralScores{T} 
+struct SpectralScoresSimple{T<:AbstractFloat} <: SpectralScores{T}
     scribe::T
     city_block::T
     spectral_contrast::T
     matched_ratio::T
+    fragment_coverage::T
     entropy_score::T
     percent_theoretical_ignored::T
 end
@@ -70,12 +71,12 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
             tot_pred_signal += H.nzval[i]
         end
 
-        scribe_best, city_best, cosine_similarity_best, matched_ratio_best, ent_best, next_worst_pos, next_worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included)
+        scribe_best, city_best, cosine_similarity_best, matched_ratio_best, fragment_coverage_best, ent_best, next_worst_pos, next_worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included)
         
         percent_theoretical_ignored = 0.0f0
         while (num_matching_peaks > min_frags) && (next_worst_pos > 0)
             deleteat!(included, next_worst_pos)
-            scribe, city, cosine_similarity, matched_ratio, ent, worst_pos, worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included)
+            scribe, city, cosine_similarity, matched_ratio, fragment_coverage, ent, worst_pos, worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included)
 
             # If ignoring the worst peak doesn't increase the scribe score enough, then we're done
             if (scribe < (scribe_best * relative_improvement_threshold))
@@ -89,18 +90,21 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
             city_best = city
             cosine_similarity_best = cosine_similarity
             matched_ratio_best = matched_ratio
+            fragment_coverage_best = fragment_coverage
             ent_best = ent
             next_worst_pos = worst_pos
             next_worst_pred_signal = worst_pred_signal
         end
 
+        percent_theoretical_fraction = tot_pred_signal > 0 ? percent_theoretical_ignored / tot_pred_signal : 0.0
         spectral_scores[col] = SpectralScoresSimple(
                     Float16(scribe_best),
                     Float16(city_best),
                     Float16(cosine_similarity_best),
                     Float16(matched_ratio_best),
+                    Float16(fragment_coverage_best),
                     Float16(ent_best),
-                    Float16(percent_theoretical_ignored / tot_pred_signal)
+                    Float16(percent_theoretical_fraction)
                 )
 
     end
@@ -210,7 +214,11 @@ function computeMetricsFor(H::SparseArray{Ti,T}, col, included_indices) where {T
     ent_val = -1.0 * getEntropy(H, col, included_indices)
     worst_intensity_ignored = worst_idx > 0 ? H.nzval[worst_idx] : 0.0
 
-    return (scribe_score, city_block_dist, cosine_similarity, matched_ratio, ent_val, worst_pos, worst_intensity_ignored, num_matching_peaks)
+    total_included = length(included_indices)
+    # Raw fraction of predicted fragments that register any observed intensity.
+    fragment_coverage = total_included == 0 ? zero(T) : T(num_matching_peaks) / T(total_included)
+
+    return (scribe_score, city_block_dist, cosine_similarity, matched_ratio, fragment_coverage, ent_val, worst_pos, worst_intensity_ignored, num_matching_peaks)
 end
 
 function getDistanceMetrics(w::Vector{T},
