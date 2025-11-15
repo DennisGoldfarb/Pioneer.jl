@@ -72,6 +72,12 @@ const ADVANCED_FEATURE_SET = [
     :fitted_spectral_contrast,
     :spectral_contrast,
     :max_matched_ratio,
+    :fragment_coverage,
+    :unique_fragment_coverage,
+    :unique_fragment_count,
+    :max_fragment_coverage,
+    :max_unique_fragment_coverage,
+    :max_unique_fragment_count,
     :err_norm,
     :poisson,
     :weight_qbin,      # Quantile-binned version of :weight
@@ -118,6 +124,8 @@ const REDUCED_FEATURE_SET = [
     :max_fitted_manhattan_distance, :max_fitted_spectral_contrast,
     :max_matched_residual, :max_unmatched_residual, :max_gof,
     :fitted_spectral_contrast, :spectral_contrast, :max_matched_ratio,
+    :fragment_coverage, :unique_fragment_coverage, :unique_fragment_count,
+    :max_fragment_coverage, :max_unique_fragment_coverage, :max_unique_fragment_count,
     :err_norm, :poisson, :weight_qbin, :log2_intensity_explained, :tic_qbin, :num_scans,
     :smoothness, :percent_theoretical_ignored, :scribe, :max_scribe,
     # MS1 features
@@ -144,6 +152,7 @@ const PROBIT_FEATURE_SET = [
     :max_matched_residual, :max_unmatched_residual, :max_gof,
     :err_norm, :poisson, :weight, :log2_intensity_explained, :tic, :num_scans,
     :smoothness, :percent_theoretical_ignored, :scribe, :max_scribe,
+    :fragment_coverage, :unique_fragment_coverage, :unique_fragment_count,
     # MS1 features
     :weight_ms1, :gof_ms1, :error_ms1, :ms1_features_missing
     # MBR features added automatically if match_between_runs=true
@@ -156,7 +165,13 @@ const MINIMAL_FEATURE_SET = [
     :max_matched_residual,
     :max_unmatched_residual,
     :err_norm,
-    :log2_intensity_explained
+    :log2_intensity_explained,
+    :fragment_coverage,
+    :unique_fragment_coverage,
+    :unique_fragment_count,
+    :max_fragment_coverage,
+    :max_unique_fragment_coverage,
+    :max_unique_fragment_count
 ]
 
 """
@@ -239,6 +254,12 @@ function create_model_configurations(ms1_scoring::Bool = true)
                 :irt_error,
                 :err_norm,
                 :y_count,
+                :fragment_coverage,
+                :unique_fragment_coverage,
+                :unique_fragment_count,
+                :max_fragment_coverage,
+                :max_unique_fragment_coverage,
+                :max_unique_fragment_count,
                 :tic
             ], [:intercept]),
             Dict(

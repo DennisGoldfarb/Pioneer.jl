@@ -484,7 +484,7 @@ function process_search_results!(
         # Calculate summary scores for each PSM group
         for (key, gpsms) in pairs(groupby(psms, getPsmGroupbyCols(getIsotopeTraceType(params))))
             get_summary_scores!(
-                gpsms, 
+                gpsms,
                 gpsms[!,:weight],
                 gpsms[!,:gof],
                 gpsms[!,:matched_ratio],
@@ -492,6 +492,9 @@ function process_search_results!(
                 gpsms[!,:fitted_spectral_contrast],
                 gpsms[!,:scribe],
                 gpsms[!,:y_count],
+                gpsms[!,:fragment_coverage],
+                gpsms[!,:unique_fragment_coverage],
+                gpsms[!,:unique_fragment_count],
                 getRtIrtModel(search_context, ms_file_idx)
             );
         end

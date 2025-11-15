@@ -397,7 +397,7 @@ function process_file!(
         search_context::SearchContext,
         spectra::MassSpecData)
         column_names = [
-            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage, :unique_fragment_coverage, :percent_theoretical_ignored,
+            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage, :unique_fragment_coverage, :unique_fragment_count, :percent_theoretical_ignored,
             :charge2, :poisson, :irt_error,
             :missed_cleavage,
             :Mox,
@@ -413,6 +413,10 @@ function process_file!(
 
         if maximum(psms.unique_fragment_coverage) == minimum(psms.unique_fragment_coverage)
             deleteat!(column_names, findfirst(==(:unique_fragment_coverage), column_names))
+        end
+
+        if maximum(psms.unique_fragment_count) == minimum(psms.unique_fragment_count)
+            deleteat!(column_names, findfirst(==(:unique_fragment_count), column_names))
         end
 
         if maximum(psms.percent_theoretical_ignored) == 0
@@ -447,7 +451,7 @@ function process_file!(
             )
         catch
             column_names = [
-            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage, :unique_fragment_coverage,
+            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage, :unique_fragment_coverage, :unique_fragment_count,
             :charge2, :poisson, :irt_error, :TIC, :y_count, :err_norm, :spectrum_peak_count, :intercept
             ]
             if maximum(psms.fragment_coverage) == minimum(psms.fragment_coverage)
@@ -455,6 +459,9 @@ function process_file!(
             end
             if maximum(psms.unique_fragment_coverage) == minimum(psms.unique_fragment_coverage)
                 deleteat!(column_names, findfirst(==(:unique_fragment_coverage), column_names))
+            end
+            if maximum(psms.unique_fragment_count) == minimum(psms.unique_fragment_count)
+                deleteat!(column_names, findfirst(==(:unique_fragment_count), column_names))
             end
             score_main_search_psms!(
                 psms,

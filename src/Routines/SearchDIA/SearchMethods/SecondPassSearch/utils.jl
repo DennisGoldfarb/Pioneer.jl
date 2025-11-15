@@ -988,6 +988,9 @@ function init_summary_columns!(
         (:y_ions_sum,               UInt16)
         (:max_y_ions,               UInt16)
         (:max_matched_ratio,        Float16)
+        (:max_fragment_coverage,    Float16)
+        (:max_unique_fragment_coverage, Float16)
+        (:max_unique_fragment_count, Float16)
         (:num_scans,        UInt16)
         (:smoothness,        Float32)
         (:weights,        Vector{Float32})
@@ -1026,6 +1029,9 @@ function get_summary_scores!(
                             fitted_spectral_contrast::AbstractVector{Float16},
                             scribe::AbstractVector{Float16},
                             y_count::AbstractVector{UInt8},
+                            fragment_coverage::AbstractVector{Float16},
+                            unique_fragment_coverage::AbstractVector{Float16},
+                            unique_fragment_count::AbstractVector{Float16},
                             rt_to_irt_interp::RtConversionModel
                         )
 
@@ -1035,6 +1041,9 @@ function get_summary_scores!(
     max_fitted_manhattan_distance = -100.0
     max_fitted_spectral_contrast= -100
     max_scribe = -100
+    max_fragment_coverage = -100.0
+    max_unique_fragment_coverage = -100.0
+    max_unique_fragment_count = -100.0
     count = 0
     y_ions_sum = 0
     max_y_ions = 0
@@ -1069,7 +1078,19 @@ function get_summary_scores!(
         if scribe[i]>max_scribe
             max_scribe = scribe[i]
         end
-    
+
+        if fragment_coverage[i] > max_fragment_coverage
+            max_fragment_coverage = fragment_coverage[i]
+        end
+
+        if unique_fragment_coverage[i] > max_unique_fragment_coverage
+            max_unique_fragment_coverage = unique_fragment_coverage[i]
+        end
+
+        if unique_fragment_count[i] > max_unique_fragment_count
+            max_unique_fragment_count = unique_fragment_count[i]
+        end
+
         y_ions_sum += y_count[i]
         if y_count[i] > max_y_ions
             max_y_ions = y_count[i]
@@ -1102,6 +1123,9 @@ function get_summary_scores!(
     psms.max_fitted_manhattan_distance[apex_scan] = max_fitted_manhattan_distance
     psms.max_fitted_spectral_contrast[apex_scan] = max_fitted_spectral_contrast
     psms.max_scribe[apex_scan] = max_scribe
+    psms.max_fragment_coverage[apex_scan] = max_fragment_coverage
+    psms.max_unique_fragment_coverage[apex_scan] = max_unique_fragment_coverage
+    psms.max_unique_fragment_count[apex_scan] = max_unique_fragment_count
     psms.y_ions_sum[apex_scan] = y_ions_sum
     psms.max_y_ions[apex_scan] = max_y_ions
     psms.num_scans[apex_scan] = length(weight)
