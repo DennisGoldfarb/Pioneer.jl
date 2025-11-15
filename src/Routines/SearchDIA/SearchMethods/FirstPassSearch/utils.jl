@@ -127,20 +127,20 @@ end
                            max_q_value::Float64=0.01,
                            fdr_scale_factor::Float32=1.0f0)
 
-Performs iterative probit regression scoring of PSMs.
+Train a LightGBM model for first-pass PSM scoring.
 
 # Arguments
 - `psms`: DataFrame containing PSMs to score
-- `column_names`: Column names to use for scoring
-- `n_train_rounds`: Number of training iterations
-- `max_iter_per_round`: Maximum iterations per training round
-- `max_q_value`: Maximum q-value threshold for filtering
+- `column_names`: Feature columns used for LightGBM training
+- `n_train_rounds`: Number of semi-supervised refinement rounds
+- `max_iter_per_round`: Boosting iterations per LightGBM round
+- `max_q_value`: Maximum q-value threshold for positive targets during training
 - `fdr_scale_factor`: Scale factor to correct for library target/decoy ratio
 
 # Process
-1. First round: Trains on all data
-2. Subsequent rounds: Trains on decoys and high-scoring targets
-3. Updates scores and q-values after each round
+1. Initializes q-values using the `:scribe` heuristic score
+2. Iteratively trains LightGBM on decoys plus confident targets
+3. Updates scores and q-values after each LightGBM fit
 """
 function score_main_search_psms!(psms::DataFrame, column_names::Vector{Symbol};
                              n_train_rounds::Int64 = 2,
@@ -149,32 +149,74 @@ function score_main_search_psms!(psms::DataFrame, column_names::Vector{Symbol};
                              fdr_scale_factor::Float32 = 1.0f0
 )
 
-    β = zeros(Float64, length(column_names));
-    best_psms = nothing#ones(Bool, size(psms, 1))
+    # Filter out unusable feature columns (all missing, non-finite, or constant)
+    valid_columns = Symbol[]
+    for col in column_names
+        column = psms[!, col]
+        nonmissing = collect(skipmissing(column))
 
-    tasks_per_thread = 10
-    M = size(psms, 1)
-    chunk_size = max(1, M ÷ (tasks_per_thread * Threads.nthreads()))
-    data_chunks = partition(1:M, chunk_size) # partition your data into chunks
-
-    for i in range(1, n_train_rounds)
-        if i < 2 #Train on top scribe data during first round
-            get_qvalues!(psms[!,:scribe], psms[!,:target], psms[!,:q_value]; fdr_scale_factor = fdr_scale_factor)
+        if isempty(nonmissing)
+            continue
         end
 
-        if i < n_train_rounds #Get Data to train on
-            best_psms = ((psms[!,:q_value].<=max_q_value).&(psms[!,:target])) .| (psms[!,:target].==false);
+        if any(x -> x isa AbstractFloat && !isfinite(x), nonmissing)
+            continue
         end
 
-        psms_targets = psms[best_psms,:target]
-        M = size(psms_targets, 1)
-        sub_chunk_size = max(1, M ÷ (tasks_per_thread * Threads.nthreads()))
-        sub_data_chunks = partition(1:M, sub_chunk_size) # partition your data into chunks that
-        β = ProbitRegression(β, psms[best_psms,column_names], psms_targets, sub_data_chunks, max_iter = max_iter_per_round);
-        ModelPredict!(psms[!,:score], psms[!,column_names], β, data_chunks); #Get Z-scores 
+        if length(unique(nonmissing)) <= 1
+            continue
+        end
+
+        push!(valid_columns, col)
     end
 
-    return 
+    if isempty(valid_columns)
+        throw(ArgumentError("No valid LightGBM features available for first-pass scoring"))
+    end
+
+    if length(valid_columns) != length(column_names)
+        column_names = valid_columns
+    end
+
+    feature_frame = psms[:, column_names]
+
+    # Seed q-values with the heuristic scribe score before ML refinement
+    get_qvalues!(psms[!, :scribe], psms[!, :target], psms[!, :q_value]; fdr_scale_factor=fdr_scale_factor)
+
+    scores = psms[!, :score]
+
+    for round in 1:max(n_train_rounds, 1)
+        train_mask = ((psms[!, :q_value] .<= max_q_value) .& psms[!, :target]) .| (.!psms[!, :target])
+
+        if !any(train_mask)
+            break
+        end
+
+        train_features = feature_frame[train_mask, :]
+        train_labels = psms[train_mask, :target]
+
+        classifier = build_lightgbm_classifier(
+            num_iterations = max(1, max_iter_per_round),
+            max_depth = 6,
+            num_leaves = 63,
+            learning_rate = 0.1,
+            feature_fraction = 0.8,
+            bagging_fraction = 0.5,
+            bagging_freq = 1,
+            min_data_in_leaf = 20,
+            min_gain_to_split = 0.0,
+            num_threads = Threads.nthreads(),
+            verbosity = -1,
+        )
+
+        model = fit_lightgbm_model(classifier, train_features, train_labels; positive_label=true)
+        scores .= lightgbm_predict(model, feature_frame; output_type=Float32)
+        psms[!, :score] = scores
+
+        get_qvalues!(psms[!, :score], psms[!, :target], psms[!, :q_value]; fdr_scale_factor=fdr_scale_factor)
+    end
+
+    return
 end
 
 """
