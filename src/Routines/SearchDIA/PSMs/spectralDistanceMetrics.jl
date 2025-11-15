@@ -27,6 +27,7 @@ struct SpectralScoresComplex{T<:AbstractFloat} <: SpectralScores{T}
     matched_ratio::T
     fragment_coverage::T
     unique_fragment_coverage::T
+    unique_fragment_count::T
     scribe::T
     percent_theoretical_ignored::T
     #entropy_score::T
@@ -39,6 +40,7 @@ struct SpectralScoresSimple{T<:AbstractFloat} <: SpectralScores{T}
     matched_ratio::T
     fragment_coverage::T
     unique_fragment_coverage::T
+    unique_fragment_count::T
     entropy_score::T
     percent_theoretical_ignored::T
 end
@@ -81,12 +83,12 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
             tot_pred_signal += H.nzval[i]
         end
 
-        scribe_best, city_best, cosine_similarity_best, matched_ratio_best, fragment_coverage_best, unique_fragment_coverage_best, ent_best, next_worst_pos, next_worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included, row_match_counts)
+        scribe_best, city_best, cosine_similarity_best, matched_ratio_best, fragment_coverage_best, unique_fragment_coverage_best, unique_fragment_count_best, ent_best, next_worst_pos, next_worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included, row_match_counts)
 
         percent_theoretical_ignored = 0.0f0
         while (num_matching_peaks > min_frags) && (next_worst_pos > 0)
             deleteat!(included, next_worst_pos)
-            scribe, city, cosine_similarity, matched_ratio, fragment_coverage, unique_fragment_coverage, ent, worst_pos, worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included, row_match_counts)
+            scribe, city, cosine_similarity, matched_ratio, fragment_coverage, unique_fragment_coverage, unique_fragment_count, ent, worst_pos, worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included, row_match_counts)
 
             # If ignoring the worst peak doesn't increase the scribe score enough, then we're done
             if (scribe < (scribe_best * relative_improvement_threshold))
@@ -102,6 +104,7 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
             matched_ratio_best = matched_ratio
             fragment_coverage_best = fragment_coverage
             unique_fragment_coverage_best = unique_fragment_coverage
+            unique_fragment_count_best = unique_fragment_count
             ent_best = ent
             next_worst_pos = worst_pos
             next_worst_pred_signal = worst_pred_signal
@@ -115,6 +118,7 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
                     Float16(matched_ratio_best),
                     Float16(fragment_coverage_best),
                     Float16(unique_fragment_coverage_best),
+                    Float16(unique_fragment_count_best),
                     Float16(ent_best),
                     Float16(percent_theoretical_fraction)
                 )
@@ -235,7 +239,7 @@ function computeMetricsFor(H::SparseArray{Ti,T}, col, included_indices, row_matc
     fragment_coverage = total_included == 0 ? zero(T) : T(num_matching_peaks) / T(total_included)
     unique_fragment_coverage = total_included == 0 ? zero(T) : T(unique_matching_peaks) / T(total_included)
 
-    return (scribe_score, city_block_dist, cosine_similarity, matched_ratio, fragment_coverage, unique_fragment_coverage, ent_val, worst_pos, worst_intensity_ignored, num_matching_peaks)
+    return (scribe_score, city_block_dist, cosine_similarity, matched_ratio, fragment_coverage, unique_fragment_coverage, unique_matching_peaks, ent_val, worst_pos, worst_intensity_ignored, num_matching_peaks)
 end
 
 function getDistanceMetrics(w::Vector{T},
@@ -307,9 +311,10 @@ function getDistanceMetrics(w::Vector{T},
             if best === nothing || scr > best.scribe * relative_improvement_threshold
                 fragment_cov = total_considered == 0 ? zero(Float32) : Float32(matched_count / total_considered)
                 unique_fragment_cov = total_considered == 0 ? zero(Float32) : Float32(unique_matched_count / total_considered)
+                unique_fragment_count = Float32(unique_matched_count)
                 best = (scribe=scr, sc=spectral_contrast, fsc=fitted_spectral_contrast, gof=gof, mmr=max_matched_residual,
                         mur=max_unmatched_residual, fmd=fitted_manhattan_distance, mr=matched_ratio,
-                        fc=fragment_cov, ufc=unique_fragment_cov)
+                        fc=fragment_cov, ufc=unique_fragment_cov, ufc_count=unique_fragment_count)
                 pct_ignored += worst_pred
             else
                 break                     # improvement too small
@@ -332,6 +337,7 @@ function getDistanceMetrics(w::Vector{T},
             Float16(best.mr),                         # matched / unmatched
             Float16(best.fc),                         # fragment coverage
             Float16(best.ufc),                        # unique fragment coverage
+            Float16(best.ufc_count),                  # unique fragment count
             Float16(best.scribe),                     # scribe
             Float16(pct_ignored)                      # percent_theoretical_ignored
         )
