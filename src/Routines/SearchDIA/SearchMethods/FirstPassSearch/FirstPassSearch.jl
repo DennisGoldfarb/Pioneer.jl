@@ -397,7 +397,7 @@ function process_file!(
         search_context::SearchContext,
         spectra::MassSpecData)
         column_names = [
-            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage, :percent_theoretical_ignored,
+            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage, :intensity_coverage, :percent_theoretical_ignored,
             :charge2, :poisson, :irt_error,
             :missed_cleavage,
             :Mox,
@@ -409,6 +409,10 @@ function process_file!(
         # Avoid singular error if no peaks were ignored
         if maximum(psms.fragment_coverage) == minimum(psms.fragment_coverage)
             deleteat!(column_names, findfirst(==(:fragment_coverage), column_names))
+        end
+
+        if maximum(psms.intensity_coverage) == minimum(psms.intensity_coverage)
+            deleteat!(column_names, findfirst(==(:intensity_coverage), column_names))
         end
 
         if maximum(psms.percent_theoretical_ignored) == 0
@@ -433,11 +437,14 @@ function process_file!(
             )
         catch
             column_names = [
-            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage,
+            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage, :intensity_coverage,
             :charge2, :poisson, :irt_error, :TIC, :y_count, :err_norm, :spectrum_peak_count, :intercept
             ]
             if maximum(psms.fragment_coverage) == minimum(psms.fragment_coverage)
                 deleteat!(column_names, findfirst(==(:fragment_coverage), column_names))
+            end
+            if maximum(psms.intensity_coverage) == minimum(psms.intensity_coverage)
+                deleteat!(column_names, findfirst(==(:intensity_coverage), column_names))
             end
             score_main_search_psms!(
                 psms,
@@ -451,7 +458,8 @@ function process_file!(
         # Process scores
        
         select!(psms, [:ms_file_idx, :score, :precursor_idx, :scan_idx,
-            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :target])
+            :q_value, :log2_summed_intensity, :fragment_coverage, :intensity_coverage,
+            :irt, :rt, :irt_predicted, :target])
         get_probs!(psms, psms[!,:score])
     end
 
@@ -584,7 +592,8 @@ function process_search_results!(
     Arrow.write(
         temp_path,
         select!(psms, [:ms_file_idx, :scan_idx, :precursor_idx, :rt,
-            :irt_predicted, :q_value, :score, :prob, :scan_count])
+            :irt_predicted, :fragment_coverage, :intensity_coverage,
+            :q_value, :score, :prob, :scan_count])
     )
     setFirstPassPsms!(getMSData(search_context), ms_file_idx, temp_path)
 

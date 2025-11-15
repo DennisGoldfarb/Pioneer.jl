@@ -123,6 +123,7 @@ abstract type SpectralScores{T<:AbstractFloat} end
 **SpectralScoresSimple** - Basic spectral similarity
 - scribe, city_block, spectral_contrast
 - matched_ratio, fragment_coverage (fraction of predicted fragments with any observed intensity)
+- intensity_coverage (log-scaled coverage of observed intensity concentrated in matched ions)
 - entropy_score
 - Used with SimpleScoredPSM
 
