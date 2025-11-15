@@ -397,9 +397,9 @@ function process_file!(
         search_context::SearchContext,
         spectra::MassSpecData)
         column_names = [
-            :spectral_contrast, :city_block, :entropy_score, :scribe, :percent_theoretical_ignored,
-            :charge2, :poisson, :irt_error, 
-            :missed_cleavage, 
+            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage, :percent_theoretical_ignored,
+            :charge2, :poisson, :irt_error,
+            :missed_cleavage,
             :Mox,
             #:charge, Only works with charge 2 if at least 3 charge states presence. otherwise singular error
             #:b_count, might be good for non-tryptic enzymes
@@ -407,6 +407,10 @@ function process_file!(
         ]
 
         # Avoid singular error if no peaks were ignored
+        if maximum(psms.fragment_coverage) == minimum(psms.fragment_coverage)
+            deleteat!(column_names, findfirst(==(:fragment_coverage), column_names))
+        end
+
         if maximum(psms.percent_theoretical_ignored) == 0
             deleteat!(column_names, findfirst(==(:percent_theoretical_ignored), column_names))
         end
@@ -429,9 +433,12 @@ function process_file!(
             )
         catch
             column_names = [
-            :spectral_contrast, :city_block, :entropy_score, :scribe,
+            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage,
             :charge2, :poisson, :irt_error, :TIC, :y_count, :err_norm, :spectrum_peak_count, :intercept
             ]
+            if maximum(psms.fragment_coverage) == minimum(psms.fragment_coverage)
+                deleteat!(column_names, findfirst(==(:fragment_coverage), column_names))
+            end
             score_main_search_psms!(
                 psms,
                 column_names,
