@@ -78,9 +78,11 @@ struct ComplexScoredPSM{H,L<:AbstractFloat} <: ScoredPSM{H,L}
     fitted_spectral_contrast::L
     gof::L
     max_matched_residual::L
-    max_unmatched_residual::L 
-    fitted_manhattan_distance::L 
-    matched_ratio::L 
+    max_unmatched_residual::L
+    fitted_manhattan_distance::L
+    matched_ratio::L
+    fragment_coverage::L
+    unique_fragment_coverage::L
     percent_theoretical_ignored::L
     scribe::L
     #entropy_score::L
@@ -314,6 +316,8 @@ function Score!(scored_psms::Vector{ComplexScoredPSM{H, L}},
             spectral_scores[scores_idx].max_unmatched_residual,
             spectral_scores[scores_idx].fitted_manhattan_distance,
             spectral_scores[scores_idx].matched_ratio,
+            spectral_scores[scores_idx].fragment_coverage,
+            spectral_scores[scores_idx].unique_fragment_coverage,
             spectral_scores[scores_idx].percent_theoretical_ignored,
             spectral_scores[scores_idx].scribe,
             #spectral_scores[scores_idx].entropy_score,

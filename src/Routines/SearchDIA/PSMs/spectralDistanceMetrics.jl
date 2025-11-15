@@ -25,6 +25,8 @@ struct SpectralScoresComplex{T<:AbstractFloat} <: SpectralScores{T}
     max_unmatched_residual::T
     fitted_manhattan_distance::T
     matched_ratio::T
+    fragment_coverage::T
+    unique_fragment_coverage::T
     scribe::T
     percent_theoretical_ignored::T
     #entropy_score::T
@@ -244,6 +246,13 @@ function getDistanceMetrics(w::Vector{T},
     min_frags::Int = 3
    ) where {Ti<:Integer,T,U<:AbstractFloat}
 
+    row_match_counts = zeros(Int, max(H.m, 0))
+    @inbounds @fastmath for idx in range(1, H.n_vals)
+        if H.x[idx] > 0
+            row_match_counts[H.rowval[idx]] += 1
+        end
+    end
+
     # zero residual vector (can be re‑used between columns)
     fill!(r, zero(T))
 
@@ -290,12 +299,17 @@ function getDistanceMetrics(w::Vector{T},
         num_matching_peaks = min_frags
 
         while num_matching_peaks ≥ min_frags
-            scr, spectral_contrast, fitted_spectral_contrast, gof, max_matched_residual, max_unmatched_residual, 
+            scr, spectral_contrast, fitted_spectral_contrast, gof, max_matched_residual, max_unmatched_residual,
             fitted_manhattan_distance, matched_ratio, worst_pos, worst_pred, num_matching_peaks = computeFittedMetricsFor(w, H, r, col, incl)
 
+            matched_count, unique_matched_count, total_considered = compute_fragment_coverage_counts(H, incl, row_match_counts)
+
             if best === nothing || scr > best.scribe * relative_improvement_threshold
-                best = (scribe=scr, sc=spectral_contrast, fsc=fitted_spectral_contrast, gof=gof, mmr=max_matched_residual, 
-                        mur=max_unmatched_residual, fmd=fitted_manhattan_distance, mr=matched_ratio)
+                fragment_cov = total_considered == 0 ? zero(Float32) : Float32(matched_count / total_considered)
+                unique_fragment_cov = total_considered == 0 ? zero(Float32) : Float32(unique_matched_count / total_considered)
+                best = (scribe=scr, sc=spectral_contrast, fsc=fitted_spectral_contrast, gof=gof, mmr=max_matched_residual,
+                        mur=max_unmatched_residual, fmd=fitted_manhattan_distance, mr=matched_ratio,
+                        fc=fragment_cov, ufc=unique_fragment_cov)
                 pct_ignored += worst_pred
             else
                 break                     # improvement too small
@@ -316,6 +330,8 @@ function getDistanceMetrics(w::Vector{T},
             Float16(best.mur),                        # max unmatched residual (−log)
             Float16(best.fmd),                        # fitted manhattan (−log)
             Float16(best.mr),                         # matched / unmatched
+            Float16(best.fc),                         # fragment coverage
+            Float16(best.ufc),                        # unique fragment coverage
             Float16(best.scribe),                     # scribe
             Float16(pct_ignored)                      # percent_theoretical_ignored
         )
@@ -453,9 +469,35 @@ function computeFittedMetricsFor(w::Vector{T}, H::SparseArray{Ti,T}, r::Vector{T
             fitted_manhattan_distance, matched_ratio, worst_pos, worst_intensity_ignored, num_matching_peaks)
 end
 
-function getDistanceMetrics(w::Vector{T}, 
-                            r::Vector{T}, 
-                            H::SparseArray{Ti,T}, 
+function compute_fragment_coverage_counts(
+    H::SparseArray{Ti,T},
+    indices::Vector{Int},
+    row_match_counts::Vector{Int}
+) where {Ti<:Integer,T<:AbstractFloat}
+    matched = 0
+    unique_matched = 0
+    total = 0
+
+    @inbounds @fastmath for idx in indices
+        if !iszero(H.isotope[idx])
+            continue
+        end
+
+        total += 1
+        if H.matched[idx]
+            matched += 1
+            if row_match_counts[H.rowval[idx]] == 1
+                unique_matched += 1
+            end
+        end
+    end
+
+    return matched, unique_matched, total
+end
+
+function getDistanceMetrics(w::Vector{T},
+                            r::Vector{T},
+                            H::SparseArray{Ti,T},
                             spectral_scores::Vector{SpectralScoresMs1{U}}) where {Ti<:Integer,T,U<:AbstractFloat}
 
 

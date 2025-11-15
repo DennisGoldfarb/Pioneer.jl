@@ -128,7 +128,8 @@ abstract type SpectralScores{T<:AbstractFloat} end
 
 **SpectralScoresComplex** - Advanced deconvolution metrics
 - fitted_spectral_contrast, goodness-of-fit
-- max_matched_residual, fitted_manhattan_distance  
+- max_matched_residual, fitted_manhattan_distance
+- fragment_coverage, unique_fragment_coverage (recomputed from second-pass evidence)
 - Used with ComplexScoredPSM
 
 **SpectralScoresMs1** - Precursor-level scoring
