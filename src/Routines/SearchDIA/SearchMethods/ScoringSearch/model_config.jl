@@ -75,6 +75,9 @@ const ADVANCED_FEATURE_SET = [
     :fragment_coverage,
     :unique_fragment_coverage,
     :unique_fragment_count,
+    :max_fragment_coverage,
+    :max_unique_fragment_coverage,
+    :max_unique_fragment_count,
     :err_norm,
     :poisson,
     :weight_qbin,      # Quantile-binned version of :weight
@@ -122,6 +125,7 @@ const REDUCED_FEATURE_SET = [
     :max_matched_residual, :max_unmatched_residual, :max_gof,
     :fitted_spectral_contrast, :spectral_contrast, :max_matched_ratio,
     :fragment_coverage, :unique_fragment_coverage, :unique_fragment_count,
+    :max_fragment_coverage, :max_unique_fragment_coverage, :max_unique_fragment_count,
     :err_norm, :poisson, :weight_qbin, :log2_intensity_explained, :tic_qbin, :num_scans,
     :smoothness, :percent_theoretical_ignored, :scribe, :max_scribe,
     # MS1 features
@@ -164,7 +168,10 @@ const MINIMAL_FEATURE_SET = [
     :log2_intensity_explained,
     :fragment_coverage,
     :unique_fragment_coverage,
-    :unique_fragment_count
+    :unique_fragment_count,
+    :max_fragment_coverage,
+    :max_unique_fragment_coverage,
+    :max_unique_fragment_count
 ]
 
 """
@@ -250,6 +257,9 @@ function create_model_configurations(ms1_scoring::Bool = true)
                 :fragment_coverage,
                 :unique_fragment_coverage,
                 :unique_fragment_count,
+                :max_fragment_coverage,
+                :max_unique_fragment_coverage,
+                :max_unique_fragment_count,
                 :tic
             ], [:intercept]),
             Dict(
