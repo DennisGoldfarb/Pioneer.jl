@@ -312,14 +312,6 @@ function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
         lower_bound_guess, upper_bound_guess = min_frag_bin, min_frag_bin
 
         for (mass_idx, mass) in enumerate(masses)
-            if ismissing(mass)
-                if scan_idx == target_scan_idx
-                    score = target_precursor_index <= length(prec_id_to_score.counts) ?
-                            Int(getCount(prec_id_to_score, target_precursor_idx)) : missing
-                    @info "Target precursor score" scan_idx=scan_idx precursor_idx=target_precursor_idx mass_index=mass_idx mass=missing score=score
-                end
-                continue
-            end
             #Get intensity dependent fragment tolerance.
             corrected_mz = getCorrectedMz(mass_err_model, mass)
             frag_min, frag_max = getMzBoundsReverse(mass_err_model, corrected_mz)
@@ -336,11 +328,11 @@ function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
                                             prec_min,
                                             prec_max
                                         )
-            if scan_idx == target_scan_idx
-                score = target_precursor_index <= length(prec_id_to_score.counts) ?
-                        Int(getCount(prec_id_to_score, target_precursor_idx)) : missing
-                @info "Target precursor score" scan_idx=scan_idx precursor_idx=target_precursor_idx mass_index=mass_idx mass=Float64(mass) score=score
-            end
+            #if scan_idx == target_scan_idx
+            #    score = target_precursor_index <= length(prec_id_to_score.counts) ?
+            #            Int(getCount(prec_id_to_score, target_precursor_idx)) : missing
+            #    @info "Target precursor score" scan_idx=scan_idx precursor_idx=target_precursor_idx mass_index=mass_idx mass=Float64(mass) score=score
+            #end
         end
 
         rt_bin_idx += 1

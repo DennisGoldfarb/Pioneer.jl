@@ -574,6 +574,11 @@ function process_search_results!(
         # Initialize probability scores (will be calculated later)
         initialize_prob_group_features!(psms, params.match_between_runs)
 
+        precursors = getPrecursors(getSpecLib(search_context))
+        precursor_sequences = getSequence(precursors)
+        precursor_indices = psms[!, :precursor_idx]
+        psms[!, :peptide_sequence] = [String(precursor_sequences[Int(idx)]) for idx in precursor_indices]
+
         # Only save results if we have actual PSMs
         if nrow(psms) > 0
             # Save processed results

@@ -419,6 +419,16 @@ function process_file!(
             deleteat!(column_names, findfirst(==(:percent_theoretical_ignored), column_names))
         end
 
+        precursors = getPrecursors(getSpecLib(search_context))
+        precursor_sequences = getSequence(precursors)
+        precursor_indices = psms[!, :precursor_idx]
+        psms[!, :peptide_sequence] = [String(precursor_sequences[Int(idx)]) for idx in precursor_indices]
+
+        Arrow.write(
+            joinpath(getDataOutDir(search_context), "temp_data", "first_pass_psms", "prescore.arrow"),
+            psms
+        )
+
 
         # Select scoring columns
         select!(psms, vcat(column_names, [:ms_file_idx, :score, :precursor_idx, :scan_idx,
@@ -588,9 +598,13 @@ function process_search_results!(
     parsed_fname = getParsedFileName(search_context, ms_file_idx)
     temp_path = joinpath(getDataOutDir(search_context), "temp_data", "first_pass_psms", parsed_fname * ".arrow")
     psms[!, :ms_file_idx] .= UInt32(ms_file_idx)
+    precursors = getPrecursors(getSpecLib(search_context))
+    precursor_sequences = getSequence(precursors)
+    precursor_indices = psms[!, :precursor_idx]
+    psms[!, :peptide_sequence] = [String(precursor_sequences[Int(idx)]) for idx in precursor_indices]
     Arrow.write(
         temp_path,
-        select!(psms, [:ms_file_idx, :scan_idx, :precursor_idx, :rt,
+        select!(psms, [:ms_file_idx, :scan_idx, :precursor_idx, :peptide_sequence, :rt,
             :irt_predicted, :q_value, :score, :prob, :scan_count])
     )
     setFirstPassPsms!(getMSData(search_context), ms_file_idx, temp_path)
