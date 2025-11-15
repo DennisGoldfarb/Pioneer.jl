@@ -186,6 +186,7 @@ Uses parallel processing for efficiency.
 function score_presearch!(psms::DataFrame)
     features = [:entropy_score,:city_block,
                     :scribe,:spectral_contrast,
+                    :hyper_score,
                     :y_count,:error,
                     :TIC,:intercept]
     psms[!,:prob] = zeros(Float32, size(psms, 1))
