@@ -36,6 +36,7 @@ struct SpectralScoresSimple{T<:AbstractFloat} <: SpectralScores{T}
     spectral_contrast::T
     matched_ratio::T
     fragment_coverage::T
+    ion_count_significance::T
     entropy_score::T
     percent_theoretical_ignored::T
 end
@@ -51,10 +52,12 @@ struct SpectralScoresMs1{T<:AbstractFloat} <: SpectralScores{T}
     #entropy_score::T
 end
 
-function getDistanceMetrics(H::SparseArray{Ti,T}, 
+function getDistanceMetrics(H::SparseArray{Ti,T},
     spectral_scores::Vector{SpectralScoresSimple{U}};
     relative_improvement_threshold::Float32 = 1.25f0,
-    min_frags::Int64 = 5) where {Ti<:Integer,T,U<:AbstractFloat}
+    min_frags::Int64 = 5,
+    background_match_prob::Float64 = 0.05,
+    ) where {Ti<:Integer,T,U<:AbstractFloat}
 
     @inbounds @fastmath for col in range(1, H.n)
 
@@ -71,12 +74,12 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
             tot_pred_signal += H.nzval[i]
         end
 
-        scribe_best, city_best, cosine_similarity_best, matched_ratio_best, fragment_coverage_best, ent_best, next_worst_pos, next_worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included)
+        scribe_best, city_best, cosine_similarity_best, matched_ratio_best, fragment_coverage_best, ion_significance_best, ent_best, next_worst_pos, next_worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included, background_match_prob)
         
         percent_theoretical_ignored = 0.0f0
         while (num_matching_peaks > min_frags) && (next_worst_pos > 0)
             deleteat!(included, next_worst_pos)
-            scribe, city, cosine_similarity, matched_ratio, fragment_coverage, ent, worst_pos, worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included)
+            scribe, city, cosine_similarity, matched_ratio, fragment_coverage, ion_significance, ent, worst_pos, worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included, background_match_prob)
 
             # If ignoring the worst peak doesn't increase the scribe score enough, then we're done
             if (scribe < (scribe_best * relative_improvement_threshold))
@@ -91,6 +94,7 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
             cosine_similarity_best = cosine_similarity
             matched_ratio_best = matched_ratio
             fragment_coverage_best = fragment_coverage
+            ion_significance_best = ion_significance
             ent_best = ent
             next_worst_pos = worst_pos
             next_worst_pred_signal = worst_pred_signal
@@ -103,6 +107,7 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
                     Float16(cosine_similarity_best),
                     Float16(matched_ratio_best),
                     Float16(fragment_coverage_best),
+                    Float16(ion_significance_best),
                     Float16(ent_best),
                     Float16(percent_theoretical_fraction)
                 )
@@ -110,7 +115,7 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
     end
 end
 
-function computeMetricsFor(H::SparseArray{Ti,T}, col, included_indices) where {Ti<:Integer,T<:AbstractFloat}
+function computeMetricsFor(H::SparseArray{Ti,T}, col, included_indices, background_match_prob) where {Ti<:Integer,T<:AbstractFloat}
     # We'll accumulate partial sums and compute the same metrics as your snippet.
     # (For clarity, we skip inlining optimizations like @inbounds, @fastmath here.)
 
@@ -218,7 +223,20 @@ function computeMetricsFor(H::SparseArray{Ti,T}, col, included_indices) where {T
     # Raw fraction of predicted fragments that register any observed intensity.
     fragment_coverage = total_included == 0 ? zero(T) : T(num_matching_peaks) / T(total_included)
 
-    return (scribe_score, city_block_dist, cosine_similarity, matched_ratio, fragment_coverage, ent_val, worst_pos, worst_intensity_ignored, num_matching_peaks)
+    n_trials = total_included
+    p_match = clamp(Float64(background_match_prob), eps(Float64), 1 - eps(Float64))
+    survival_probability = if n_trials == 0
+        one(Float64)
+    elseif num_matching_peaks <= 0
+        one(Float64)
+    else
+        dist = Distributions.Binomial(n_trials, p_match)
+        Distributions.ccdf(dist, num_matching_peaks - 1)
+    end
+    survival_probability = clamp(survival_probability, floatmin(Float64), 1.0)
+    ion_count_significance = T(-log10(survival_probability))
+
+    return (scribe_score, city_block_dist, cosine_similarity, matched_ratio, fragment_coverage, ion_count_significance, ent_val, worst_pos, worst_intensity_ignored, num_matching_peaks)
 end
 
 function getDistanceMetrics(w::Vector{T},
