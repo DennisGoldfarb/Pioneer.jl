@@ -397,7 +397,7 @@ function process_file!(
         search_context::SearchContext,
         spectra::MassSpecData)
         column_names = [
-            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage, :percent_theoretical_ignored,
+            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage, :hyper_score, :percent_theoretical_ignored,
             :charge2, :poisson, :irt_error,
             :missed_cleavage,
             :Mox,
@@ -433,7 +433,7 @@ function process_file!(
             )
         catch
             column_names = [
-            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage,
+            :spectral_contrast, :city_block, :entropy_score, :scribe, :fragment_coverage, :hyper_score,
             :charge2, :poisson, :irt_error, :TIC, :y_count, :err_norm, :spectrum_peak_count, :intercept
             ]
             if maximum(psms.fragment_coverage) == minimum(psms.fragment_coverage)
