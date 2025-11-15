@@ -37,6 +37,7 @@ struct SpectralScoresSimple{T<:AbstractFloat} <: SpectralScores{T}
     matched_ratio::T
     fragment_coverage::T
     unique_fragment_coverage::T
+    interference_penalized_fragment_coverage::T
     entropy_score::T
     percent_theoretical_ignored::T
 end
@@ -79,12 +80,12 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
             tot_pred_signal += H.nzval[i]
         end
 
-        scribe_best, city_best, cosine_similarity_best, matched_ratio_best, fragment_coverage_best, unique_fragment_coverage_best, ent_best, next_worst_pos, next_worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included, row_match_counts)
+        scribe_best, city_best, cosine_similarity_best, matched_ratio_best, fragment_coverage_best, unique_fragment_coverage_best, interference_penalized_fragment_coverage_best, ent_best, next_worst_pos, next_worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included, row_match_counts)
 
         percent_theoretical_ignored = 0.0f0
         while (num_matching_peaks > min_frags) && (next_worst_pos > 0)
             deleteat!(included, next_worst_pos)
-            scribe, city, cosine_similarity, matched_ratio, fragment_coverage, unique_fragment_coverage, ent, worst_pos, worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included, row_match_counts)
+            scribe, city, cosine_similarity, matched_ratio, fragment_coverage, unique_fragment_coverage, interference_penalized_fragment_coverage, ent, worst_pos, worst_pred_signal, num_matching_peaks = computeMetricsFor(H, col, included, row_match_counts)
 
             # If ignoring the worst peak doesn't increase the scribe score enough, then we're done
             if (scribe < (scribe_best * relative_improvement_threshold))
@@ -100,6 +101,7 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
             matched_ratio_best = matched_ratio
             fragment_coverage_best = fragment_coverage
             unique_fragment_coverage_best = unique_fragment_coverage
+            interference_penalized_fragment_coverage_best = interference_penalized_fragment_coverage
             ent_best = ent
             next_worst_pos = worst_pos
             next_worst_pred_signal = worst_pred_signal
@@ -113,6 +115,7 @@ function getDistanceMetrics(H::SparseArray{Ti,T},
                     Float16(matched_ratio_best),
                     Float16(fragment_coverage_best),
                     Float16(unique_fragment_coverage_best),
+                    Float16(interference_penalized_fragment_coverage_best),
                     Float16(ent_best),
                     Float16(percent_theoretical_fraction)
                 )
@@ -130,11 +133,16 @@ function computeMetricsFor(H::SparseArray{Ti,T}, col, included_indices, row_matc
     worst_idx = 0
     num_matching_peaks = 0
     unique_matching_peaks = 0
+    interference_penalized_matching_sum = zero(T)
 
     # Sums for numerator/denominator
     # We also want the "normalized" predicted and observed, so we can correctly find the worst inteferring peak
     total_h = zero(T)
     total_x = zero(T)
+
+    num_precursors = H.n
+    has_multiple_precursors = num_precursors > 1
+    denom = has_multiple_precursors ? T(num_precursors - 1) : one(T)
 
     @inbounds @fastmath for i in included_indices
         total_h += H.nzval[i]
@@ -143,6 +151,14 @@ function computeMetricsFor(H::SparseArray{Ti,T}, col, included_indices, row_matc
             num_matching_peaks += 1
             if row_match_counts[H.rowval[i]] == 1
                 unique_matching_peaks += 1
+            end
+            if row_match_counts[H.rowval[i]] > 0
+                other_precursors = row_match_counts[H.rowval[i]] - 1
+                penalty_fraction = (has_multiple_precursors && other_precursors > 0) ? T(other_precursors) / denom : zero(T)
+                weight = one(T) - penalty_fraction
+                weight = weight < zero(T) ? zero(T) : weight
+                weight = weight > one(T) ? one(T) : weight
+                interference_penalized_matching_sum += weight
             end
         end
     end
@@ -232,8 +248,9 @@ function computeMetricsFor(H::SparseArray{Ti,T}, col, included_indices, row_matc
     # Raw fraction of predicted fragments that register any observed intensity.
     fragment_coverage = total_included == 0 ? zero(T) : T(num_matching_peaks) / T(total_included)
     unique_fragment_coverage = total_included == 0 ? zero(T) : T(unique_matching_peaks) / T(total_included)
+    interference_penalized_fragment_coverage = total_included == 0 ? zero(T) : interference_penalized_matching_sum / T(total_included)
 
-    return (scribe_score, city_block_dist, cosine_similarity, matched_ratio, fragment_coverage, unique_fragment_coverage, ent_val, worst_pos, worst_intensity_ignored, num_matching_peaks)
+    return (scribe_score, city_block_dist, cosine_similarity, matched_ratio, fragment_coverage, unique_fragment_coverage, interference_penalized_fragment_coverage, ent_val, worst_pos, worst_intensity_ignored, num_matching_peaks)
 end
 
 function getDistanceMetrics(w::Vector{T},
