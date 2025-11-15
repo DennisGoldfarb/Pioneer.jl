@@ -123,8 +123,11 @@ abstract type SpectralScores{T<:AbstractFloat} end
 **SpectralScoresSimple** - Basic spectral similarity
 - scribe, city_block, spectral_contrast
 - matched_ratio, fragment_coverage (fraction of predicted fragments with any observed intensity)
+- ion_count_significance (−log₁₀ survival probability of random fragment matches)
 - entropy_score
 - Used with SimpleScoredPSM
+
+`ion_count_significance` uses a Binomial survival model with a configurable background match probability (`background_match_prob` keyword in `getDistanceMetrics`, default 0.05). Tuning this parameter lets you adapt the random-match null hypothesis to noisier or cleaner spectra.
 
 **SpectralScoresComplex** - Advanced deconvolution metrics
 - fitted_spectral_contrast, goodness-of-fit

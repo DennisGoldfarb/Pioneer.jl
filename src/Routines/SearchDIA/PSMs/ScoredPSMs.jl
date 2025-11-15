@@ -40,6 +40,7 @@ struct SimpleScoredPSM{H,L<:AbstractFloat} <: ScoredPSM{H,L}
     spectral_contrast::L
     matched_ratio::L
     fragment_coverage::L
+    ion_count_significance::L
     log2_summed_intensity::L
     entropy_score::L
     percent_theoretical_ignored::L
@@ -202,6 +203,7 @@ function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
             spectral_scores[scores_idx].spectral_contrast,
             spectral_scores[scores_idx].matched_ratio,
             spectral_scores[scores_idx].fragment_coverage,
+            spectral_scores[scores_idx].ion_count_significance,
             #Float16(log2((unscored_PSMs[i].intensity)/spectrum_intensity)),
             Float16(log2(unscored_PSMs[i].intensity)),
             spectral_scores[scores_idx].entropy_score,
