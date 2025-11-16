@@ -135,8 +135,8 @@ function growScoredPSMs!(scored_psms::Vector{Ms1ScoredPSM{H,L}}, block_size::Int
     scored_psms = append!(scored_psms, Vector{Ms1ScoredPSM{H,L}}(undef, block_size))
 end
 
-function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}}, 
-                unscored_PSMs::Vector{SimpleUnscoredPSM{H}}, 
+function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
+                unscored_PSMs::Vector{SimpleUnscoredPSM{H}},
                 spectral_scores::Vector{SpectralScoresSimple{L}},
                 IDtoCOL::ArrayDict{UInt32, UInt16},
                 expected_matches::Float64,
@@ -155,6 +155,8 @@ function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
     start_idx = last_val
     skipped = 0
     n = 0
+    debug_precursor_idx = get_debug_precursor_idx()
+    simple_debug_info = nothing
 
     function getPoisson(lam::T, observed::Int64) where {T<:AbstractFloat}
         function logfac(N)
@@ -180,10 +182,9 @@ function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
             best_rank_val == max_best_rank
         )
 
-        if should_trace_precursor(precursor_idx_val)
-            log_precursor_trace(
-                "simple-score-precheck",
-                precursor_idx_val;
+        tracing_precursor = debug_precursor_idx !== nothing && precursor_idx_val == debug_precursor_idx
+        if tracing_precursor
+            simple_debug_info = (
                 scan_idx=scan_idx,
                 spectral_contrast=spectral_scores[i].spectral_contrast,
                 matched_ratio=spectral_scores[i].matched_ratio,
@@ -191,23 +192,19 @@ function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
                 min_frag_count=min_frag_count,
                 topn=unscored_PSMs[i].topn,
                 best_rank=best_rank_val,
-                passing=passing_filter
+                spectral_contrast_pass=spectral_scores[i].spectral_contrast >= min_spectral_contrast,
+                fragment_count_pass=frag_count >= min_frag_count,
+                matched_ratio_pass=spectral_scores[i].matched_ratio > min_log2_matched_ratio,
+                topn_pass=(unscored_PSMs[i].topn >= min_topn),
+                best_rank_pass=(best_rank_val == max_best_rank),
+                passed=passing_filter
             )
         end
 
         if !passing_filter #Skip this scan
             skipped += 1
-            if should_trace_precursor(precursor_idx_val)
-                log_precursor_trace(
-                    "simple-score-filtered",
-                    precursor_idx_val;
-                    scan_idx=scan_idx,
-                    spectral_contrast_pass=spectral_scores[i].spectral_contrast >= min_spectral_contrast,
-                    fragment_count_pass=frag_count >= min_frag_count,
-                    matched_ratio_pass=spectral_scores[i].matched_ratio > min_log2_matched_ratio,
-                    topn_pass=(unscored_PSMs[i].topn >= min_topn),
-                    best_rank_pass=(best_rank_val == max_best_rank)
-                )
+            if tracing_precursor
+                simple_debug_info = (; simple_debug_info..., output_index=nothing)
             end
             continue
         end
@@ -248,19 +245,22 @@ function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
             UInt32(unscored_PSMs[i].precursor_idx),
             UInt32(scan_idx)
         )
-        if should_trace_precursor(precursor_idx_val)
-            log_precursor_trace(
-                "simple-score-emitted",
-                precursor_idx_val;
-                scan_idx=scan_idx,
-                spectral_contrast=spectral_scores[scores_idx].spectral_contrast,
-                matched_ratio=spectral_scores[scores_idx].matched_ratio,
-                poisson=poisson_score,
-                output_index=start_idx + i - skipped
+        if tracing_precursor
+            simple_debug_info = (
+                ; simple_debug_info...,
+                output_index=start_idx + i - skipped,
+                poisson=poisson_score
             )
         end
         n += 1
         last_val += 1
+    end
+    if simple_debug_info !== nothing
+        log_precursor_trace(
+            "simple-score-decision",
+            debug_precursor_idx;
+            simple_debug_info...
+        )
     end
     return last_val
 end

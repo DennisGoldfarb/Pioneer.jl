@@ -31,6 +31,9 @@ function searchFragmentIndex(
     prec_id = 0
     precursors_passed_scoring = Vector{UInt32}(undef, 250000)
     rt_bin_idx = 1
+    debug_precursor_idx = get_debug_precursor_idx()
+    fragment_filter_trace = nothing
+    fragment_accept_trace = nothing
     for scan_idx in thread_task
         #if scan_idx % 50 != 0
         #    continue
@@ -64,30 +67,24 @@ function searchFragmentIndex(
             scan_idx
         )
 
-        # Filter precursor matches based on score and log debug precursor details if requested
-        debug_precursor_idx = get_debug_precursor_idx()
-        raw_score = UInt8(0)
+        # Filter precursor matches based on score and optionally record debug details for the target precursor
+        debug_raw_score = UInt8(0)
+        debug_precursor_tracked = false
         if debug_precursor_idx !== nothing
             counts = getPrecursorScores(search_data).counts
             if Int(debug_precursor_idx) <= length(counts)
-                raw_score = counts[Int(debug_precursor_idx)]
+                debug_raw_score = counts[Int(debug_precursor_idx)]
+                debug_precursor_tracked = debug_raw_score > 0
             end
-            log_precursor_trace(
-                "fragment-index-before-filter",
-                debug_precursor_idx;
-                scan_idx=scan_idx,
-                rt_bin=rt_bin_idx,
-                raw_score=raw_score,
-                min_score=getMinIndexSearchScore(params)
-            )
         end
         match_count, prec_count = filterPrecursorMatches!(getPrecursorScores(search_data), getMinIndexSearchScore(params))
-        if debug_precursor_idx !== nothing && raw_score > 0
-            log_precursor_trace(
-                "fragment-index-after-filter",
-                debug_precursor_idx;
+        if debug_precursor_tracked
+            fragment_filter_trace = (
                 scan_idx=scan_idx,
-                kept=raw_score >= getMinIndexSearchScore(params),
+                rt_bin=rt_bin_idx,
+                raw_score=debug_raw_score,
+                min_score=getMinIndexSearchScore(params),
+                kept=debug_raw_score >= getMinIndexSearchScore(params),
                 match_count=match_count,
                 precursors_in_scan=prec_count
             )
@@ -96,21 +93,20 @@ function searchFragmentIndex(
         if getID(getPrecursorScores(search_data), 1)>0
             start_idx = prec_id + 1
             n = 1
+            debug_fragment_accept = nothing
             while n <= getPrecursorScores(search_data).matches
                 prec_id += 1
                 if prec_id > length(precursors_passed_scoring)
-                    append!(precursors_passed_scoring, 
+                    append!(precursors_passed_scoring,
                             Vector{eltype(precursors_passed_scoring)}(undef, length(precursors_passed_scoring))
                             )
                 end
                 prec_id_value = getID(getPrecursorScores(search_data), n)
                 precursors_passed_scoring[prec_id] = prec_id_value
-                if should_trace_precursor(prec_id_value)
-                    log_precursor_trace(
-                        "fragment-index-accepted",
-                        prec_id_value;
+                if debug_precursor_idx !== nothing && prec_id_value == debug_precursor_idx
+                    debug_fragment_accept = (
                         scan_idx=scan_idx,
-                        candidate_score=raw_score,
+                        candidate_score=debug_raw_score,
                         scan_range_start=start_idx,
                         scan_range_stop=prec_id
                     )
@@ -118,11 +114,27 @@ function searchFragmentIndex(
                 n += 1
             end
             scan_to_prec_idx[scan_idx] = start_idx:prec_id#stop_idx
+            fragment_accept_trace = debug_fragment_accept === nothing ? fragment_accept_trace : debug_fragment_accept
         else
             scan_to_prec_idx[scan_idx] = missing
         end
 
         reset!(getPrecursorScores(search_data))
+    end
+
+    if fragment_filter_trace !== nothing
+        log_precursor_trace(
+            "fragment-index-filter",
+            debug_precursor_idx;
+            fragment_filter_trace...
+        )
+    end
+    if fragment_accept_trace !== nothing
+        log_precursor_trace(
+            "fragment-index-accepted",
+            debug_precursor_idx;
+            fragment_accept_trace...
+        )
     end
 
     return precursors_passed_scoring[1:prec_id]

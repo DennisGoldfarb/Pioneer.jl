@@ -251,19 +251,13 @@ function get_best_psms!(psms::DataFrame,
     #ASSUMES psms IS SOrtED BY rt IN ASCENDING ORDER
     gpsms = groupby(psms,:precursor_idx)
     debug_precursor_idx = get_debug_precursor_idx()
+    best_psm_trace = nothing
     for (precursor_idx, prec_psms) in pairs(gpsms)
 
         tracing_precursor = debug_precursor_idx !== nothing && precursor_idx == debug_precursor_idx
-        if tracing_precursor
-            log_precursor_trace(
-                "best-psm-candidates",
-                precursor_idx;
-                n_candidates=size(prec_psms, 1)
-            )
-        end
 
-        #Get the best scoring psm, and the its row index. 
-        #Get the maximum intensity psm (under the q_value threshold) and its row index. 
+        #Get the best scoring psm, and the its row index.
+        #Get the maximum intensity psm (under the q_value threshold) and its row index.
         max_irt, min_irt = missing, missing
         max_log2_intensity, max_idx = missing, one(Int64)
         best_psm_score, best_psm_idx = zero(Float32), one(Int64)
@@ -310,15 +304,22 @@ function get_best_psms!(psms::DataFrame,
         prec_psms[best_psm_idx,:scan_count] = scan_count
 
         if tracing_precursor
-            log_precursor_trace(
-                "best-psm-selected",
-                precursor_idx;
+            best_psm_trace = (
+                n_candidates=size(prec_psms, 1),
                 best_score=best_psm_score,
                 best_scan=prec_psms[best_psm_idx,:scan_idx],
                 scan_count=scan_count,
                 max_log2_intensity=coalesce(max_log2_intensity, 0f0)
             )
         end
+    end
+
+    if best_psm_trace !== nothing
+        log_precursor_trace(
+            "best-psm-summary",
+            debug_precursor_idx;
+            best_psm_trace...
+        )
     end
 
     had_debug_candidate = debug_precursor_idx !== nothing && any(psms[!,:precursor_idx] .== debug_precursor_idx)
