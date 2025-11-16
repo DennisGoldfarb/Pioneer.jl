@@ -64,8 +64,34 @@ function searchFragmentIndex(
             scan_idx
         )
 
-        # Filter precursor matches based on score
+        # Filter precursor matches based on score and log debug precursor details if requested
+        debug_precursor_idx = get_debug_precursor_idx()
+        raw_score = UInt8(0)
+        if debug_precursor_idx !== nothing
+            counts = getPrecursorScores(search_data).counts
+            if Int(debug_precursor_idx) <= length(counts)
+                raw_score = counts[Int(debug_precursor_idx)]
+            end
+            log_precursor_trace(
+                "fragment-index-before-filter",
+                debug_precursor_idx;
+                scan_idx=scan_idx,
+                rt_bin=rt_bin_idx,
+                raw_score=raw_score,
+                min_score=getMinIndexSearchScore(params)
+            )
+        end
         match_count, prec_count = filterPrecursorMatches!(getPrecursorScores(search_data), getMinIndexSearchScore(params))
+        if debug_precursor_idx !== nothing && raw_score > 0
+            log_precursor_trace(
+                "fragment-index-after-filter",
+                debug_precursor_idx;
+                scan_idx=scan_idx,
+                kept=raw_score >= getMinIndexSearchScore(params),
+                match_count=match_count,
+                precursors_in_scan=prec_count
+            )
+        end
 
         if getID(getPrecursorScores(search_data), 1)>0
             start_idx = prec_id + 1
@@ -77,7 +103,18 @@ function searchFragmentIndex(
                             Vector{eltype(precursors_passed_scoring)}(undef, length(precursors_passed_scoring))
                             )
                 end
-                precursors_passed_scoring[prec_id] = getID(getPrecursorScores(search_data), n)
+                prec_id_value = getID(getPrecursorScores(search_data), n)
+                precursors_passed_scoring[prec_id] = prec_id_value
+                if should_trace_precursor(prec_id_value)
+                    log_precursor_trace(
+                        "fragment-index-accepted",
+                        prec_id_value;
+                        scan_idx=scan_idx,
+                        candidate_score=raw_score,
+                        scan_range_start=start_idx,
+                        scan_range_stop=prec_id
+                    )
+                end
                 n += 1
             end
             scan_to_prec_idx[scan_idx] = start_idx:prec_id#stop_idx

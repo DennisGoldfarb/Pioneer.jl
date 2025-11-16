@@ -123,12 +123,14 @@ abstract type SpectralScores{T<:AbstractFloat} end
 **SpectralScoresSimple** - Basic spectral similarity
 - scribe, city_block, spectral_contrast
 - matched_ratio, fragment_coverage (fraction of predicted fragments with any observed intensity)
+- unique_fragment_coverage, unique_fragment_count (raw number of uniquely matched fragments)
 - entropy_score
 - Used with SimpleScoredPSM
 
 **SpectralScoresComplex** - Advanced deconvolution metrics
 - fitted_spectral_contrast, goodness-of-fit
-- max_matched_residual, fitted_manhattan_distance  
+- max_matched_residual, fitted_manhattan_distance
+- fragment_coverage, unique_fragment_coverage, unique_fragment_count (recomputed from second-pass evidence)
 - Used with ComplexScoredPSM
 
 **SpectralScoresMs1** - Precursor-level scoring

@@ -250,7 +250,17 @@ function get_best_psms!(psms::DataFrame,
     #Get best psm for each precursor 
     #ASSUMES psms IS SOrtED BY rt IN ASCENDING ORDER
     gpsms = groupby(psms,:precursor_idx)
+    debug_precursor_idx = get_debug_precursor_idx()
     for (precursor_idx, prec_psms) in pairs(gpsms)
+
+        tracing_precursor = debug_precursor_idx !== nothing && precursor_idx == debug_precursor_idx
+        if tracing_precursor
+            log_precursor_trace(
+                "best-psm-candidates",
+                precursor_idx;
+                n_candidates=size(prec_psms, 1)
+            )
+        end
 
         #Get the best scoring psm, and the its row index. 
         #Get the maximum intensity psm (under the q_value threshold) and its row index. 
@@ -268,7 +278,7 @@ function get_best_psms!(psms::DataFrame,
                 best_psm_score = prec_psms[i,:score]
             end
         end
-        #Mark the best psm 
+        #Mark the best psm
         prec_psms[best_psm_idx,:best_psm] = true
 
         #Try to estimate the fwhm. 
@@ -298,19 +308,61 @@ function get_best_psms!(psms::DataFrame,
 
         prec_psms[best_psm_idx,:fwhm] = max_irt - min_irt
         prec_psms[best_psm_idx,:scan_count] = scan_count
+
+        if tracing_precursor
+            log_precursor_trace(
+                "best-psm-selected",
+                precursor_idx;
+                best_score=best_psm_score,
+                best_scan=prec_psms[best_psm_idx,:scan_idx],
+                scan_count=scan_count,
+                max_log2_intensity=coalesce(max_log2_intensity, 0f0)
+            )
+        end
     end
 
+    had_debug_candidate = debug_precursor_idx !== nothing && any(psms[!,:precursor_idx] .== debug_precursor_idx)
     filter!(x->x.best_psm, psms);
+    if debug_precursor_idx !== nothing && had_debug_candidate
+        kept_after_best = any(psms[!,:precursor_idx] .== debug_precursor_idx)
+        log_precursor_trace(
+            "best-psm-after-best-filter",
+            debug_precursor_idx;
+            kept=kept_after_best
+        )
+    end
     sort!(psms,:score, rev = true)
     # Will use PEP for final filter
     get_PEP!(psms[!,:score], psms[!,:target], psms[!,:PEP]; doSort=false, fdr_scale_factor=fdr_scale_factor);
+
+    if debug_precursor_idx !== nothing && any(psms[!,:precursor_idx] .== debug_precursor_idx)
+        debug_row = findfirst(==(debug_precursor_idx), psms[!,:precursor_idx])
+        if debug_row !== nothing
+            log_precursor_trace(
+                "best-psm-pep",
+                debug_precursor_idx;
+                score=psms[debug_row,:score],
+                pep=psms[debug_row,:PEP]
+            )
+        end
+    end
 
     n = size(psms, 1)
     select!(psms, [:precursor_idx,:log2_summed_intensity,:rt,:irt_predicted,:q_value,:score,:prob,:fwhm,:scan_count,:scan_idx,:PEP,:target])
 
     first_fail = searchsortedfirst(psms[!,:PEP], Float16(max_PEP))
     if first_fail <= n
+        had_debug_before_pep = debug_precursor_idx !== nothing && any(psms[!,:precursor_idx] .== debug_precursor_idx)
         deleteat!(psms, first_fail:n)
+        if debug_precursor_idx !== nothing && had_debug_before_pep
+            kept_after_pep = any(psms[!,:precursor_idx] .== debug_precursor_idx)
+            log_precursor_trace(
+                "best-psm-after-pep-threshold",
+                debug_precursor_idx;
+                kept=kept_after_pep,
+                pep_threshold=max_PEP
+            )
+        end
     end
     #println("unique IDs prefilter: ", n, " ", first_fail, "\n\n")
 
