@@ -41,6 +41,7 @@ struct SimpleScoredPSM{H,L<:AbstractFloat} <: ScoredPSM{H,L}
     matched_ratio::L
     fragment_coverage::L
     unique_fragment_coverage::L
+    unique_fragment_count::L
     log2_summed_intensity::L
     entropy_score::L
     percent_theoretical_ignored::L
@@ -78,9 +79,12 @@ struct ComplexScoredPSM{H,L<:AbstractFloat} <: ScoredPSM{H,L}
     fitted_spectral_contrast::L
     gof::L
     max_matched_residual::L
-    max_unmatched_residual::L 
-    fitted_manhattan_distance::L 
-    matched_ratio::L 
+    max_unmatched_residual::L
+    fitted_manhattan_distance::L
+    matched_ratio::L
+    fragment_coverage::L
+    unique_fragment_coverage::L
+    unique_fragment_count::L
     percent_theoretical_ignored::L
     scribe::L
     #entropy_score::L
@@ -131,8 +135,8 @@ function growScoredPSMs!(scored_psms::Vector{Ms1ScoredPSM{H,L}}, block_size::Int
     scored_psms = append!(scored_psms, Vector{Ms1ScoredPSM{H,L}}(undef, block_size))
 end
 
-function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}}, 
-                unscored_PSMs::Vector{SimpleUnscoredPSM{H}}, 
+function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
+                unscored_PSMs::Vector{SimpleUnscoredPSM{H}},
                 spectral_scores::Vector{SpectralScoresSimple{L}},
                 IDtoCOL::ArrayDict{UInt32, UInt16},
                 expected_matches::Float64,
@@ -151,6 +155,8 @@ function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
     start_idx = last_val
     skipped = 0
     n = 0
+    debug_precursor_idx = get_debug_precursor_idx()
+    simple_debug_info = nothing
 
     function getPoisson(lam::T, observed::Int64) where {T<:AbstractFloat}
         function logfac(N)
@@ -161,30 +167,56 @@ function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
 
     for i in range(1, n_vals)
 
+        frag_count = unscored_PSMs[i].y_count + unscored_PSMs[i].b_count
+        best_rank_val = UInt8(unscored_PSMs[i].best_rank)
+        precursor_idx_val = UInt32(unscored_PSMs[i].precursor_idx)
         passing_filter = (
             (spectral_scores[i].spectral_contrast) >= min_spectral_contrast
         )&(
-            (unscored_PSMs[i].y_count + unscored_PSMs[i].b_count) >= min_frag_count
+            frag_count >= min_frag_count
         )&(
             spectral_scores[i].matched_ratio > min_log2_matched_ratio
         )&(
             (unscored_PSMs[i].topn >= min_topn)
         )&(
-            UInt8(unscored_PSMs[i].best_rank) == max_best_rank
+            best_rank_val == max_best_rank
         )
+
+        tracing_precursor = debug_precursor_idx !== nothing && precursor_idx_val == debug_precursor_idx
+        if tracing_precursor
+            simple_debug_info = (
+                scan_idx=scan_idx,
+                spectral_contrast=spectral_scores[i].spectral_contrast,
+                matched_ratio=spectral_scores[i].matched_ratio,
+                frag_count=frag_count,
+                min_frag_count=min_frag_count,
+                topn=unscored_PSMs[i].topn,
+                best_rank=best_rank_val,
+                spectral_contrast_pass=spectral_scores[i].spectral_contrast >= min_spectral_contrast,
+                fragment_count_pass=frag_count >= min_frag_count,
+                matched_ratio_pass=spectral_scores[i].matched_ratio > min_log2_matched_ratio,
+                topn_pass=(unscored_PSMs[i].topn >= min_topn),
+                best_rank_pass=(best_rank_val == max_best_rank),
+                passed=passing_filter
+            )
+        end
 
         if !passing_filter #Skip this scan
             skipped += 1
+            if tracing_precursor
+                simple_debug_info = (; simple_debug_info..., output_index=nothing)
+            end
             continue
         end
-        
+
         if start_idx + i - skipped > length(scored_psms)
             growScoredPSMs!(scored_psms, block_size);
         end
 
-        precursor_idx = UInt32(unscored_PSMs[i].precursor_idx)
+        precursor_idx = precursor_idx_val
         scores_idx = IDtoCOL[precursor_idx]
         total_ions = Int64(unscored_PSMs[i].y_count + unscored_PSMs[i].b_count + unscored_PSMs[i].p_count + unscored_PSMs[i].i_count)
+        poisson_score = Float16(getPoisson(expected_matches, total_ions))
         scored_psms[start_idx + i - skipped] = SimpleScoredPSM(
             unscored_PSMs[i].best_rank,
 
@@ -195,7 +227,7 @@ function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
             unscored_PSMs[i].p_count,
             unscored_PSMs[i].i_count,
 
-            Float16(getPoisson(expected_matches, total_ions)),
+            poisson_score,
             unscored_PSMs[i].error,
             
             spectral_scores[scores_idx].scribe,
@@ -204,6 +236,7 @@ function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
             spectral_scores[scores_idx].matched_ratio,
             spectral_scores[scores_idx].fragment_coverage,
             spectral_scores[scores_idx].unique_fragment_coverage,
+            spectral_scores[scores_idx].unique_fragment_count,
             #Float16(log2((unscored_PSMs[i].intensity)/spectrum_intensity)),
             Float16(log2(unscored_PSMs[i].intensity)),
             spectral_scores[scores_idx].entropy_score,
@@ -212,8 +245,22 @@ function Score!(scored_psms::Vector{SimpleScoredPSM{H, L}},
             UInt32(unscored_PSMs[i].precursor_idx),
             UInt32(scan_idx)
         )
+        if tracing_precursor
+            simple_debug_info = (
+                ; simple_debug_info...,
+                output_index=start_idx + i - skipped,
+                poisson=poisson_score
+            )
+        end
         n += 1
         last_val += 1
+    end
+    if simple_debug_info !== nothing
+        log_precursor_trace(
+            "simple-score-decision",
+            debug_precursor_idx;
+            simple_debug_info...
+        )
     end
     return last_val
 end
@@ -314,6 +361,9 @@ function Score!(scored_psms::Vector{ComplexScoredPSM{H, L}},
             spectral_scores[scores_idx].max_unmatched_residual,
             spectral_scores[scores_idx].fitted_manhattan_distance,
             spectral_scores[scores_idx].matched_ratio,
+            spectral_scores[scores_idx].fragment_coverage,
+            spectral_scores[scores_idx].unique_fragment_coverage,
+            spectral_scores[scores_idx].unique_fragment_count,
             spectral_scores[scores_idx].percent_theoretical_ignored,
             spectral_scores[scores_idx].scribe,
             #spectral_scores[scores_idx].entropy_score,
