@@ -161,6 +161,12 @@ function getPSMS(
     Hs = SparseArray(UInt32(5000))
     isotopes = zeros(Float32, 5)
     precursor_transmission = zeros(Float32, 5)
+    debug_precursor_idx = get_debug_precursor_idx()
+    isotope_err_bounds = getIsotopeErrBounds(params)
+    prec_mzs = getMz(precursors)
+    prec_charges = getCharge(precursors)
+    prec_sulfur_counts = getSulfurCount(precursors)
+    prec_irts = getIrt(precursors)
     for scan_idx in thread_task
         (scan_idx == 0 || scan_idx > length(spectra)) && continue
         ismissing(scan_to_prec_idx[scan_idx]) && continue
@@ -171,33 +177,110 @@ function getPSMS(
         msn ∈ keys(msms_counts) ? msms_counts[msn] += 1 : msms_counts[msn] = 1
 
         # Ion Template Selection
+        scan_prec_range = scan_to_prec_idx[scan_idx]
+        scan_irt = Float32(rt_to_irt_spline(getRetentionTime(spectra, scan_idx)))
+        quad_transmission_func = getQuadTransmissionFunction(
+            qtm,
+            getCenterMz(spectra, scan_idx),
+            getIsolationWidthMz(spectra, scan_idx)
+        )
+        frag_mz_bounds = (getLowMz(spectra, scan_idx), getHighMz(spectra, scan_idx))
+        traced_precursor_present = false
+        traced_precursor_passed_filters = false
+        traced_precursor_has_templates = false
+        traced_precursor_idx = UInt32(0)
+        traced_transition_count = 0
+        if debug_precursor_idx !== nothing
+            for slot in scan_prec_range
+                if precursors_passed_scoring[slot] == debug_precursor_idx
+                    traced_precursor_present = true
+                    traced_precursor_idx = debug_precursor_idx
+                    break
+                end
+            end
+            if traced_precursor_present
+                prec_idx = Int(traced_precursor_idx)
+                prec_charge = Float32(prec_charges[prec_idx])
+                prec_mz = prec_mzs[prec_idx]
+                prec_irt = prec_irts[prec_idx]
+                irt_diff = abs(prec_irt - scan_irt)
+                if irt_diff > irt_tol
+                    log_precursor_trace(
+                        "transition-filter",
+                        traced_precursor_idx;
+                        scan_idx=scan_idx,
+                        reason="irt",
+                        prec_irt=prec_irt,
+                        scan_irt=scan_irt,
+                        irt_diff=irt_diff,
+                        irt_tol=irt_tol
+                    )
+                    traced_precursor_present = false
+                else
+                    mz_low = getPrecMinBound(quad_transmission_func) - Float32(NEUTRON * first(isotope_err_bounds) / prec_charge)
+                    mz_high = getPrecMaxBound(quad_transmission_func) + Float32(NEUTRON * last(isotope_err_bounds) / prec_charge)
+                    if (prec_mz < mz_low) | (prec_mz > mz_high)
+                        log_precursor_trace(
+                            "transition-filter",
+                            traced_precursor_idx;
+                            scan_idx=scan_idx,
+                            reason="isolation",
+                            prec_mz=prec_mz,
+                            mz_low=mz_low,
+                            mz_high=mz_high,
+                            prec_charge=prec_charge
+                        )
+                        traced_precursor_present = false
+                    else
+                        traced_precursor_passed_filters = true
+                    end
+                end
+            end
+        end
         ion_idx, _ = selectTransitions!(
             getIonTemplates(search_data),
             StandardTransitionSelection(),
             getPrecEstimation(params),
             ion_list,
             nce_model,
-            scan_to_prec_idx[scan_idx], precursors_passed_scoring,
-            getMz(precursors),
-            getCharge(precursors),
-            getSulfurCount(precursors),
-            getIrt(precursors),
+            scan_prec_range, precursors_passed_scoring,
+            prec_mzs,
+            prec_charges,
+            prec_sulfur_counts,
+            prec_irts,
             getIsoSplines(search_data),
-            getQuadTransmissionFunction(qtm, getCenterMz(spectra, scan_idx), getIsolationWidthMz(spectra, scan_idx)),
+            quad_transmission_func,
             precursor_transmission, isotopes, getNFragIsotopes(params),
             getMaxFragRank(params),
-            Float32(rt_to_irt_spline(getRetentionTime(spectra, scan_idx))),
+            scan_irt,
             Float32(irt_tol),
-            (getLowMz(spectra, scan_idx), getHighMz(spectra, scan_idx));
-            isotope_err_bounds = getIsotopeErrBounds(params)
+            frag_mz_bounds;
+            isotope_err_bounds = isotope_err_bounds
         )
+
+        if traced_precursor_present && traced_precursor_passed_filters && ion_idx > 0
+            transitions = getIonTemplates(search_data)
+            for t in @view(transitions[1:ion_idx])
+                if getPrecID(t) == traced_precursor_idx
+                    traced_transition_count += 1
+                end
+            end
+            traced_precursor_has_templates = traced_transition_count > 0
+            log_precursor_trace(
+                "transition-selection",
+                traced_precursor_idx;
+                scan_idx=scan_idx,
+                transitions=traced_transition_count,
+                meets_min=traced_transition_count >= 2
+            )
+        end
 
         ion_idx < 2 && continue
 
 
         # Match peaks
         nmatches, nmisses = matchPeaks!(
-            getIonMatches(search_data), 
+            getIonMatches(search_data),
             getIonMisses(search_data), 
             getIonTemplates(search_data), 
             ion_idx, 
@@ -205,10 +288,33 @@ function getPSMS(
             getIntensityArray(spectra, scan_idx), 
             mem,
             getHighMz(spectra, scan_idx),
-            UInt32(scan_idx), 
+            UInt32(scan_idx),
             ms_file_idx
         )
-        
+
+        if traced_precursor_has_templates
+            traced_matches = 0
+            traced_misses = 0
+            if nmatches > 0
+                for match in @view(getIonMatches(search_data)[1:nmatches])
+                    getPrecID(match) == traced_precursor_idx && (traced_matches += 1)
+                end
+            end
+            if nmisses > 0
+                for miss in @view(getIonMisses(search_data)[1:nmisses])
+                    getPrecID(miss) == traced_precursor_idx && (traced_misses += 1)
+                end
+            end
+            log_precursor_trace(
+                "match-peaks",
+                traced_precursor_idx;
+                scan_idx=scan_idx,
+                matches=traced_matches,
+                misses=traced_misses,
+                passes_threshold=traced_matches > 2
+            )
+        end
+
         sort!(@view(getIonMatches(search_data)[1:nmatches]), by = x->(x.peak_ind, x.prec_id), alg=QuickSort)
         # Process matches
         if nmatches > 2
