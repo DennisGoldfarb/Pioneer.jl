@@ -54,14 +54,15 @@ function get_best_precursors_accross_runs(
                          )
 
     function readPSMs!(
-        prec_to_best_prob::Dictionary{UInt32, @NamedTuple{ best_prob::Float32, 
+        prec_to_best_prob::Dictionary{UInt32, @NamedTuple{ best_prob::Float32,
                                                     best_ms_file_idx::UInt32,
                                                     best_scan_idx::UInt32,
-                                                    best_irt::Float32, 
-                                                    mean_irt::Union{Missing, Float32}, 
-                                                    var_irt::Union{Missing, Float32}, 
-                                                    n::Union{Missing, UInt16}, 
-                                                    mz::Float32}},
+                                                    best_irt::Float32,
+                                                    mean_irt::Union{Missing, Float32},
+                                                    var_irt::Union{Missing, Float32},
+                                                    n::Union{Missing, UInt16},
+                                                    mz::Float32,
+                                                    passed_first_search::Bool}},
         precursor_idxs::AbstractVector{UInt32},
         q_values::AbstractVector{Float16},
         probs::AbstractVector{Float32},
@@ -91,7 +92,7 @@ function get_best_precursors_accross_runs(
             #Keep a running mean irt for instances below q-val threshold
             if haskey(prec_to_best_prob, precursor_idx)
                 # Update existing precursor entry
-                best_prob, best_ms_file_idx, best_scan_idx, best_irt, old_mean_irt, var_irt, old_n, mz = prec_to_best_prob[precursor_idx] 
+                best_prob, best_ms_file_idx, best_scan_idx, best_irt, old_mean_irt, var_irt, old_n, mz, passed_first_search = prec_to_best_prob[precursor_idx]
                 
                 # Update best match if current is better
                 if (best_prob < prob)
@@ -105,37 +106,40 @@ function get_best_precursors_accross_runs(
                 mean_irt += old_mean_irt
                 n += old_n 
                 prec_to_best_prob[precursor_idx] = (
-                                                best_prob = prob, 
+                                                best_prob = prob,
                                                 best_ms_file_idx = best_ms_file_idx,
                                                 best_scan_idx = best_scan_idx,
                                                 best_irt = irt,
-                                                mean_irt = mean_irt, 
+                                                mean_irt = mean_irt,
                                                 var_irt = var_irt,
                                                 n = n,
-                                                mz = mz)
+                                                mz = mz,
+                                                passed_first_search = passed_first_search)
             else
                 # Create new precursor entry
                 val = (best_prob = prob,
                         best_ms_file_idx = ms_file_idx,
-                        best_scan_idx = scan_idx, 
+                        best_scan_idx = scan_idx,
                         best_irt = irt,
-                        mean_irt = mean_irt, 
+                        mean_irt = mean_irt,
                         var_irt = var_irt,
                         n = n,
-                        mz = mz)
+                        mz = mz,
+                        passed_first_search = true)
                 insert!(prec_to_best_prob, precursor_idx, val)
             end
         end
     end
     function getVariance!(
-        prec_to_best_prob::Dictionary{UInt32, @NamedTuple{ best_prob::Float32, 
+        prec_to_best_prob::Dictionary{UInt32, @NamedTuple{ best_prob::Float32,
                                                     best_ms_file_idx::UInt32,
                                                     best_scan_idx::UInt32,
-                                                    best_irt::Float32, 
-                                                    mean_irt::Union{Missing, Float32}, 
-                                                    var_irt::Union{Missing, Float32}, 
-                                                    n::Union{Missing, UInt16}, 
-                                                    mz::Float32}},
+                                                    best_irt::Float32,
+                                                    mean_irt::Union{Missing, Float32},
+                                                    var_irt::Union{Missing, Float32},
+                                                    n::Union{Missing, UInt16},
+                                                    mz::Float32,
+                                                    passed_first_search::Bool}},
         precursor_idxs::AbstractVector{UInt32},
         q_values::AbstractVector{Float16},
         rts::AbstractVector{Float32},
@@ -154,30 +158,32 @@ function get_best_precursors_accross_runs(
             end
             if haskey(prec_to_best_prob, precursor_idx)
                 # Update variance calculation
-                best_prob, best_ms_file_idx, best_scan_idx, best_irt, mean_irt, var_irt, n, mz = prec_to_best_prob[precursor_idx] 
+                best_prob, best_ms_file_idx, best_scan_idx, best_irt, mean_irt, var_irt, n, mz, passed_first_search = prec_to_best_prob[precursor_idx]
                 var_irt += (irt - mean_irt/n)^2
                 prec_to_best_prob[precursor_idx] = (
-                    best_prob = best_prob, 
+                    best_prob = best_prob,
                     best_ms_file_idx= best_ms_file_idx,
                     best_scan_idx = best_scan_idx,
                     best_irt = best_irt,
-                    mean_irt = mean_irt, 
+                    mean_irt = mean_irt,
                     var_irt = var_irt,
                     n = n,
-                    mz = mz)
+                    mz = mz,
+                    passed_first_search = passed_first_search)
 
             end
         end
     end
     # Initialize dictionary to store best precursor matches
-    prec_to_best_prob = Dictionary{UInt32, @NamedTuple{ best_prob::Float32, 
+    prec_to_best_prob = Dictionary{UInt32, @NamedTuple{ best_prob::Float32,
                                                         best_ms_file_idx::UInt32,
                                                         best_scan_idx::UInt32,
-                                                        best_irt::Float32, 
-                                                        mean_irt::Union{Missing, Float32}, 
-                                                        var_irt::Union{Missing, Float32}, 
-                                                        n::Union{Missing, UInt16}, 
-                                                        mz::Float32}}()
+                                                        best_irt::Float32,
+                                                        mean_irt::Union{Missing, Float32},
+                                                        var_irt::Union{Missing, Float32},
+                                                        n::Union{Missing, UInt16},
+                                                        mz::Float32,
+                                                        passed_first_search::Bool}}()
 
     # First pass: collect best matches and mean iRT
 

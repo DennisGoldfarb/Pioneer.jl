@@ -160,6 +160,7 @@ end
     include("./UnitTests/FastaDigestTests.jl")
     include("./UnitTests/FastaEntryConstructorsTests.jl")
     include("./UnitTests/BuildPionLibTest.jl")
+    include("./UnitTests/percolatorTrainingDataTests.jl")
     # include("./utils/FileOperations/test_file_operations_suite.jl")  # File doesn't exist
     include("./UnitTests/RazoQuadModel.jl")
     
