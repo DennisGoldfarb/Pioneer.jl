@@ -119,6 +119,7 @@ struct FirstPassSearchParameters{P<:PrecEstimation} <: FragmentIndexSearchParame
     irt_nstd::Float32
     plot_rt_alignment::Bool
     use_robust_fitting::Bool
+    rescore_with_refined_irt_error::Bool
     prec_estimation::P
 
     function FirstPassSearchParameters(params::PioneerParameters)
@@ -174,6 +175,8 @@ struct FirstPassSearchParameters{P<:PrecEstimation} <: FragmentIndexSearchParame
             Float32(irt_mapping_params.irt_nstd),   # Default irt_nstd
             Bool(hasproperty(irt_mapping_params, :plot_rt_alignment) ? irt_mapping_params.plot_rt_alignment : false),
             Bool(hasproperty(irt_mapping_params, :use_robust_fitting) ? irt_mapping_params.use_robust_fitting : true),
+            Bool(hasproperty(irt_mapping_params, :rescore_with_refined_irt_error) ?
+                irt_mapping_params.rescore_with_refined_irt_error : true),
             prec_estimation
         )
     end
@@ -313,20 +316,7 @@ function process_file!(
         psms::DataFrame,
         params::FirstPassSearchParameters,
         search_context::SearchContext)
-        column_names = [
-            :spectral_contrast, :city_block, :entropy_score, :scribe, :percent_theoretical_ignored,
-            :charge2, :poisson, :irt_error, 
-            :missed_cleavage, 
-            :Mox,
-            #:charge, Only works with charge 2 if at least 3 charge states presence. otherwise singular error
-            #:b_count, might be good for non-tryptic enzymes
-            :TIC, :y_count, :err_norm, :spectrum_peak_count, :intercept
-        ]
-
-        # Avoid singular error if no peaks were ignored
-        if maximum(psms.percent_theoretical_ignored) == 0
-            deleteat!(column_names, findfirst(==(:percent_theoretical_ignored), column_names))
-        end
+        column_names = get_first_pass_score_columns(psms)
 
 
         # Select scoring columns
@@ -359,9 +349,12 @@ function process_file!(
             )
         end
         # Process scores
-       
-        select!(psms, [:ms_file_idx, :score, :precursor_idx, :scan_idx,
-            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :target])
+        keep_columns = unique(vcat(
+            column_names,
+            [:ms_file_idx, :score, :precursor_idx, :scan_idx, :q_value, :log2_summed_intensity,
+             :irt, :rt, :irt_predicted, :target, :irt_error, :scan_count]
+        ))
+        select!(psms, keep_columns)
         get_probs!(psms, psms[!,:score])
     end
 
@@ -491,10 +484,15 @@ function process_search_results!(
     parsed_fname = getParsedFileName(search_context, ms_file_idx)
     temp_path = joinpath(getDataOutDir(search_context), "temp_data", "first_pass_psms", parsed_fname * ".arrow")
     psms[!, :ms_file_idx] .= UInt32(ms_file_idx)
+    scored_columns = get_first_pass_score_columns(psms)
+    persisted_columns = unique(vcat(
+        scored_columns,
+        [:ms_file_idx, :scan_idx, :precursor_idx, :rt, :irt_predicted, :q_value,
+         :score, :prob, :scan_count, :target, :irt_error]
+    ))
     Arrow.write(
         temp_path,
-        select!(psms, [:ms_file_idx, :scan_idx, :precursor_idx, :rt,
-            :irt_predicted, :q_value, :score, :prob, :scan_count])
+        select(psms, persisted_columns)
     )
     setFirstPassPsms!(getMSData(search_context), ms_file_idx, temp_path)
 
@@ -559,6 +557,8 @@ function summarize_results!(
     end
     # Map retention times
     map_retention_times!(search_context, results, params)
+    # Optional rescore using refined iRT errors before selecting precursors
+    rescore_psms_with_refined_irt_error!(search_context, params)
     # Process precursors
     precursor_dict = get_best_precursors_accross_runs!(search_context, results, params)
 

@@ -121,6 +121,25 @@ function add_main_search_columns!(psms::DataFrame,
     psms[!,:intercept] = ones(Float16, N)
 end
 
+function get_first_pass_score_columns(psms::DataFrame)
+    column_names = [
+        :spectral_contrast, :city_block, :entropy_score, :scribe, :percent_theoretical_ignored,
+        :charge2, :poisson, :irt_error,
+        :missed_cleavage,
+        :Mox,
+        #:charge, Only works with charge 2 if at least 3 charge states presence. otherwise singular error
+        #:b_count, might be good for non-tryptic enzymes
+        :TIC, :y_count, :err_norm, :spectrum_peak_count, :intercept
+    ]
+
+    # Avoid singular error if no peaks were ignored
+    if :percent_theoretical_ignored in names(psms) && maximum(psms.percent_theoretical_ignored) == 0
+        deleteat!(column_names, findfirst(==(:percent_theoretical_ignored), column_names))
+    end
+
+    return column_names
+end
+
 """
     score_main_search_psms!(psms::DataFrame, column_names::Vector{Symbol};
                            n_train_rounds::Int64=2,
@@ -555,6 +574,65 @@ function map_retention_times!(
             setRefinedIrtToRtMap!(search_context, IdentityModel(), failed_idx)
             setIrtRefinementModel!(search_context, nothing, failed_idx)
         end
+    end
+
+    return nothing
+end
+
+"""
+    rescore_psms_with_refined_irt_error!(search_context::SearchContext,
+                                         params::FirstPassSearchParameters)
+
+Recompute iRT error using refined predictions and rescore first-pass PSMs.
+
+Runs only when refinement models and refined RT splines are available for a file
+and the feature-level rescore is enabled via parameters.
+"""
+function rescore_psms_with_refined_irt_error!(
+    search_context::SearchContext,
+    params::FirstPassSearchParameters
+)
+    params.rescore_with_refined_irt_error || return
+
+    psms_paths = getFirstPassPsms(getMSData(search_context))
+    rt_to_refined_irt = getRtToRefinedIrtMap(search_context)
+    refinement_models = getIrtRefinementModels(search_context)
+    fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
+
+    for ms_file_idx in get_valid_file_indices(search_context)
+        if is_file_failed(search_context, ms_file_idx)
+            continue
+        end
+
+        refinement_model = get(refinement_models, ms_file_idx, nothing)
+        rt_model = get(rt_to_refined_irt, ms_file_idx, IdentityModel())
+
+        # Require a usable refinement model and refined RT spline
+        if isnothing(refinement_model) || !(refinement_model.use_refinement) || rt_model isa IdentityModel
+            continue
+        end
+
+        psms_path = psms_paths[ms_file_idx]
+        psms = DataFrame(Arrow.Table(psms_path))
+        if isempty(psms) || !haskey(psms, :refined_irt)
+            continue
+        end
+
+        # Update iRT error using refined predictions
+        psms[!, :irt_error] = Float16.(abs.(rt_model.(Float32.(psms[!, :rt])) .- Float32.(psms[!, :refined_irt])))
+
+        column_names = get_first_pass_score_columns(psms)
+        score_main_search_psms!(
+            psms,
+            column_names;
+            n_train_rounds=params.n_train_rounds_probit,
+            max_iter_per_round=params.max_iter_probit,
+            max_q_value=Float64(params.max_q_value_probit_rescore),
+            fdr_scale_factor=fdr_scale_factor
+        )
+        get_probs!(psms, psms[!, :score])
+
+        Arrow.write(psms_path, psms)
     end
 
     return nothing
