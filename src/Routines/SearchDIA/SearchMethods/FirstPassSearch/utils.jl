@@ -617,10 +617,62 @@ end
 
 PrecToIrtType = Dictionary{UInt32,
     NamedTuple{
-        (:best_prob, :best_ms_file_idx, :best_scan_idx, :best_library_irt, :mean_library_irt, :var_library_irt, :n, :mz),
-        Tuple{Float32, UInt32, UInt32, Float32, Union{Missing, Float32}, Union{Missing, Float32}, Union{Missing, UInt16}, Float32}
+        (
+            :best_prob,
+            :best_ms_file_idx,
+            :best_scan_idx,
+            :best_library_irt,
+            :mean_library_irt,
+            :var_library_irt,
+            :n,
+            :mz,
+            :library_irts,
+            :irt_probs
+        ),
+        Tuple{
+            Float32,
+            UInt32,
+            UInt32,
+            Float32,
+            Union{Missing, Float32},
+            Union{Missing, Float32},
+            Union{Missing, UInt16},
+            Float32,
+            Vector{Float32},
+            Vector{Float32}
+        }
     }
 }
+
+"""
+    consensus_irt(irts::AbstractVector{Float32}, probs::Union{Nothing, AbstractVector{Float32}}=nothing)
+
+Calculate a consensus iRT using a weighted median of qualifying runs.
+
+Falls back to an unweighted median when weights are unavailable or invalid.
+"""
+function consensus_irt(
+    irts::AbstractVector{Float32},
+    probs::Union{Nothing, AbstractVector{Float32}} = nothing
+)
+    isempty(irts) && return nothing
+
+    valid_weights = !(probs === nothing) && (length(irts) == length(probs))
+    if valid_weights
+        order = sortperm(irts)
+        sorted_irts = irts[order]
+        sorted_weights = probs[order]
+        total_weight = sum(sorted_weights)
+        if total_weight > zero(Float32)
+            threshold = total_weight / 2
+            cumulative = cumsum(sorted_weights)
+            idx = findfirst(w -> w >= threshold, cumulative)
+            return Float32(sorted_irts[coalesce(idx, length(sorted_irts))])
+        end
+    end
+
+    return Float32(median(irts))
+end
 
 """
     create_rt_indices!(search_context::SearchContext, results::FirstPassSearchResults,
