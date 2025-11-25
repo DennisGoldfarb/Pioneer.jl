@@ -838,7 +838,7 @@ function add_features!(psms::DataFrame,
                                     ms_file_idx::Integer,
                                     rt_to_irt_interp::RtConversionModel,
                                     rt_to_refined_irt_interp::RtConversionModel,
-                                    prec_id_to_irt::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_library_irt::Float32, mean_library_irt::Union{Missing, Float32}, var_library_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}}
+                                    prec_id_to_irt::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_library_irt::Float32, mean_library_irt::Union{Missing, Float32}, var_library_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32, total_rt_weight::Float32}}
                                     )
 
     precursor_sequence = getSequence(getPrecursors(getSpecLib(search_context)))#[:sequence],

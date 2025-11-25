@@ -546,14 +546,15 @@ function summarize_results!(
         
         if isempty(valid_psms_paths)
             @user_warn "No valid files for cross-run precursor analysis"
-            return Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_library_irt::Float32, mean_library_irt::Union{Missing, Float32}, var_library_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}}()
+            return Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_library_irt::Float32, mean_library_irt::Union{Missing, Float32}, var_library_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32, total_rt_weight::Float32}}()
         end
-        
+
         # Get best precursors from valid files only
         return get_best_precursors_accross_runs(
             valid_psms_paths,
             getMz(getPrecursors(getSpecLib(search_context))),#[:mz],
             valid_rt_irt,
+            getRtAlignmentVariance(search_context);
             max_q_val=params.max_q_val_for_irt
         )
     end

@@ -227,6 +227,7 @@ mutable struct SearchContext{N,L<:SpectralLibrary,M<:MassSpecDataReference}
     precursor_dict::Base.Ref{Dictionary}
     rt_index_paths::Base.Ref{Vector{String}}
     irt_errors::Dict{Int64, Float32}
+    rt_alignment_variance::Dict{Int64, Float32}
     irt_obs::Dict{UInt32, Float32}
     pg_score_to_qval::Ref{Any}
     pg_name_to_global_pg_score::Ref{Dict{ProteinKey, Float32}}
@@ -272,8 +273,9 @@ mutable struct SearchContext{N,L<:SpectralLibrary,M<:MassSpecDataReference}
             Dict{Int64, RtConversionModel}(),
             Dict{Int64, RtConversionModel}(),
             Dict{Int64, Union{IrtRefinementModel, Nothing}}(),
-            Ref{Dictionary}(), 
+            Ref{Dictionary}(),
             Ref{Vector{String}}(),
+            Dict{Int64, Float32}(),
             Dict{Int64, Float32}(),
             Dict{UInt32, Float32}(),
             Ref{Any}(), Ref(Dict{ProteinKey, Float32}()), Ref(Dict{Tuple{String,Bool,UInt8}, Float32}()), Ref{Any}(),
@@ -621,7 +623,7 @@ function setIrtRefinementModel!(s::SearchContext, model::Union{IrtRefinementMode
     s.irt_refinement_models[index] = model
 end
 
-function setPrecursorDict!(s::SearchContext, dict::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_library_irt::Float32, mean_library_irt::Union{Missing, Float32}, var_library_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}})
+function setPrecursorDict!(s::SearchContext, dict::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_library_irt::Float32, mean_library_irt::Union{Missing, Float32}, var_library_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32, total_rt_weight::Float32}})
     s.precursor_dict[] = dict
 end
 setRtIndexPaths!(s::SearchContext, paths::Vector{String}) = (s.rt_index_paths[] = paths)
@@ -630,6 +632,15 @@ function setIrtErrors!(s::SearchContext, errs::Dictionary{Int64, Float32})
     for (k,v) in pairs(errs)
         s.irt_errors[k] = v
     end
+end
+
+function setRtAlignmentVariance!(s::SearchContext, index::I, variance::Float32) where {I<:Integer}
+    s.rt_alignment_variance[index] = variance
+end
+
+getRtAlignmentVariance(s::SearchContext) = s.rt_alignment_variance
+function getRtAlignmentVariance(s::SearchContext, index::I) where {I<:Integer}
+    return get(s.rt_alignment_variance, index, 0.0f0)
 end
 
 #==========================================================
