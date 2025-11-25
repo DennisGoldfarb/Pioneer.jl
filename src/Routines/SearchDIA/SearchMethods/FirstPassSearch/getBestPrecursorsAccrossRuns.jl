@@ -202,7 +202,8 @@ function get_best_precursors_accross_runs(
     end
 
     # Recompute statistics around consensus anchors
-    for (precursor_idx, stats) in prec_to_best_prob
+    for precursor_idx in keys(prec_to_best_prob)
+        stats = prec_to_best_prob[precursor_idx]
         irts = stats.library_irts
         probs = stats.irt_probs
         n = UInt16(length(irts))
