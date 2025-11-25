@@ -15,6 +15,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+using Statistics: mean, median
+
 """
     get_best_precursors_accross_runs(psms_paths::Vector{String},
                                     prec_mzs::AbstractVector{Float32},
@@ -49,7 +51,6 @@ Dictionary mapping precursor indices to NamedTuple containing:
 2. Filters to top N precursors by probability
 3. Calculates median/MAD statistics and trims outlier runs prior to consensus iRT calculation
 """
-using Statistics: mean, median
 
 function get_best_precursors_accross_runs(
                          psms_paths::Vector{String},
