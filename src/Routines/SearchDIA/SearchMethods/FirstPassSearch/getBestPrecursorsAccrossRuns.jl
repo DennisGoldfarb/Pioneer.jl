@@ -19,7 +19,8 @@
     get_best_precursors_accross_runs(psms_paths::Vector{String},
                                     prec_mzs::AbstractVector{Float32},
                                     rt_to_library_irt::Dict{Int64, RtConversionModel};
-                                    max_q_val::Float32=0.01f0)
+                                    max_q_val::Float32=0.01f0,
+                                    mad_trim_multiplier::Float32=6.0f0)
     -> Dictionary{UInt32, NamedTuple}
 
 Identify and collect best precursor matches across multiple runs for retention time calibration.
@@ -29,6 +30,7 @@ Identify and collect best precursor matches across multiple runs for retention t
 - `prec_mzs`: Vector of precursor m/z values
 - `rt_to_library_irt`: Dictionary mapping file indices to RT→library_iRT conversion models
 - `max_q_val`: Maximum q-value threshold for considering PSMs
+- `mad_trim_multiplier`: MAD multiplier used to trim outlier iRTs before consensus calculation
 
 # Returns
 Dictionary mapping precursor indices to NamedTuple containing:
@@ -36,31 +38,38 @@ Dictionary mapping precursor indices to NamedTuple containing:
 - `best_ms_file_idx`: File index with best match
 - `best_scan_idx`: Scan index of best match
 - `best_library_irt`: Library iRT value of best match
-- `mean_library_irt`: Mean library iRT across qualifying matches
-- `var_library_irt`: Variance in library iRT across qualifying matches
-- `n`: Number of qualifying matches
+- `consensus_library_irt`: Trimmed mean library iRT across qualifying matches
+- `median_library_irt`: Median library iRT across qualifying matches
+- `mad_library_irt`: Median absolute deviation of library iRT across qualifying matches
+- `n`: Number of retained matches after trimming
 - `mz`: Precursor m/z value
 
 # Process
-1. First pass: Collects best matches and calculates mean library iRT for each precursor across the runs
+1. First pass: Collects best matches and records library iRT observations for each precursor across the runs
 2. Filters to top N precursors by probability
-3. Second pass: Calculates library iRT variance for remaining precursors
+3. Calculates median/MAD statistics and trims outlier runs prior to consensus iRT calculation
 """
 function get_best_precursors_accross_runs(
                          psms_paths::Vector{String},
                          prec_mzs::AbstractVector{Float32},
                          rt_to_library_irt::Dict{Int64, RtConversionModel};
-                         max_q_val::Float32 = 0.01f0
+                         max_q_val::Float32 = 0.01f0,
+                         mad_trim_multiplier::Float32 = 6.0f0
                          )
+
+    using Statistics: mean, median
+
+    precursor_irt_values = Dictionary{UInt32, Vector{Float32}}()
 
     function readPSMs!(
         prec_to_best_prob::Dictionary{UInt32, @NamedTuple{ best_prob::Float32,
                                                     best_ms_file_idx::UInt32,
                                                     best_scan_idx::UInt32,
                                                     best_library_irt::Float32,
-                                                    mean_library_irt::Union{Missing, Float32},
-                                                    var_library_irt::Union{Missing, Float32},
-                                                    n::Union{Missing, UInt16},
+                                                    consensus_library_irt::Float32,
+                                                    median_library_irt::Float32,
+                                                    mad_library_irt::Float32,
+                                                    n::UInt16,
                                                     mz::Float32}},
         precursor_idxs::AbstractVector{UInt32},
         q_values::AbstractVector{Float16},
@@ -83,15 +92,12 @@ function get_best_precursors_accross_runs(
             # Initialize running statistics
             passed_q_val = (q_value <= max_q_val)
             n = passed_q_val ? one(UInt16) : zero(UInt16)
-            mean_library_irt = passed_q_val ? library_irt : zero(Float32)
-            var_library_irt = zero(Float32)
             mz = prec_mzs[precursor_idx]
 
             #Has the precursor been encountered in a previous raw file?
-            #Keep a running mean library_irt for instances below q-val threshold
             if haskey(prec_to_best_prob, precursor_idx)
                 # Update existing precursor entry
-                best_prob, best_ms_file_idx, best_scan_idx, best_library_irt, old_mean_library_irt, var_library_irt, old_n, mz = prec_to_best_prob[precursor_idx]
+                best_prob, best_ms_file_idx, best_scan_idx, best_library_irt, consensus_library_irt, median_library_irt, mad_library_irt, old_n, mz = prec_to_best_prob[precursor_idx]
 
                 # Update best match if current is better
                 if (best_prob < prob)
@@ -102,15 +108,15 @@ function get_best_precursors_accross_runs(
                 end
 
                 # Update running statistics
-                mean_library_irt += old_mean_library_irt
                 n += old_n
                 prec_to_best_prob[precursor_idx] = (
                                                 best_prob = best_prob,
                                                 best_ms_file_idx = best_ms_file_idx,
                                                 best_scan_idx = best_scan_idx,
                                                 best_library_irt = best_library_irt,
-                                                mean_library_irt = mean_library_irt,
-                                                var_library_irt = var_library_irt,
+                                                consensus_library_irt = consensus_library_irt,
+                                                median_library_irt = median_library_irt,
+                                                mad_library_irt = mad_library_irt,
                                                 n = n,
                                                 mz = mz)
             else
@@ -119,54 +125,72 @@ function get_best_precursors_accross_runs(
                         best_ms_file_idx = ms_file_idx,
                         best_scan_idx = scan_idx,
                         best_library_irt = library_irt,
-                        mean_library_irt = mean_library_irt,
-                        var_library_irt = var_library_irt,
+                        consensus_library_irt = library_irt,
+                        median_library_irt = library_irt,
+                        mad_library_irt = 0.0f0,
                         n = n,
                         mz = mz)
                 insert!(prec_to_best_prob, precursor_idx, val)
             end
+
+            if passed_q_val
+                push!(get!(precursor_irt_values, precursor_idx, Float32[]), library_irt)
+            end
         end
     end
-    function getVariance!(
+
+    function finalize_irt_statistics!(
         prec_to_best_prob::Dictionary{UInt32, @NamedTuple{ best_prob::Float32,
                                                     best_ms_file_idx::UInt32,
                                                     best_scan_idx::UInt32,
                                                     best_library_irt::Float32,
-                                                    mean_library_irt::Union{Missing, Float32},
-                                                    var_library_irt::Union{Missing, Float32},
-                                                    n::Union{Missing, UInt16},
+                                                    consensus_library_irt::Float32,
+                                                    median_library_irt::Float32,
+                                                    mad_library_irt::Float32,
+                                                    n::UInt16,
                                                     mz::Float32}},
-        precursor_idxs::AbstractVector{UInt32},
-        q_values::AbstractVector{Float16},
-        rts::AbstractVector{Float32},
-        rt_to_library_irt::RtConversionModel,
-        max_q_val::Float32)
-        for row in eachindex(precursor_idxs)
-            # Skip PSMs that don't pass q-value threshold
-            q_value = q_values[row]
-
-            # Get precursor info
-            precursor_idx = precursor_idxs[row]
-            library_irt = rt_to_library_irt(rts[row])
-
-            if q_value > max_q_val
+        precursor_irt_values::Dictionary{UInt32, Vector{Float32}},
+        mad_trim_multiplier::Float32)
+        for (precursor_idx, val) in prec_to_best_prob
+            irts = get(precursor_irt_values, precursor_idx, Float32[])
+            if isempty(irts)
+                prec_to_best_prob[precursor_idx] = (
+                    best_prob = val.best_prob,
+                    best_ms_file_idx = val.best_ms_file_idx,
+                    best_scan_idx = val.best_scan_idx,
+                    best_library_irt = val.best_library_irt,
+                    consensus_library_irt = val.consensus_library_irt,
+                    median_library_irt = val.median_library_irt,
+                    mad_library_irt = val.mad_library_irt,
+                    n = zero(UInt16),
+                    mz = val.mz
+                )
                 continue
             end
-            if haskey(prec_to_best_prob, precursor_idx)
-                # Update variance calculation
-                best_prob, best_ms_file_idx, best_scan_idx, best_library_irt, mean_library_irt, var_library_irt, n, mz = prec_to_best_prob[precursor_idx]
-                var_library_irt += (library_irt - mean_library_irt/n)^2
-                prec_to_best_prob[precursor_idx] = (
-                    best_prob = best_prob,
-                    best_ms_file_idx= best_ms_file_idx,
-                    best_scan_idx = best_scan_idx,
-                    best_library_irt = best_library_irt,
-                    mean_library_irt = mean_library_irt,
-                    var_library_irt = var_library_irt,
-                    n = n,
-                    mz = mz)
 
+            med = median(irts)
+            abs_dev = abs.(irts .- med)
+            mad_val = median(abs_dev)
+            trimmed_irts = if mad_val == 0f0
+                irts
+            else
+                filter(x -> abs(x - med) <= mad_trim_multiplier * mad_val, irts)
             end
+            trimmed_median = median(trimmed_irts)
+            trimmed_mean = mean(trimmed_irts)
+            consensus_irt = length(trimmed_irts) == 1 ? trimmed_irts[1] : trimmed_mean
+
+            prec_to_best_prob[precursor_idx] = (
+                best_prob = val.best_prob,
+                best_ms_file_idx = val.best_ms_file_idx,
+                best_scan_idx = val.best_scan_idx,
+                best_library_irt = val.best_library_irt,
+                consensus_library_irt = Float32(consensus_irt),
+                median_library_irt = Float32(trimmed_median),
+                mad_library_irt = Float32(mad_val),
+                n = UInt16(length(trimmed_irts)),
+                mz = val.mz
+            )
         end
     end
     # Initialize dictionary to store best precursor matches
@@ -174,9 +198,10 @@ function get_best_precursors_accross_runs(
                                                         best_ms_file_idx::UInt32,
                                                         best_scan_idx::UInt32,
                                                         best_library_irt::Float32,
-                                                        mean_library_irt::Union{Missing, Float32},
-                                                        var_library_irt::Union{Missing, Float32},
-                                                        n::Union{Missing, UInt16},
+                                                        consensus_library_irt::Float32,
+                                                        median_library_irt::Float32,
+                                                        mad_library_irt::Float32,
+                                                        n::UInt16,
                                                         mz::Float32}}()
 
     # First pass: collect best matches and mean library iRT
@@ -229,32 +254,8 @@ function get_best_precursors_accross_runs(
         end
     end
 
-    # Second pass: calculate library iRT variance for remaining precursors
-    for psms_path in psms_paths #For each data frame
-        psms = Arrow.Table(psms_path)
+    # Calculate trimmed consensus statistics
+    finalize_irt_statistics!(prec_to_best_prob, precursor_irt_values, mad_trim_multiplier)
 
-        # Get the original file index from the PSM data
-        if isempty(psms[:ms_file_idx])
-            continue  # Skip empty files
-        end
-        file_idx = first(psms[:ms_file_idx])  # All PSMs in a file should have the same ms_file_idx
-
-        # Check if RT model exists for this file
-        if !haskey(rt_to_library_irt, file_idx)
-            continue  # Skip files without RT models (already warned in first pass)
-        end
-
-        #One row for each precursor
-        getVariance!(
-            prec_to_best_prob,
-            psms[:precursor_idx],
-            psms[:q_value],
-            psms[:rt],
-            rt_to_library_irt[file_idx],
-            max_q_val
-        )
-    end 
-
-    
     return prec_to_best_prob #[(prob, idx) for (idx, prob) in sort(collect(top_probs), rev=true)]
 end

@@ -617,8 +617,8 @@ end
 
 PrecToIrtType = Dictionary{UInt32,
     NamedTuple{
-        (:best_prob, :best_ms_file_idx, :best_scan_idx, :best_library_irt, :mean_library_irt, :var_library_irt, :n, :mz),
-        Tuple{Float32, UInt32, UInt32, Float32, Union{Missing, Float32}, Union{Missing, Float32}, Union{Missing, UInt16}, Float32}
+        (:best_prob, :best_ms_file_idx, :best_scan_idx, :best_library_irt, :consensus_library_irt, :median_library_irt, :mad_library_irt, :n, :mz),
+        Tuple{Float32, UInt32, UInt32, Float32, Float32, Float32, Float32, UInt16, Float32}
     }
 }
 
@@ -655,7 +655,7 @@ function create_rt_indices!(
     setIrtErrors!(search_context, irt_errs)
 
     # Create precursor to library iRT mapping
-    prec_to_irt = map(x -> (irt=x[:best_library_irt], mz=x[:mz]),
+    prec_to_irt = map(x -> (irt=x[:consensus_library_irt], mz=x[:mz]),
                       precursor_dict)
 
     # Set up indices folder
@@ -716,7 +716,7 @@ Calculates refined iRT error tolerances based on peak widths and cross-run varia
 # Returns
 Dictionary mapping file indices to refined iRT tolerances, combining:
 - Peak width variation (FWHM + n*MAD)
-- Cross-run refined iRT variation
+- Cross-run refined iRT variation estimated by median MAD across precursors
 """
 function get_irt_errs(
     fwhms::Dictionary{Int64, 
@@ -729,9 +729,10 @@ function get_irt_errs(
                 best_ms_file_idx::UInt32,
                 best_scan_idx::UInt32,
                 best_library_irt::Float32,
-                mean_library_irt::Union{Missing, Float32},
-                var_library_irt::Union{Missing, Float32},
-                n::Union{Missing, UInt16},
+                consensus_library_irt::Float32,
+                median_library_irt::Float32,
+                mad_library_irt::Float32,
+                n::UInt16,
                 mz::Float32}}
     ,
     params::FirstPassSearchParameters
@@ -741,22 +742,15 @@ function get_irt_errs(
     #n is a user-defined paramter.
     fwhms = map(x->x[:median_fwhm] + params.fwhm_nstd*x[:mad_fwhm],
     fwhms)
-    #Get variance in irt of apex accross runs. Only consider precursor identified below q-value threshold
-    #in more than two runs .
+    #Get median absolute deviation in iRT across runs (after trimming)
     irt_std = nothing
-    variance_  = collect(skipmissing(map(x-> (x[:n] > 2) ? sqrt(x[:var_library_irt]/(x[:n] - 1)) : missing, prec_to_irt)))
-    if !iszero(length(variance_))
-        irt_std = median(variance_)
+    mad_vals = collect(skipmissing(map(x -> (x[:n] > 1) ? x[:mad_library_irt] : missing, prec_to_irt)))
+    if !iszero(length(mad_vals))
+        irt_std = median(mad_vals)
     else
-        #This could happen if only two files are being searched
-        variance_  = collect(skipmissing(map(x-> (x[:n] == 2) ? sqrt(x[:var_library_irt]) : missing, prec_to_irt)))
-        if iszero(length(variance_)) #only searching one file so 
-            irt_std = 0.0f0
-        else
-            irt_std = median(variance_)
-        end
+        irt_std = 0.0f0
     end
-    #Number of standard deviations to cover
+    #Number of MADs to cover
     irt_std *= params.irt_nstd
     #dictionary maping file name to irt tolerance.
     return map(x->Float32((x+irt_std))::Float32, fwhms)::Dictionary{Int64, Float32}
