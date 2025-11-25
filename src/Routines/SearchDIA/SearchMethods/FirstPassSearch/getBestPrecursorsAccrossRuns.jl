@@ -49,6 +49,8 @@ Dictionary mapping precursor indices to NamedTuple containing:
 2. Filters to top N precursors by probability
 3. Calculates median/MAD statistics and trims outlier runs prior to consensus iRT calculation
 """
+using Statistics: mean, median
+
 function get_best_precursors_accross_runs(
                          psms_paths::Vector{String},
                          prec_mzs::AbstractVector{Float32},
@@ -56,8 +58,6 @@ function get_best_precursors_accross_runs(
                          max_q_val::Float32 = 0.01f0,
                          mad_trim_multiplier::Float32 = 6.0f0
                          )
-
-    using Statistics: mean, median
 
     precursor_irt_values = Dictionary{UInt32, Vector{Float32}}()
 
