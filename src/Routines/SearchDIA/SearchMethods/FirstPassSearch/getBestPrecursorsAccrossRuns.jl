@@ -210,7 +210,7 @@ function get_best_precursors_accross_runs(
         consensus_val = consensus_irt(irts, probs)
         consensus = isnothing(consensus_val) ? stats.best_library_irt : consensus_val
         mean_library_irt = isempty(irts) ? missing : Float32(mean(irts))
-        var_library_irt = isempty(irts) ? missing : Float32(sum((irt .- consensus).^2))
+        var_library_irt = isempty(irts) ? missing : Float32(sum((irts .- consensus).^2))
 
         prec_to_best_prob[precursor_idx] = (
             best_prob = stats.best_prob,
