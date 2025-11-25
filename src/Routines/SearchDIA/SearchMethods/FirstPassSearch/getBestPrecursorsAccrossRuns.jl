@@ -150,7 +150,7 @@ function get_best_precursors_accross_runs(
                                                     mz::Float32}},
         precursor_irt_values::Dictionary{UInt32, Vector{Float32}},
         mad_trim_multiplier::Float32)
-        for (precursor_idx, val) in prec_to_best_prob
+        for (precursor_idx, val) in pairs(prec_to_best_prob)
             irts = get(precursor_irt_values, precursor_idx, Float32[])
             if isempty(irts)
                 prec_to_best_prob[precursor_idx] = (
