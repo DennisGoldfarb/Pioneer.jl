@@ -18,8 +18,10 @@
 """
     get_best_precursors_accross_runs(psms_paths::Vector{String},
                                     prec_mzs::AbstractVector{Float32},
-                                    rt_to_library_irt::Dict{Int64, RtConversionModel};
-                                    max_q_val::Float32=0.01f0)
+                                    rt_to_library_irt::Dict{Int64, RtConversionModel},
+                                    rt_uncertainty::Dict{Int64, Float32};
+                                    max_q_val::Float32=0.01f0,
+                                    prior_variance::Float32=0.01f0)
     -> Dictionary{UInt32, NamedTuple}
 
 Identify and collect best precursor matches across multiple runs for retention time calibration.
@@ -28,7 +30,9 @@ Identify and collect best precursor matches across multiple runs for retention t
 - `psms_paths`: Paths to PSM files from first pass search
 - `prec_mzs`: Vector of precursor m/z values
 - `rt_to_library_irt`: Dictionary mapping file indices to RT→library_iRT conversion models
+- `rt_uncertainty`: Mapping from ms_file_idx to RT variance estimates (e.g., spline residuals)
 - `max_q_val`: Maximum q-value threshold for considering PSMs
+- `prior_variance`: Small variance term added to stabilize weights when limited runs are available
 
 # Returns
 Dictionary mapping precursor indices to NamedTuple containing:
@@ -36,8 +40,9 @@ Dictionary mapping precursor indices to NamedTuple containing:
 - `best_ms_file_idx`: File index with best match
 - `best_scan_idx`: Scan index of best match
 - `best_library_irt`: Library iRT value of best match
-- `mean_library_irt`: Mean library iRT across qualifying matches
-- `var_library_irt`: Variance in library iRT across qualifying matches
+- `mean_library_irt`: Weighted mean library iRT across qualifying matches
+- `var_library_irt`: Weighted variance accumulator across qualifying matches
+- `total_rt_weight`: Sum of inverse-variance RT weights across runs
 - `n`: Number of qualifying matches
 - `mz`: Precursor m/z value
 
@@ -49,8 +54,10 @@ Dictionary mapping precursor indices to NamedTuple containing:
 function get_best_precursors_accross_runs(
                          psms_paths::Vector{String},
                          prec_mzs::AbstractVector{Float32},
-                         rt_to_library_irt::Dict{Int64, RtConversionModel};
-                         max_q_val::Float32 = 0.01f0
+                         rt_to_library_irt::Dict{Int64, RtConversionModel},
+                         rt_uncertainty::Dict{Int64, Float32};
+                         max_q_val::Float32 = 0.01f0,
+                         prior_variance::Float32 = 0.01f0
                          )
 
     function readPSMs!(
@@ -61,7 +68,8 @@ function get_best_precursors_accross_runs(
                                                     mean_library_irt::Union{Missing, Float32},
                                                     var_library_irt::Union{Missing, Float32},
                                                     n::Union{Missing, UInt16},
-                                                    mz::Float32}},
+                                                    mz::Float32,
+                                                    total_rt_weight::Float32}},
         precursor_idxs::AbstractVector{UInt32},
         q_values::AbstractVector{Float16},
         probs::AbstractVector{Float32},
@@ -69,7 +77,15 @@ function get_best_precursors_accross_runs(
         scan_idxs::AbstractVector{UInt32},
         ms_file_idxs::AbstractVector{UInt32},
         rt_to_library_irt::RtConversionModel,
-        max_q_val::Float32)
+        rt_uncertainty::Dict{Int64, Float32},
+        max_q_val::Float32,
+        prior_variance::Float32)
+
+        function rt_weight(ms_file_idx::UInt32)
+            variance = get(rt_uncertainty, Int(ms_file_idx), 0.0f0) + prior_variance
+            variance = max(variance, eps(Float32))
+            return Float32(inv(variance))
+        end
 
         for row in eachindex(precursor_idxs)
             # Extract current PSM information
@@ -83,15 +99,16 @@ function get_best_precursors_accross_runs(
             # Initialize running statistics
             passed_q_val = (q_value <= max_q_val)
             n = passed_q_val ? one(UInt16) : zero(UInt16)
-            mean_library_irt = passed_q_val ? library_irt : zero(Float32)
+            mean_library_irt = passed_q_val ? library_irt : missing
             var_library_irt = zero(Float32)
+            total_rt_weight = passed_q_val ? rt_weight(ms_file_idx) : 0.0f0
             mz = prec_mzs[precursor_idx]
 
             #Has the precursor been encountered in a previous raw file?
             #Keep a running mean library_irt for instances below q-val threshold
             if haskey(prec_to_best_prob, precursor_idx)
                 # Update existing precursor entry
-                best_prob, best_ms_file_idx, best_scan_idx, best_library_irt, old_mean_library_irt, var_library_irt, old_n, mz = prec_to_best_prob[precursor_idx]
+                best_prob, best_ms_file_idx, best_scan_idx, best_library_irt, old_mean_library_irt, var_library_irt, old_n, mz, old_weight = prec_to_best_prob[precursor_idx]
 
                 # Update best match if current is better
                 if (best_prob < prob)
@@ -101,9 +118,18 @@ function get_best_precursors_accross_runs(
                     best_ms_file_idx = ms_file_idx
                 end
 
-                # Update running statistics
-                mean_library_irt += old_mean_library_irt
-                n += old_n
+                if passed_q_val
+                    new_weight = rt_weight(ms_file_idx)
+                    mean_library_irt = coalesce(old_mean_library_irt, library_irt)
+                    total_weight = old_weight + new_weight
+                    mean_library_irt += (library_irt - mean_library_irt) * (new_weight / total_weight)
+                    total_rt_weight = total_weight
+                    n = old_n + one(UInt16)
+                else
+                    mean_library_irt = old_mean_library_irt
+                    total_rt_weight = old_weight
+                    n = old_n
+                end
                 prec_to_best_prob[precursor_idx] = (
                                                 best_prob = best_prob,
                                                 best_ms_file_idx = best_ms_file_idx,
@@ -112,7 +138,8 @@ function get_best_precursors_accross_runs(
                                                 mean_library_irt = mean_library_irt,
                                                 var_library_irt = var_library_irt,
                                                 n = n,
-                                                mz = mz)
+                                                mz = mz,
+                                                total_rt_weight = total_rt_weight)
             else
                 # Create new precursor entry
                 val = (best_prob = prob,
@@ -122,7 +149,8 @@ function get_best_precursors_accross_runs(
                         mean_library_irt = mean_library_irt,
                         var_library_irt = var_library_irt,
                         n = n,
-                        mz = mz)
+                        mz = mz,
+                        total_rt_weight = total_rt_weight)
                 insert!(prec_to_best_prob, precursor_idx, val)
             end
         end
@@ -135,12 +163,21 @@ function get_best_precursors_accross_runs(
                                                     mean_library_irt::Union{Missing, Float32},
                                                     var_library_irt::Union{Missing, Float32},
                                                     n::Union{Missing, UInt16},
-                                                    mz::Float32}},
+                                                    mz::Float32,
+                                                    total_rt_weight::Float32}},
         precursor_idxs::AbstractVector{UInt32},
         q_values::AbstractVector{Float16},
         rts::AbstractVector{Float32},
+        ms_file_idxs::AbstractVector{UInt32},
         rt_to_library_irt::RtConversionModel,
-        max_q_val::Float32)
+        rt_uncertainty::Dict{Int64, Float32},
+        max_q_val::Float32,
+        prior_variance::Float32)
+        function rt_weight(ms_file_idx::UInt32)
+            variance = get(rt_uncertainty, Int(ms_file_idx), 0.0f0) + prior_variance
+            variance = max(variance, eps(Float32))
+            return Float32(inv(variance))
+        end
         for row in eachindex(precursor_idxs)
             # Skip PSMs that don't pass q-value threshold
             q_value = q_values[row]
@@ -148,14 +185,19 @@ function get_best_precursors_accross_runs(
             # Get precursor info
             precursor_idx = precursor_idxs[row]
             library_irt = rt_to_library_irt(rts[row])
+            ms_file_idx = UInt32(ms_file_idxs[row])
 
             if q_value > max_q_val
                 continue
             end
             if haskey(prec_to_best_prob, precursor_idx)
                 # Update variance calculation
-                best_prob, best_ms_file_idx, best_scan_idx, best_library_irt, mean_library_irt, var_library_irt, n, mz = prec_to_best_prob[precursor_idx]
-                var_library_irt += (library_irt - mean_library_irt/n)^2
+                best_prob, best_ms_file_idx, best_scan_idx, best_library_irt, mean_library_irt, var_library_irt, n, mz, total_rt_weight = prec_to_best_prob[precursor_idx]
+                if total_rt_weight > 0
+                    weight = rt_weight(ms_file_idx)
+                    delta = library_irt - coalesce(mean_library_irt, library_irt)
+                    var_library_irt += weight * delta^2
+                end
                 prec_to_best_prob[precursor_idx] = (
                     best_prob = best_prob,
                     best_ms_file_idx= best_ms_file_idx,
@@ -164,7 +206,8 @@ function get_best_precursors_accross_runs(
                     mean_library_irt = mean_library_irt,
                     var_library_irt = var_library_irt,
                     n = n,
-                    mz = mz)
+                    mz = mz,
+                    total_rt_weight = total_rt_weight),
 
             end
         end
@@ -177,7 +220,8 @@ function get_best_precursors_accross_runs(
                                                         mean_library_irt::Union{Missing, Float32},
                                                         var_library_irt::Union{Missing, Float32},
                                                         n::Union{Missing, UInt16},
-                                                        mz::Float32}}()
+                                                        mz::Float32,
+                                                        total_rt_weight::Float32}}()
 
     # First pass: collect best matches and mean library iRT
 
@@ -208,7 +252,9 @@ function get_best_precursors_accross_runs(
             psms[:scan_idx],
             psms[:ms_file_idx],
             rt_to_library_irt[file_idx],
-            max_q_val
+            rt_uncertainty,
+            max_q_val,
+            prior_variance
         )
     end
     
@@ -250,8 +296,11 @@ function get_best_precursors_accross_runs(
             psms[:precursor_idx],
             psms[:q_value],
             psms[:rt],
+            psms[:ms_file_idx],
             rt_to_library_irt[file_idx],
-            max_q_val
+            rt_uncertainty,
+            max_q_val,
+            prior_variance
         )
     end 
 
