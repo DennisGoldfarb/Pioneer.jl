@@ -117,6 +117,7 @@ struct FirstPassSearchParameters{P<:PrecEstimation} <: FragmentIndexSearchParame
     max_prob_to_impute::Float32
     fwhm_nstd::Float32
     irt_nstd::Float32
+    irt_trim_mad_multiplier::Float32
     plot_rt_alignment::Bool
     use_robust_fitting::Bool
     prec_estimation::P
@@ -172,6 +173,7 @@ struct FirstPassSearchParameters{P<:PrecEstimation} <: FragmentIndexSearchParame
             Float32(irt_mapping_params.max_prob_to_impute_irt),  # Default max_prob_to_impute
             Float32(irt_mapping_params.fwhm_nstd),   # Default fwhm_nstd
             Float32(irt_mapping_params.irt_nstd),   # Default irt_nstd
+            Float32(get(irt_mapping_params, :irt_trim_mad_multiplier, 6.0)),
             Bool(hasproperty(irt_mapping_params, :plot_rt_alignment) ? irt_mapping_params.plot_rt_alignment : false),
             Bool(hasproperty(irt_mapping_params, :use_robust_fitting) ? irt_mapping_params.use_robust_fitting : true),
             prec_estimation
@@ -546,15 +548,16 @@ function summarize_results!(
         
         if isempty(valid_psms_paths)
             @user_warn "No valid files for cross-run precursor analysis"
-            return Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_library_irt::Float32, mean_library_irt::Union{Missing, Float32}, var_library_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}}()
+            return Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_library_irt::Float32, consensus_library_irt::Float32, median_library_irt::Float32, mad_library_irt::Float32, n::UInt16, mz::Float32}}()
         end
-        
+
         # Get best precursors from valid files only
         return get_best_precursors_accross_runs(
             valid_psms_paths,
             getMz(getPrecursors(getSpecLib(search_context))),#[:mz],
             valid_rt_irt,
-            max_q_val=params.max_q_val_for_irt
+            max_q_val=params.max_q_val_for_irt,
+            mad_trim_multiplier=params.irt_trim_mad_multiplier
         )
     end
     # Map retention times
@@ -574,7 +577,7 @@ function summarize_results!(
         i = 1
         for (pid, val) in pairs(precursor_dict)
             i += 1
-            setPredIrt!(search_context, pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
+            setPredIrt!(search_context, pid, val.consensus_library_irt)
             partner_pid = getPartnerPrecursorIdx(precursors)[pid]
             if ismissing(partner_pid)
                 continue
@@ -584,15 +587,15 @@ function summarize_results!(
             # Otherwise if the partner was ID'ed, it should keep its original predicted iRT
             if !haskey(precursor_dict, partner_pid)
                 insert!(precursor_dict, partner_pid, val)
-                setPredIrt!(search_context, partner_pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
+                setPredIrt!(search_context, partner_pid, val.consensus_library_irt)
             else
-                setPredIrt!(search_context, partner_pid, getIrt(getPrecursors(getSpecLib(search_context)))[partner_pid])
+                setPredIrt!(search_context, partner_pid, precursor_dict[partner_pid].consensus_library_irt)
             end
-            
+
         end
     else
         for (pid, val) in pairs(precursor_dict)
-            setPredIrt!(search_context, pid, getIrt(getPrecursors(getSpecLib(search_context)))[pid])
+            setPredIrt!(search_context, pid, val.consensus_library_irt)
         end
     end
 

@@ -83,6 +83,7 @@ Most parameters should not be changed, but the following may need adjustement.
 | `irt_mapping.max_prob_to_impute_irt` | Int | If probability of the psm is less then x in the first-pass search, then impute irt for the precursor with globably determined value from the other runs (default: 0.75) |
 | `irt_mapping.fwhm_nstd` | Float | Number of standard deviations of the fwhm to add to the retention time tolerance (default: 4) |
 | `irt_mapping.irt_nstd` | Int | Number of standard deviations of run-to-run irt tolerance to add to the retention time tolerance (default: 4) |
+| `irt_mapping.irt_trim_mad_multiplier` | Float | MAD multiplier used to trim outlier cross-run iRTs before forming the consensus anchor (default: 6) |
 
 ### Quantification Search Parameters
 
