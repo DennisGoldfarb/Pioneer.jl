@@ -756,13 +756,13 @@ end
 
 
 """
-    get_irt_errs(fwhms::Dictionary, prec_to_irt::Dictionary, params::FirstPassSearchParameters)
+    get_irt_errs(fwhms::Dictionary, prec_to_irt::PrecToIrtType, params::FirstPassSearchParameters)
 
 Calculates refined iRT error tolerances based on peak widths and cross-run variation.
 
 # Arguments
 - `fwhms`: Dictionary of FWHM statistics per file
-- `prec_to_irt`: Dictionary of precursor refined iRT data
+- `prec_to_irt`: Dictionary of precursor refined iRT data (including consensus fields)
 - `params`: Parameters including FWHM and iRT standard deviation multipliers
 
 # Returns
@@ -771,21 +771,12 @@ Dictionary mapping file indices to refined iRT tolerances, combining:
 - Cross-run refined iRT variation
 """
 function get_irt_errs(
-    fwhms::Dictionary{Int64, 
+    fwhms::Dictionary{Int64,
                         @NamedTuple{
                             median_fwhm::Float32,
                             mad_fwhm::Float32
                         }},
-    prec_to_irt::Dictionary{UInt32,
-    @NamedTuple{best_prob::Float32,
-                best_ms_file_idx::UInt32,
-                best_scan_idx::UInt32,
-                best_library_irt::Float32,
-                mean_library_irt::Union{Missing, Float32},
-                var_library_irt::Union{Missing, Float32},
-                n::Union{Missing, UInt16},
-                mz::Float32}}
-    ,
+    prec_to_irt::PrecToIrtType,
     params::FirstPassSearchParameters
 )
     #Get upper bound on peak fwhm. Use median + n*standard_deviation
@@ -796,12 +787,21 @@ function get_irt_errs(
     #Get variance in irt of apex accross runs. Only consider precursor identified below q-value threshold
     #in more than two runs .
     irt_std = nothing
-    variance_  = collect(skipmissing(map(x-> (x[:n] > 2) ? sqrt(x[:var_library_irt]/(x[:n] - 1)) : missing, prec_to_irt)))
+    variance_ = collect(
+        skipmissing(
+            map(x -> (x[:n] > 2 && !ismissing(x[:var_library_irt])) ? sqrt(x[:var_library_irt]/(x[:n] - 1)) : missing,
+                prec_to_irt)
+        )
+    )
     if !iszero(length(variance_))
         irt_std = median(variance_)
     else
         #This could happen if only two files are being searched
-        variance_  = collect(skipmissing(map(x-> (x[:n] == 2) ? sqrt(x[:var_library_irt]) : missing, prec_to_irt)))
+        variance_ = collect(
+            skipmissing(
+                map(x -> (x[:n] == 2 && !ismissing(x[:var_library_irt])) ? sqrt(x[:var_library_irt]) : missing, prec_to_irt)
+            )
+        )
         if iszero(length(variance_)) #only searching one file so 
             irt_std = 0.0f0
         else
