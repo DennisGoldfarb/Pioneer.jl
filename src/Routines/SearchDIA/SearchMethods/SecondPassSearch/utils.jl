@@ -817,13 +817,12 @@ end
 
 """
     add_features!(psms::DataFrame, search_context::SearchContext, tic, masses, ms_file_idx,
-                  rt_to_irt_interp, rt_to_refined_irt_interp, prec_id_to_irt)
+                  rt_to_irt_interp, prec_id_to_irt)
 
 Add feature columns to PSMs for scoring and analysis.
 
 # Arguments
-- `rt_to_irt_interp`: Library iRT model (RT → library iRT, used for targeting)
-- `rt_to_refined_irt_interp`: Refined iRT model (RT → refined iRT, used for features)
+- `rt_to_irt_interp`: Library iRT model (RT → library iRT, used for targeting/features)
 
 # Added Features
 - RT and iRT metrics (both library and refined)
@@ -837,7 +836,6 @@ function add_features!(psms::DataFrame,
                                     masses::AbstractArray,
                                     ms_file_idx::Integer,
                                     rt_to_irt_interp::RtConversionModel,
-                                    rt_to_refined_irt_interp::RtConversionModel,
                                     prec_id_to_irt::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_library_irt::Float32, mean_library_irt::Union{Missing, Float32}, var_library_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}}
                                     )
 
@@ -914,30 +912,35 @@ function add_features!(psms::DataFrame,
                 prec_idx = precursor_idx[i]
                 entrap_group_id[i] = entrap_group_ids[prec_idx]
 
-                # Calculate observed refined iRT from scan RT
-                refined_irt_obs[i] = rt_to_refined_irt_interp(rt[i])
-                irt_obs[i] = rt_to_irt_interp(rt[i])
+                # Calculate observed refined iRT from scan RT using library spline
+                refined_irt_obs[i] = rt_to_irt_interp(rt[i])
+                irt_obs[i] = refined_irt_obs[i]
 
                 
-                irt_pred[i] = getPredIrt(search_context, prec_idx)#prec_irt[prec_idx]
+                irt_pred[i] = getPredIrt(search_context, prec_idx)
                 # Calculate predicted refined iRT using refinement model + library iRT
                 library_irt = getPredIrt(search_context, prec_idx)
                 refined_irt_pred[i] = if !isnothing(refinement_model) && refinement_model.use_refinement
                     refinement_model(precursor_sequence[prec_idx], library_irt)
                 else
-                    throw("Not supposed to happen atm...")
                     library_irt
                 end
 
                 # Difference between observed and best library iRT from other runs
-                refined_irt_diff[i] = abs(refined_irt_obs[i] - 
-                refinement_model(precursor_sequence[prec_idx], prec_id_to_irt[prec_idx].best_library_irt))
-                
-                irt_diff[i] = abs(irt_obs[i] - prec_id_to_irt[prec_idx].best_library_irt)
+                best_library_irt = prec_id_to_irt[prec_idx].best_library_irt
+                refined_best_irt = if !isnothing(refinement_model) && refinement_model.use_refinement
+                    refinement_model(precursor_sequence[prec_idx], best_library_irt)
+                else
+                    best_library_irt
+                end
+
+                refined_irt_diff[i] = abs(refined_irt_obs[i] - refined_best_irt)
+
+                irt_diff[i] = abs(irt_obs[i] - best_library_irt)
 
                 # MS1-level iRT difference
                 if !ms1_missing[i]
-                    ms1_refined_irt_obs = rt_to_refined_irt_interp(ms1_rt[i])
+                    ms1_refined_irt_obs = rt_to_irt_interp(ms1_rt[i])
                     ms1_irt_diff[i] = abs(ms1_refined_irt_obs - refined_irt_pred[i])
                 else
                     ms1_irt_diff[i] = 0f0
@@ -1056,7 +1059,7 @@ function get_summary_scores!(
                             fitted_spectral_contrast::AbstractVector{Float16},
                             scribe::AbstractVector{Float16},
                             y_count::AbstractVector{UInt8},
-                            rt_to_refined_irt_interp::RtConversionModel
+                            rt_to_irt_interp::RtConversionModel
                         )
 
     max_gof = -100.0
@@ -1108,7 +1111,7 @@ function get_summary_scores!(
         count += 1
     end
 
-    irts = rt_to_refined_irt_interp.(psms.rt)
+    irts = rt_to_irt_interp.(psms.rt)
 
     @inbounds @fastmath for i in range(1, length(weight))
         if length(weight) == 1

@@ -511,41 +511,29 @@ end
     getRtToRefinedIrtModel(s::SearchContext, index::Integer)
 
 Get RT → refined_iRT model for file index.
-Falls back to library iRT if refined unavailable.
-Returns identity model if neither exists.
+Uses the library RT→iRT mapping; retained for compatibility.
 
 # Usage
 observed_refined_irt = getRtToRefinedIrtModel(context, file_idx)(scan_rt)
 """
 function getRtToRefinedIrtModel(s::SearchContext, index::I) where {I<:Integer}
-    if haskey(s.rt_to_refined_irt_map, index)
-        return s.rt_to_refined_irt_map[index]
-    elseif haskey(s.rt_irt_map, index)
-        @debug "Refined iRT model not found for file $index, falling back to library iRT model"
-        return s.rt_irt_map[index]
-    else
-        return IdentityModel()
-    end
+    return getRtIrtModel(s, index)
 end
 
 """
     getRefinedIrtToRtModel(s::SearchContext, index::Integer)
 
 Get refined_iRT → RT model for file index.
-Falls back to library iRT if refined unavailable.
-Returns identity model if neither exists.
+Uses the library iRT→RT mapping; retained for compatibility.
 
 # Usage
 predicted_rt = getRefinedIrtToRtModel(context, file_idx)(refined_irt)
 """
 function getRefinedIrtToRtModel(s::SearchContext, index::I) where {I<:Integer}
-    if haskey(s.refined_irt_to_rt_map, index)
-        return s.refined_irt_to_rt_map[index]
-    elseif haskey(s.irt_rt_map, index)
-        @debug "Refined iRT model not found for file $index, falling back to library iRT model"
-        return s.irt_rt_map[index]
+    return if haskey(s.irt_rt_map, index)
+        s.irt_rt_map[index]
     else
-        return IdentityModel()
+        IdentityModel()
     end
 end
 

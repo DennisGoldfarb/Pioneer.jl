@@ -368,12 +368,16 @@ function map_retention_times!(
         @user_info "File $ms_file_idx: Fitting RT alignment models..."
 
         try
+            library_rt_for_plot = Float32.(psms[:rt][best_hits])
+            library_irt_for_plot = Float32.(psms[:irt_predicted][best_hits])
+            refined_rt_for_plot = nothing
+            refined_irt_for_plot = nothing
             if params.use_robust_fitting
                 # === STEP 1: Fit RT → library_iRT spline ===
                 @user_info "  Step 1: Fitting RT → library_iRT spline..."
                 best_psms_df = DataFrame(
-                    rt = psms[:rt][best_hits],
-                    irt_predicted = psms[:irt_predicted][best_hits]
+                    rt = library_rt_for_plot,
+                    irt_predicted = library_irt_for_plot
                 )
 
                 rt_to_library_irt, valid_rt, valid_library_irt, irt_mad = Pioneer.fit_irt_model(
@@ -429,66 +433,35 @@ function map_retention_times!(
                 # Store refinement model
                 setIrtRefinementModel!(search_context, refinement_model, ms_file_idx)
 
-                # === STEP 4: Fit RT → refined_iRT spline (if refinement succeeds) ===
+                # === STEP 4: Capture refined targets for QC (reuse library spline for RT→iRT) ===
                 if !isnothing(refinement_model) && refinement_model.use_refinement
-                    @user_info "  Step 4: Fitting RT → refined_iRT spline..."
+                    refined_irt_values = Float32[refinement_model(seq, lib_irt)
+                                                 for (seq, lib_irt) in zip(best_sequences,
+                                                                            Float32.(psms[:irt_predicted][best_hits]))]
 
-                    # Apply refinement model to get refined_irt for best PSMs
-                    refined_irt_values = [refinement_model(seq, lib_irt)
-                                         for (seq, lib_irt) in zip(best_sequences,
-                                                                    Float32.(psms[:irt_predicted][best_hits]))]
-
-                    # Fit RT → refined_iRT spline
-                    refined_psms_df = DataFrame(
-                        rt = Float32.(psms[:rt][best_hits]),
-                        irt_predicted = refined_irt_values
-                    )
-
-                    rt_to_refined_irt, valid_rt_refined, valid_refined_irt, _ = Pioneer.fit_irt_model(
-                        refined_psms_df;
-                        lambda_penalty = Float32(0.1),
-                        ransac_threshold = 1000,
-                        min_psms = 10,
-                        spline_degree = 3,
-                        max_knots = 7,
-                        outlier_threshold = Float32(5.0)
-                    )
-
-                    # Store in rt_to_refined_irt_map (NEW FIELD - DO NOT overwrite rt_irt_map!)
-                    setRtToRefinedIrtMap!(search_context, rt_to_refined_irt, ms_file_idx)
-
-                    # === STEP 5: Fit refined_iRT → RT inverse spline ===
-                    @user_info "  Step 5: Fitting refined_iRT → RT inverse spline..."
-                    refined_irt_to_rt_df = DataFrame(
-                        rt = valid_refined_irt,
-                        irt_predicted = valid_rt_refined
-                    )
-                    refined_irt_to_rt, _, _, _ = Pioneer.fit_irt_model(
-                        refined_irt_to_rt_df;
-                        lambda_penalty = Float32(0.1),
-                        ransac_threshold = 1000,
-                        min_psms = 10,
-                        spline_degree = 3,
-                        max_knots = 7,
-                        outlier_threshold = Float32(5.0)
-                    )
-                    # Store in refined_irt_to_rt_map (NEW FIELD)
-                    setRefinedIrtToRtMap!(search_context, refined_irt_to_rt, ms_file_idx)
+                    refined_rt_for_plot = library_rt_for_plot
+                    refined_irt_for_plot = refined_irt_values
                 else
-                    @user_info "  No refinement applied, RT → refined_iRT splines not created"
-                    # Store identity models for refined splines (fallback)
+                    @user_info "  No refinement applied, skipping refined iRT QC overlay"
                     setRtToRefinedIrtMap!(search_context, IdentityModel(), ms_file_idx)
                     setRefinedIrtToRtMap!(search_context, IdentityModel(), ms_file_idx)
                 end
 
-                # === STEP 6: Add :refined_irt column to PSMs file ===
-                @user_info "  Step 6: Adding :refined_irt column to PSMs table..."
+                # === STEP 5: Add :refined_irt column to PSMs file ===
+                @user_info "  Step 5: Adding :refined_irt column to PSMs table..."
                 add_refined_irt_column!(psms_path, refinement_model, search_context)
 
                 # Generate plots if requested
                 if params.plot_rt_alignment
                     plot_rt_alignment_firstpass(
-                        valid_rt, valid_library_irt, rt_to_library_irt, ms_file_idx, getDataOutDir(search_context)
+                        library_rt_for_plot,
+                        library_irt_for_plot,
+                        rt_to_library_irt,
+                        ms_file_idx,
+                        getDataOutDir(search_context);
+                        refined_rt = refined_rt_for_plot,
+                        refined_irt = refined_irt_for_plot,
+                        refined_model = rt_to_library_irt
                     )
                 end
 
@@ -533,8 +506,6 @@ function map_retention_times!(
             identity_model = IdentityModel()
             setRtIrtMap!(search_context, identity_model, ms_file_idx)
             setIrtRtMap!(search_context, identity_model, ms_file_idx)
-            setRtToRefinedIrtMap!(search_context, identity_model, ms_file_idx)
-            setRefinedIrtToRtMap!(search_context, identity_model, ms_file_idx)
             setIrtRefinementModel!(search_context, nothing, ms_file_idx)
         end
     end
@@ -551,8 +522,6 @@ function map_retention_times!(
             @user_warn "Setting identity RT models for failed file: $file_name"
             setRtIrtMap!(search_context, IdentityModel(), failed_idx)
             setIrtRtMap!(search_context, IdentityModel(), failed_idx)
-            setRtToRefinedIrtMap!(search_context, IdentityModel(), failed_idx)
-            setRefinedIrtToRtMap!(search_context, IdentityModel(), failed_idx)
             setIrtRefinementModel!(search_context, nothing, failed_idx)
         end
     end
@@ -561,7 +530,8 @@ function map_retention_times!(
 end
 
 """
-    plot_rt_alignment_firstpass(rt, irt, rt_model, ms_file_idx, output_dir)
+    plot_rt_alignment_firstpass(rt, irt, rt_model, ms_file_idx, output_dir; refined_rt=nothing,
+                                refined_irt=nothing, refined_model=nothing)
 
 Generate RT alignment diagnostic plot for FirstPassSearch.
 
@@ -571,8 +541,12 @@ Generate RT alignment diagnostic plot for FirstPassSearch.
 - `rt_model`: Fitted RT conversion model
 - `ms_file_idx`: MS file index
 - `output_dir`: Output directory path
+- `refined_rt` (optional): Observed RTs used for refined iRT fitting
+- `refined_irt` (optional): Refined iRT targets corresponding to `refined_rt`
+- `refined_model` (optional): Fitted RT → refined_iRT conversion model
 
-Creates a scatter plot of RT vs iRT with the fitted model curve overlay.
+Creates scatter plots of RT vs iRT with fitted model curves, including refined iRTs when
+available. All best-hit PSMs used for model fitting are shown, including RANSAC outliers.
 Saves to FirstPass RT alignment folder in QC plots directory.
 """
 function plot_rt_alignment_firstpass(
@@ -580,11 +554,14 @@ function plot_rt_alignment_firstpass(
     irt::Vector{Float32},
     rt_model::RtConversionModel,
     ms_file_idx::Int,
-    output_dir::String
+    output_dir::String;
+    refined_rt=nothing,
+    refined_irt=nothing,
+    refined_model=nothing
 )
     n = length(rt)
 
-    # Create scatter plot
+    # Create scatter plot for library iRT alignment
     p = plot(
         rt,
         irt,
@@ -603,13 +580,37 @@ function plot_rt_alignment_firstpass(
     fitted_irt = [rt_model(r) for r in rt_range]
     plot!(p, rt_range, fitted_irt, color = :red, linewidth = 2, label = nothing)
 
+    plots = [p]
+
+    # Add refined-iRT alignment plot if data/model are available
+    if refined_rt !== nothing && refined_irt !== nothing && refined_model !== nothing && !isempty(refined_rt)
+        refined_rt_range = LinRange(minimum(refined_rt), maximum(refined_rt), 100)
+        refined_fitted_irt = [refined_model(r) for r in refined_rt_range]
+
+        refined_plot = plot(
+            refined_rt,
+            refined_irt,
+            seriestype = :scatter,
+            title = "FirstPass RT Alignment (Refined iRT) (File $ms_file_idx)\nn = $(length(refined_rt))",
+            xlabel = "Observed RT (min)",
+            ylabel = "Refined iRT",
+            label = nothing,
+            alpha = 0.3,
+            markersize = 2,
+            size = (800, 600)
+        )
+
+        plot!(refined_plot, refined_rt_range, refined_fitted_irt, color = :red, linewidth = 2, label = nothing)
+        push!(plots, refined_plot)
+    end
+
     # Create output directory if needed
     rt_plot_folder = joinpath(output_dir, "qc_plots", "rt_alignment_plots", "firstpass")
     !isdir(rt_plot_folder) && mkpath(rt_plot_folder)
 
     # Save plot
     plot_path = joinpath(rt_plot_folder, "file_$(ms_file_idx)_rt_alignment.pdf")
-    savefig(p, plot_path)
+    savefig(plot(plots..., layout = (length(plots), 1)), plot_path)
 
     return nothing
 end
