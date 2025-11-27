@@ -256,7 +256,7 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
                   print_importance::Bool = false,
                   show_progress::Bool = true,
                   verbose_logging::Bool = false)
-    
+
     # Apply random target-decoy pairing before ML training
     assign_random_target_decoy_pairs!(psms)
     #Faster if sorted first (handle missing pair_id values)
@@ -1015,6 +1015,22 @@ function dropVectorColumns!(df)
     end
     # 2) Drop those columns in place
     select!(df, Not(to_drop))
+end
+
+"""
+    write_input_psms_tsv(tsv_output_path::AbstractString, psms::DataFrame)
+
+Write the incoming PSM DataFrame to a TSV file for debugging.
+Vector columns are dropped to avoid serialization errors.
+"""
+function write_input_psms_tsv(tsv_output_path::AbstractString, psms::DataFrame)
+    mkpath(dirname(tsv_output_path))
+
+    psms_for_output = copy(psms)
+    dropVectorColumns!(psms_for_output)
+    CSV.write(tsv_output_path, psms_for_output; delim='\t')
+
+    return nothing
 end
 # DISABLED: OOM helper function - only used by sort_of_percolator_out_of_memory!
 #=
