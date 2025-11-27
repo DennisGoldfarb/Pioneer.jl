@@ -492,7 +492,7 @@ function process_search_results!(
                 gpsms[!,:fitted_spectral_contrast],
                 gpsms[!,:scribe],
                 gpsms[!,:y_count],
-                getRtToRefinedIrtModel(search_context, ms_file_idx)
+                getRtIrtModel(search_context, ms_file_idx)
             );
         end
         # Keep only apex scans for each PSM group
@@ -547,10 +547,10 @@ function process_search_results!(
         end
 
         # Calculate MS1-MS2 RT difference in refined iRT space with explicit Float32 conversion
-        rt_to_refined_irt_model = getRtToRefinedIrtModel(search_context, ms_file_idx)
+        rt_to_irt_model = getRtIrtModel(search_context, ms_file_idx)
         psms[!,:ms1_ms2_rt_diff] = Float32.(ifelse.(psms[!,:rt_ms1] .== Float32(-1),
                           Float32(-1),
-                          abs.(rt_to_refined_irt_model.(psms[!,:rt]) .- rt_to_refined_irt_model.(psms[!,:rt_ms1]))))
+                          abs.(rt_to_irt_model.(psms[!,:rt]) .- rt_to_irt_model.(psms[!,:rt_ms1]))))
 
         psms[!, :ms1_features_missing] = miss_mask
 
@@ -561,16 +561,15 @@ function process_search_results!(
         select!(psms, expected_order)
 
         #Add additional features for final analysis
-        add_features!(
-            psms,
-            search_context,
-            getTICs(spectra),
-            getMzArrays(spectra),
-            ms_file_idx,
-            getRtIrtModel(search_context, ms_file_idx),
-            getRtToRefinedIrtModel(search_context, ms_file_idx),
-            getPrecursorDict(search_context)
-        )
+            add_features!(
+                psms,
+                search_context,
+                getTICs(spectra),
+                getMzArrays(spectra),
+                ms_file_idx,
+                getRtIrtModel(search_context, ms_file_idx),
+                getPrecursorDict(search_context)
+            )
 
         # Initialize probability scores (will be calculated later)
         initialize_prob_group_features!(psms, params.match_between_runs)
