@@ -355,6 +355,7 @@ function map_retention_times!(
     # Get sequences from spectral library (needed for refinement)
     precursors = getPrecursors(getSpecLib(search_context))
     sequences = getSequence(precursors)
+    is_decoy = getIsDecoy(precursors)
 
     for ms_file_idx in valid_files
         if is_file_failed(search_context, ms_file_idx)
@@ -363,7 +364,8 @@ function map_retention_times!(
 
         psms_path = all_psms_paths[ms_file_idx]
         psms = Arrow.Table(psms_path)
-        best_hits = (psms[:target] .== true) .& (psms[:q_value] .<= 0.01)
+        precursor_is_decoy = is_decoy[psms[:precursor_idx]]
+        best_hits = (.!precursor_is_decoy) .& (psms[:q_value] .<= 0.01)
 
         @user_info "File $ms_file_idx: Fitting RT alignment models..."
 
