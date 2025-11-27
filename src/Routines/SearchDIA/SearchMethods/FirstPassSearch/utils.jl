@@ -368,6 +368,8 @@ function map_retention_times!(
         @user_info "File $ms_file_idx: Fitting RT alignment models..."
 
         try
+            library_rt_for_plot = Float32.(psms[:rt][best_hits])
+            library_irt_for_plot = Float32.(psms[:irt_predicted][best_hits])
             refined_rt_for_plot = nothing
             refined_irt_for_plot = nothing
             rt_to_refined_irt_model = nothing
@@ -375,8 +377,8 @@ function map_retention_times!(
                 # === STEP 1: Fit RT → library_iRT spline ===
                 @user_info "  Step 1: Fitting RT → library_iRT spline..."
                 best_psms_df = DataFrame(
-                    rt = psms[:rt][best_hits],
-                    irt_predicted = psms[:irt_predicted][best_hits]
+                    rt = library_rt_for_plot,
+                    irt_predicted = library_irt_for_plot
                 )
 
                 rt_to_library_irt, valid_rt, valid_library_irt, irt_mad = Pioneer.fit_irt_model(
@@ -437,9 +439,9 @@ function map_retention_times!(
                     @user_info "  Step 4: Fitting RT → refined_iRT spline..."
 
                     # Apply refinement model to get refined_irt for best PSMs
-                    refined_irt_values = [refinement_model(seq, lib_irt)
-                                         for (seq, lib_irt) in zip(best_sequences,
-                                                                    Float32.(psms[:irt_predicted][best_hits]))]
+                    refined_irt_values = Float32[refinement_model(seq, lib_irt)
+                                                 for (seq, lib_irt) in zip(best_sequences,
+                                                                            Float32.(psms[:irt_predicted][best_hits]))]
 
                     # Fit RT → refined_iRT spline
                     refined_psms_df = DataFrame(
@@ -460,8 +462,8 @@ function map_retention_times!(
                     # Store in rt_to_refined_irt_map (NEW FIELD - DO NOT overwrite rt_irt_map!)
                     setRtToRefinedIrtMap!(search_context, rt_to_refined_irt, ms_file_idx)
 
-                    refined_rt_for_plot = valid_rt_refined
-                    refined_irt_for_plot = valid_refined_irt
+                    refined_rt_for_plot = library_rt_for_plot
+                    refined_irt_for_plot = refined_irt_values
                     rt_to_refined_irt_model = rt_to_refined_irt
 
                     # === STEP 5: Fit refined_iRT → RT inverse spline ===
@@ -496,8 +498,8 @@ function map_retention_times!(
                 # Generate plots if requested
                 if params.plot_rt_alignment
                     plot_rt_alignment_firstpass(
-                        valid_rt,
-                        valid_library_irt,
+                        library_rt_for_plot,
+                        library_irt_for_plot,
                         rt_to_library_irt,
                         ms_file_idx,
                         getDataOutDir(search_context);
@@ -592,7 +594,7 @@ Generate RT alignment diagnostic plot for FirstPassSearch.
 - `refined_model` (optional): Fitted RT → refined_iRT conversion model
 
 Creates scatter plots of RT vs iRT with fitted model curves, including refined iRTs when
-available.
+available. All best-hit PSMs used for model fitting are shown, including RANSAC outliers.
 Saves to FirstPass RT alignment folder in QC plots directory.
 """
 function plot_rt_alignment_firstpass(
