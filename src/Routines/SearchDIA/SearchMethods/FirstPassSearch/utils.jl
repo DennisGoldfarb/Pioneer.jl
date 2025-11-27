@@ -329,7 +329,7 @@ end
     map_retention_times!(search_context::SearchContext, results::FirstPassSearchResults, params::FirstPassSearchParameters)
 
 Maps retention times between library and empirical scales for each MS file. For files with sufficient high-confidence PSMs 
-(probability > min_prob_for_irt_mapping), creates spline-based conversion models between retention time (RT) and indexed 
+(target q-value ≤ 1%), creates spline-based conversion models between retention time (RT) and indexed
 retention time (iRT) scales.
 
 # Arguments
@@ -355,6 +355,7 @@ function map_retention_times!(
     # Get sequences from spectral library (needed for refinement)
     precursors = getPrecursors(getSpecLib(search_context))
     sequences = getSequence(precursors)
+    is_decoy = getIsDecoy(precursors)
 
     for ms_file_idx in valid_files
         if is_file_failed(search_context, ms_file_idx)
@@ -363,7 +364,8 @@ function map_retention_times!(
 
         psms_path = all_psms_paths[ms_file_idx]
         psms = Arrow.Table(psms_path)
-        best_hits = psms[:prob].>params.min_prob_for_irt_mapping
+        precursor_is_decoy = is_decoy[psms[:precursor_idx]]
+        best_hits = (.!precursor_is_decoy) .& (psms[:q_value] .<= 0.01)
 
         @user_info "File $ms_file_idx: Fitting RT alignment models..."
 
@@ -416,14 +418,13 @@ function map_retention_times!(
                 # Get sequences for best PSMs
                 best_sequences = [sequences[idx] for idx in psms[:precursor_idx][best_hits]]
 
-                # Train refinement model
+                # Train refinement model using all high-confidence target precursors
                 refinement_model = fit_irt_refinement_model(
                     best_sequences,
                     Float32.(psms[:irt_predicted][best_hits]),
                     observed_irt,
                     ms_file_idx=ms_file_idx,
-                    min_psms=20,
-                    train_fraction=0.67
+                    min_psms=20
                 )
 
                 # Store refinement model

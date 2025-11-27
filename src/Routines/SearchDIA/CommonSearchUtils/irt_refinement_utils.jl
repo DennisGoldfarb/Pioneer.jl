@@ -72,19 +72,17 @@ end
                               irt_predicted::Vector{Float32},
                               irt_observed::Vector{Float32};
                               ms_file_idx::Int=1,
-                              min_psms::Int=20,
-                              train_fraction::Float64=0.67)
+                              min_psms::Int=20)
         -> Union{IrtRefinementModel, Nothing}
 
-Train linear regression model to predict library iRT prediction errors.
+Train linear regression model to predict library iRT prediction errors using all
+high-confidence target precursors (no cross validation).
 
 # Workflow
 1. Filter to sequences with sufficient PSMs (min_psms)
-2. Split into training (train_fraction) and validation sets
-3. Train linear model: error ~ irt_predicted + count_A + ... + count_V
-4. Evaluate on validation set
-5. If validation MAE improves, retrain on full dataset
-6. Return model if refinement helps, nothing otherwise
+2. Train linear model: error ~ irt_predicted + count_A + ... + count_V
+3. Evaluate MAE on the full training set
+4. Return model if refinement helps, nothing otherwise
 
 # Arguments
 - `sequences`: Peptide sequences
@@ -92,7 +90,6 @@ Train linear regression model to predict library iRT prediction errors.
 - `irt_observed`: Observed iRT from RT alignment
 - `ms_file_idx`: File index for logging
 - `min_psms`: Minimum PSMs required (default: 20)
-- `train_fraction`: Training set fraction (default: 0.67)
 
 # Returns
 `IrtRefinementModel` if refinement improves MAE, `nothing` otherwise
@@ -101,15 +98,14 @@ Train linear regression model to predict library iRT prediction errors.
 - Features: 20 AA counts + library_irt (21 total)
 - Response: error = irt_predicted - irt_observed
 - Algorithm: Ordinary least squares (GLM.lm)
-- Validation: MAE on held-out validation set
+- Evaluation: MAE computed on the full filtered dataset
 """
 function fit_irt_refinement_model(
     sequences::Vector{String},
     irt_predicted::Vector{Float32},
     irt_observed::Vector{Float32};
     ms_file_idx::Int=1,
-    min_psms::Int=20,
-    train_fraction::Float64=0.67
+    min_psms::Int=20
 )::Union{IrtRefinementModel, Nothing}
 
     n = length(sequences)
@@ -126,30 +122,13 @@ function fit_irt_refinement_model(
     # Prepare feature matrix
     features_df = prepare_features_dataframe(sequences, irt_predicted, irt_errors)
 
-    # Train/validation split
-    n_train = round(Int, n * train_fraction)
-    n_val = n - n_train
-
-    if n_val < 5
-        @debug_l1 "File $ms_file_idx: Insufficient validation data ($n_val < 5), skipping iRT refinement"
-        return nothing
-    end
-
-    # Random shuffle
-    indices = randperm(n)
-    train_idx = indices[1:n_train]
-    val_idx = indices[(n_train+1):end]
-
-    train_df = features_df[train_idx, :]
-    val_df = features_df[val_idx, :]
-
     # Build formula (20 AAs + irt_predicted)
     aa_terms = [Symbol("count_$(aa)") for aa in STANDARD_AAS]
     formula_str = "error ~ irt_predicted + " * join(string.(aa_terms), " + ")
     formula = @eval @formula($(Meta.parse(formula_str)))
 
     # Train model
-    model = lm(formula, train_df)
+    model = lm(formula, features_df)
     coef_values = coef(model)
 
     intercept = Float32(coef_values[1])
@@ -157,18 +136,12 @@ function fit_irt_refinement_model(
     aa_coefficients = Float32.(coef_values[3:end])
     r2_train = Float32(r2(model))
 
-    # Validate
-    val_matrix = hcat(ones(n_val), val_df[:, :irt_predicted], Matrix(val_df[:, aa_terms]))
-    val_predictions = val_matrix * coef_values
+    # Evaluate on full dataset
+    full_matrix = hcat(ones(n), features_df[:, :irt_predicted], Matrix(features_df[:, aa_terms]))
+    full_predictions = full_matrix * coef_values
 
-    val_errors = val_df.error
-    ss_res = sum((val_errors .- val_predictions).^2)
-    ss_tot = sum((val_errors .- mean(val_errors)).^2)
-    r2_val = Float32(1 - ss_res / ss_tot)
-
-    # Calculate MAEs
-    mae_original = Float32(mean(abs.(val_errors)))
-    mae_refined = Float32(mean(abs.(val_errors .- val_predictions)))
+    mae_original = Float32(mean(abs.(features_df.error)))
+    mae_refined = Float32(mean(abs.(features_df.error .- full_predictions)))
 
     # Decision: use refinement if MAE improves
     use_refinement = mae_refined < mae_original
@@ -178,7 +151,6 @@ function fit_irt_refinement_model(
     if use_refinement
         @user_info "File $ms_file_idx iRT Refinement ENABLED: " *
                   "Training R²=$(round(r2_train, digits=4)), " *
-                  "Validation R²=$(round(r2_val, digits=4)), " *
                   "MAE: $(round(mae_original, digits=4)) → $(round(mae_refined, digits=4)) " *
                   "(Δ=$(round(mae_improvement, digits=4)), $(round(mae_improvement_pct, digits=2))% improvement)"
     else
@@ -188,31 +160,22 @@ function fit_irt_refinement_model(
                   "- No improvement, using library iRT"
     end
 
-    # Retrain on full dataset if refinement helps
     if use_refinement
-        @debug_l1 "File $ms_file_idx: Retraining on full dataset"
-
-        final_model = lm(formula, features_df)
-        final_coef_values = coef(final_model)
-
-        final_intercept = Float32(final_coef_values[1])
-        final_irt_coef = Float32(final_coef_values[2])
-
         # Create Dict for callable model
         aa_weights = Dict{Char, Float32}()
         for (i, aa) in enumerate(STANDARD_AAS)
-            aa_weights[aa] = Float32(final_coef_values[2 + i])
+            aa_weights[aa] = Float32(coef_values[2 + i])
         end
 
         return IrtRefinementModel(
             true,
             aa_weights,
-            final_intercept,
-            final_irt_coef,
+            intercept,
+            irt_coef,
             mae_original,
             mae_refined,
             r2_train,
-            r2_val
+            r2_train
         )
     else
         return nothing
