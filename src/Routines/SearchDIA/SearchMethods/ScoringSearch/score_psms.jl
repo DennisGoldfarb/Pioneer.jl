@@ -99,6 +99,9 @@ function score_precursor_isotope_traces(
         # In-memory processing - load PSMs first
         best_psms = load_psms_for_lightgbm(second_pass_folder)
 
+        temp_folder = dirname(second_pass_folder)
+        write_input_psms_tsv(joinpath(temp_folder, "percolator_input_psms.tsv"), best_psms)
+
         # Add quantile-binned features before training
         features_to_bin = [:prec_mz, :refined_irt_pred, :irt_pred, :weight, :tic]
         add_quantile_binned_features!(best_psms, features_to_bin, n_quantile_bins)
