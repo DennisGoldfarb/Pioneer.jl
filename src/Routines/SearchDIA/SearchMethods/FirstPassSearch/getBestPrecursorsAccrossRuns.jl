@@ -105,7 +105,7 @@ function get_best_precursors_accross_runs(
                 mean_irt += old_mean_irt
                 n += old_n 
                 prec_to_best_prob[precursor_idx] = (
-                                                best_prob = prob, 
+                                                best_prob = best_prob, 
                                                 best_ms_file_idx = best_ms_file_idx,
                                                 best_scan_idx = best_scan_idx,
                                                 best_irt = irt,

@@ -399,7 +399,7 @@ function map_retention_times!(
                 setIrtRtMap!(search_context, irt_model, ms_file_idx)
 
                 # Optionally generate plots
-                if params.plot_rt_alignment
+                #if params.plot_rt_alignment
                     plot_rt_alignment_firstpass(
                         valid_rt,
                         valid_irt,
@@ -407,7 +407,7 @@ function map_retention_times!(
                         ms_file_idx,
                         getDataOutDir(search_context)
                     )
-                end
+                #end
             else
                 # Use simple UniformSpline (legacy behavior)
                 best_rts = psms[:rt][best_hits]
