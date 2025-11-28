@@ -364,7 +364,9 @@ function map_retention_times!(
 
         psms_path = all_psms_paths[ms_file_idx]
         psms = Arrow.Table(psms_path)
-        best_hits = psms[:prob].>params.min_prob_for_irt_mapping
+        best_hits = psms[:prob] .> params.min_prob_for_irt_mapping
+        target_hits = Vector{Bool}(psms[:target])
+        best_target_hits = best_hits .& target_hits
 
         @user_info "File $ms_file_idx: Fitting RT alignment models..."
 
@@ -411,23 +413,29 @@ function map_retention_times!(
                 # === STEP 3: Train iRT refinement model ===
                 @user_info "  Step 3: Training iRT refinement model..."
 
-                # Calculate observed_irt for best PSMs using library spline
-                observed_irt = [rt_to_library_irt(rt) for rt in Float32.(psms[:rt][best_hits])]
+                refinement_model = nothing
 
-                # Get sequences for best PSMs
-                best_sequences = [sequences[idx] for idx in psms[:precursor_idx][best_hits]]
-                best_structural_mods = [structural_mods[idx] for idx in psms[:precursor_idx][best_hits]]
+                if any(best_target_hits)
+                    # Calculate observed_irt for best target PSMs using library spline
+                    observed_irt = [rt_to_library_irt(rt) for rt in Float32.(psms[:rt][best_target_hits])]
 
-                # Train refinement model
-                refinement_model = fit_irt_refinement_model(
-                    best_sequences,
-                    best_structural_mods,
-                    Float32.(psms[:irt_predicted][best_hits]),
-                    observed_irt,
-                    ms_file_idx=ms_file_idx,
-                    min_psms=20,
-                    train_fraction=0.67
-                )
+                    # Get sequences for best target PSMs
+                    best_sequences = [sequences[idx] for idx in psms[:precursor_idx][best_target_hits]]
+                    best_structural_mods = [structural_mods[idx] for idx in psms[:precursor_idx][best_target_hits]]
+
+                    # Train refinement model
+                    refinement_model = fit_irt_refinement_model(
+                        best_sequences,
+                        best_structural_mods,
+                        Float32.(psms[:irt_predicted][best_target_hits]),
+                        observed_irt,
+                        ms_file_idx=ms_file_idx,
+                        min_psms=20,
+                        train_fraction=0.67
+                    )
+                else
+                    @user_info "  No high-confidence target PSMs available for iRT refinement; skipping refinement model"
+                end
 
                 # Store refinement model
                 setIrtRefinementModel!(search_context, refinement_model, ms_file_idx)
@@ -439,14 +447,14 @@ function map_retention_times!(
                     # Apply refinement model to get refined_irt for best PSMs
                     refined_irt_values = [refinement_model(seq, mods, lib_irt)
                                          for (seq, mods, lib_irt) in zip(
-                        best_sequences,
-                        best_structural_mods,
-                        Float32.(psms[:irt_predicted][best_hits])
+                        [sequences[idx] for idx in psms[:precursor_idx][best_target_hits]],
+                        [structural_mods[idx] for idx in psms[:precursor_idx][best_target_hits]],
+                        Float32.(psms[:irt_predicted][best_target_hits])
                     )]
 
                     # Fit RT → refined_iRT spline
                     refined_psms_df = DataFrame(
-                        rt = Float32.(psms[:rt][best_hits]),
+                        rt = Float32.(psms[:rt][best_target_hits]),
                         irt_predicted = refined_irt_values
                     )
 
