@@ -355,6 +355,7 @@ function map_retention_times!(
     # Get sequences from spectral library (needed for refinement)
     precursors = getPrecursors(getSpecLib(search_context))
     sequences = getSequence(precursors)
+    structural_mods = getStructuralMods(precursors)
 
     for ms_file_idx in valid_files
         if is_file_failed(search_context, ms_file_idx)
@@ -415,10 +416,12 @@ function map_retention_times!(
 
                 # Get sequences for best PSMs
                 best_sequences = [sequences[idx] for idx in psms[:precursor_idx][best_hits]]
+                best_structural_mods = [structural_mods[idx] for idx in psms[:precursor_idx][best_hits]]
 
                 # Train refinement model
                 refinement_model = fit_irt_refinement_model(
                     best_sequences,
+                    best_structural_mods,
                     Float32.(psms[:irt_predicted][best_hits]),
                     observed_irt,
                     ms_file_idx=ms_file_idx,
@@ -434,9 +437,12 @@ function map_retention_times!(
                     @user_info "  Step 4: Fitting RT → refined_iRT spline..."
 
                     # Apply refinement model to get refined_irt for best PSMs
-                    refined_irt_values = [refinement_model(seq, lib_irt)
-                                         for (seq, lib_irt) in zip(best_sequences,
-                                                                    Float32.(psms[:irt_predicted][best_hits]))]
+                    refined_irt_values = [refinement_model(seq, mods, lib_irt)
+                                         for (seq, mods, lib_irt) in zip(
+                        best_sequences,
+                        best_structural_mods,
+                        Float32.(psms[:irt_predicted][best_hits])
+                    )]
 
                     # Fit RT → refined_iRT spline
                     refined_psms_df = DataFrame(
