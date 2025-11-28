@@ -923,15 +923,18 @@ function add_features!(psms::DataFrame,
                 # Calculate predicted refined iRT using refinement model + library iRT
                 library_irt = getPredIrt(search_context, prec_idx)
                 refined_irt_pred[i] = if !isnothing(refinement_model) && refinement_model.use_refinement
-                    refinement_model(precursor_sequence[prec_idx], library_irt)
+                    refinement_model(precursor_sequence[prec_idx], structural_mods[prec_idx], library_irt)
                 else
                     throw("Not supposed to happen atm...")
                     library_irt
                 end
 
                 # Difference between observed and best library iRT from other runs
-                refined_irt_diff[i] = abs(refined_irt_obs[i] - 
-                refinement_model(precursor_sequence[prec_idx], prec_id_to_irt[prec_idx].best_library_irt))
+                refined_irt_diff[i] = abs(refined_irt_obs[i] - refinement_model(
+                    precursor_sequence[prec_idx],
+                    structural_mods[prec_idx],
+                    prec_id_to_irt[prec_idx].best_library_irt
+                ))
                 
                 irt_diff[i] = abs(irt_obs[i] - prec_id_to_irt[prec_idx].best_library_irt)
 

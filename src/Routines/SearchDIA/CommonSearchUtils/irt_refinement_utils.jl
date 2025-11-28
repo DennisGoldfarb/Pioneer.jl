@@ -16,55 +16,131 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 """
+    parse_structural_modifications(structural_mods::Union{Missing, AbstractString})
+
+Convert structural modification string into a mapping from 1-based positions to
+modification names. Returns an empty dictionary when no modifications are
+present. Terminal modifications (n/c) are ignored because the refinement model
+is amino-acid-centric.
+"""
+function parse_structural_modifications(structural_mods::Union{Missing, AbstractString})
+    if ismissing(structural_mods) || isempty(structural_mods)
+        return Dict{Int, String}()
+    end
+
+    mod_regex = r"\((\d+),([A-Z]|[nc]),([^,\)]+)\)"
+    mods_by_position = Dict{Int, String}()
+
+    for m in eachmatch(mod_regex, structural_mods)
+        position = parse(Int, m.captures[1])
+        aa = first(m.captures[2])
+        if aa == 'n' || aa == 'c'
+            continue
+        end
+        mods_by_position[position] = m.captures[3]
+    end
+
+    return mods_by_position
+end
+
+"""
+    sanitize_mod_name(mod_name::String)
+
+Sanitize a modification name so it can be embedded in a symbol-friendly feature
+name. Non-alphanumeric characters are replaced with underscores and trimmed.
+"""
+function sanitize_mod_name(mod_name::String)
+    sanitized = replace(mod_name, r"[^A-Za-z0-9]+" => "_")
+    sanitized = strip(sanitized, '_')
+    return isempty(sanitized) ? "mod" : sanitized
+end
+
+"""
+    collect_feature_keys(sequences, structural_mods)
+
+Identify all unique (amino acid, modification) combinations present in the
+input sequences. Unmodified residues are labeled "unmodified" when present.
+"""
+function collect_feature_keys(
+    sequences::Vector{String},
+    structural_mods::AbstractVector
+)::Vector{Tuple{Char, String}}
+    feature_keys = Set{Tuple{Char, String}}()
+
+    for (seq, mods_str) in zip(sequences, structural_mods)
+        mods = parse_structural_modifications(mods_str)
+        for (pos, aa) in enumerate(seq)
+            if aa ∉ STANDARD_AAS
+                continue
+            end
+            mod_name = get(mods, pos, "unmodified")
+            push!(feature_keys, (aa, mod_name))
+        end
+    end
+
+    sorted_keys = collect(feature_keys)
+    sort!(sorted_keys, by = x -> (x[1], x[2]))
+    return sorted_keys
+end
+
+"""
     prepare_features_dataframe(sequences::Vector{String},
+                                structural_mods::AbstractVector,
                                 library_irt::Vector{Float32},
-                                irt_errors::Vector{Float32}) -> DataFrame
+                                irt_errors::Vector{Float32})
+        -> Tuple{DataFrame, Vector{Symbol}, Vector{Tuple{Char, String}}}
 
-Create feature matrix for iRT refinement model training.
-
-# Features (21 total)
-- 20 columns: count_A, count_R, ..., count_V (amino acid counts)
-- 1 column: irt_predicted (library iRT value)
-- 1 response: error (library_irt - observed_irt)
+Create feature matrix for iRT refinement model training with separate counts
+for every observed amino acid and modification pairing. The function returns the
+feature DataFrame along with the feature term symbols and their corresponding
+feature keys so coefficients can be mapped back to specific modified residues.
 
 # Arguments
 - `sequences`: Peptide sequences
+- `structural_mods`: Structural modification annotations aligned with sequences
 - `library_irt`: Library iRT predictions
 - `irt_errors`: Observed errors (library - observed)
 
 # Returns
-DataFrame with 21 feature columns + error response
+`(DataFrame, feature_terms, feature_keys)`
 """
 function prepare_features_dataframe(
     sequences::Vector{String},
+    structural_mods::AbstractVector,
     library_irt::Vector{Float32},
     irt_errors::Vector{Float32}
-)::DataFrame
+)::Tuple{DataFrame, Vector{Symbol}, Vector{Tuple{Char, String}}}
     n = length(sequences)
 
-    # Initialize feature matrix: 20 AAs + library_irt (use Float64 for GLM compatibility)
-    features = Dict{Symbol, Vector{Float64}}()
+    feature_keys = collect_feature_keys(sequences, structural_mods)
+    feature_symbols = Dict{Tuple{Char, String}, Symbol}(
+        key => Symbol("count_$(key[1])_$(sanitize_mod_name(key[2]))") for key in feature_keys
+    )
 
-    # Create columns for each standard amino acid
-    for aa in STANDARD_AAS
-        features[Symbol("count_$(aa)")] = zeros(Float64, n)
+    features = Dict{Symbol, Vector{Float64}}()
+    for sym in values(feature_symbols)
+        features[sym] = zeros(Float64, n)
     end
 
-    # Count amino acids in each sequence
-    for (i, seq) in enumerate(sequences)
-        for aa in seq
-            col_name = Symbol("count_$(aa)")
-            if haskey(features, col_name)
-                features[col_name][i] += 1.0
+    for (i, (seq, mods_str)) in enumerate(zip(sequences, structural_mods))
+        mods = parse_structural_modifications(mods_str)
+        for (pos, aa) in enumerate(seq)
+            if aa ∉ STANDARD_AAS
+                continue
+            end
+            mod_name = get(mods, pos, "unmodified")
+            key = (aa, mod_name)
+            if haskey(feature_symbols, key)
+                features[feature_symbols[key]][i] += 1.0
             end
         end
     end
 
-    # Add library iRT and error columns (convert to Float64 for GLM compatibility)
     features[:irt_predicted] = Float64.(library_irt)
     features[:error] = Float64.(irt_errors)
 
-    return DataFrame(features)
+    feature_terms = [feature_symbols[key] for key in feature_keys]
+    return DataFrame(features), feature_terms, feature_keys
 end
 
 """
@@ -81,13 +157,15 @@ Train linear regression model to predict library iRT prediction errors.
 # Workflow
 1. Filter to sequences with sufficient PSMs (min_psms)
 2. Split into training (train_fraction) and validation sets
-3. Train linear model: error ~ irt_predicted + count_A + ... + count_V
+3. Train linear model: error ~ irt_predicted + counts for each observed
+   amino-acid/modification combination
 4. Evaluate on validation set
 5. If validation MAE improves, retrain on full dataset
 6. Return model if refinement helps, nothing otherwise
 
 # Arguments
 - `sequences`: Peptide sequences
+- `structural_mods`: Structural modification annotations aligned with sequences
 - `irt_predicted`: Library iRT predictions
 - `irt_observed`: Observed iRT from RT alignment
 - `ms_file_idx`: File index for logging
@@ -98,13 +176,15 @@ Train linear regression model to predict library iRT prediction errors.
 `IrtRefinementModel` if refinement improves MAE, `nothing` otherwise
 
 # Model Details
-- Features: 20 AA counts + library_irt (21 total)
+- Features: Counts for every observed amino acid + modification pairing plus
+  library_irt
 - Response: error = irt_predicted - irt_observed
 - Algorithm: Ordinary least squares (GLM.lm)
 - Validation: MAE on held-out validation set
 """
 function fit_irt_refinement_model(
     sequences::Vector{String},
+    structural_mods::AbstractVector,
     irt_predicted::Vector{Float32},
     irt_observed::Vector{Float32};
     ms_file_idx::Int=1,
@@ -124,7 +204,12 @@ function fit_irt_refinement_model(
     irt_errors = irt_predicted .- irt_observed
 
     # Prepare feature matrix
-    features_df = prepare_features_dataframe(sequences, irt_predicted, irt_errors)
+    features_df, feature_terms, feature_keys = prepare_features_dataframe(
+        sequences,
+        structural_mods,
+        irt_predicted,
+        irt_errors
+    )
 
     # Train/validation split
     n_train = round(Int, n * train_fraction)
@@ -143,9 +228,11 @@ function fit_irt_refinement_model(
     train_df = features_df[train_idx, :]
     val_df = features_df[val_idx, :]
 
-    # Build formula (20 AAs + irt_predicted)
-    aa_terms = [Symbol("count_$(aa)") for aa in STANDARD_AAS]
-    formula_str = "error ~ irt_predicted + " * join(string.(aa_terms), " + ")
+    # Build formula (modified amino acid counts + irt_predicted)
+    formula_str = "error ~ irt_predicted"
+    if !isempty(feature_terms)
+        formula_str *= " + " * join(string.(feature_terms), " + ")
+    end
     formula = @eval @formula($(Meta.parse(formula_str)))
 
     # Train model
@@ -154,11 +241,11 @@ function fit_irt_refinement_model(
 
     intercept = Float32(coef_values[1])
     irt_coef = Float32(coef_values[2])
-    aa_coefficients = Float32.(coef_values[3:end])
     r2_train = Float32(r2(model))
 
     # Validate
-    val_matrix = hcat(ones(n_val), val_df[:, :irt_predicted], Matrix(val_df[:, aa_terms]))
+    feature_matrix = isempty(feature_terms) ? zeros(Float64, n_val, 0) : Matrix(val_df[:, feature_terms])
+    val_matrix = hcat(ones(n_val), val_df[:, :irt_predicted], feature_matrix)
     val_predictions = val_matrix * coef_values
 
     val_errors = val_df.error
@@ -198,15 +285,14 @@ function fit_irt_refinement_model(
         final_intercept = Float32(final_coef_values[1])
         final_irt_coef = Float32(final_coef_values[2])
 
-        # Create Dict for callable model
-        aa_weights = Dict{Char, Float32}()
-        for (i, aa) in enumerate(STANDARD_AAS)
-            aa_weights[aa] = Float32(final_coef_values[2 + i])
+        feature_weights = Dict{Tuple{Char, String}, Float32}()
+        for (i, key) in enumerate(feature_keys)
+            feature_weights[key] = Float32(final_coef_values[2 + i])
         end
 
         return IrtRefinementModel(
             true,
-            aa_weights,
+            feature_weights,
             final_intercept,
             final_irt_coef,
             mae_original,
@@ -236,7 +322,8 @@ Uses batch processing for memory efficiency.
 - `batch_size`: Rows per batch (default 100k)
 
 # Details
-- If model exists: applies refinement to each sequence
+- If model exists: applies refinement to each sequence using its structural
+  modifications
 - If model is nothing: copies :irt_predicted to :refined_irt
 - Uses ColumnOperations.add_column_to_file! for streaming
 
@@ -252,9 +339,10 @@ function add_refined_irt_column!(
     # Create FileReference
     ref = create_reference(psms_path, PSMFileReference)
 
-    # Get sequences from library
+    # Get sequences and structural modifications from library
     precursors = getPrecursors(getSpecLib(search_context))
     sequences = getSequence(precursors)
+    structural_mods = getStructuralMods(precursors)
 
     # Define compute function
     compute_fn = if !isnothing(refinement_model) && refinement_model.use_refinement
@@ -265,8 +353,9 @@ function add_refined_irt_column!(
             for i in 1:nrow(df_batch)
                 row = df_batch[i, :]
                 seq = sequences[row.precursor_idx]
+                mods = structural_mods[row.precursor_idx]
                 lib_irt = row.irt_predicted
-                refined[i] = refinement_model(seq, lib_irt)
+                refined[i] = refinement_model(seq, mods, lib_irt)
             end
             return refined
         end

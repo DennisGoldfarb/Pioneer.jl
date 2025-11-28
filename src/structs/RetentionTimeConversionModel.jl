@@ -60,11 +60,13 @@ RtConversionModel() = IdentityModel()
 """
     IrtRefinementModel
 
-File-specific model to refine library iRT predictions using amino acid composition.
+File-specific model to refine library iRT predictions using amino acid and
+modification-specific composition.
 
 # Fields
 - `use_refinement::Bool`: Whether refinement improves validation MAE
-- `aa_coefficients::Dict{Char, Float32}`: Per-AA weights (20 standard AAs)
+- `feature_coefficients::Dict{Tuple{Char, String}, Float32}`: Weights for
+  amino acid + modification combinations
 - `intercept::Float32`: Model intercept
 - `irt_coefficient::Float32`: Weight for library_irt feature
 - `mae_original::Float32`: Validation MAE without refinement
@@ -73,7 +75,7 @@ File-specific model to refine library iRT predictions using amino acid compositi
 - `r2_val::Float32`: Validation R²
 
 # Callable Interface
-Model is callable: `refined_irt = model(sequence::String, library_irt::Float32)`
+Model is callable: `refined_irt = model(sequence::String, structural_mods, library_irt)`
 
 # Algorithm
 Predicts error = library_irt - observed_irt, then:
@@ -81,13 +83,13 @@ refined_irt = library_irt - predicted_error
 
 # Example
 ```julia
-model = IrtRefinementModel(true, aa_weights, 0.5f0, 0.1f0, ...)
-refined = model("PEPTIDE", 50.0f0)  # Returns refined iRT
+model = IrtRefinementModel(true, feature_weights, 0.5f0, 0.1f0, ...)
+refined = model("PEPTIDE", missing, 50.0f0)  # Returns refined iRT
 ```
 """
 struct IrtRefinementModel
     use_refinement::Bool
-    aa_coefficients::Dict{Char, Float32}
+    feature_coefficients::Dict{Tuple{Char, String}, Float32}
     intercept::Float32
     irt_coefficient::Float32
     mae_original::Float32
@@ -97,11 +99,17 @@ struct IrtRefinementModel
 end
 
 """
-    (model::IrtRefinementModel)(sequence::String, library_irt::Float32) -> Float32
+    (model::IrtRefinementModel)(sequence::String,
+                                structural_mods::Union{Missing, AbstractString},
+                                library_irt::Float32) -> Float32
 
 Apply iRT refinement to a sequence. Zero-allocation via Dict lookup.
 """
-function (model::IrtRefinementModel)(sequence::String, library_irt::Float32)::Float32
+function (model::IrtRefinementModel)(
+    sequence::String,
+    structural_mods::Union{Missing, AbstractString},
+    library_irt::Float32
+)::Float32
     if !model.use_refinement
         return library_irt
     end
@@ -110,9 +118,15 @@ function (model::IrtRefinementModel)(sequence::String, library_irt::Float32)::Fl
     error_pred = model.intercept + model.irt_coefficient * library_irt
 
     # Add AA contributions
-    for aa in sequence
-        if haskey(model.aa_coefficients, aa)
-            error_pred += model.aa_coefficients[aa]
+    mods = parse_structural_modifications(structural_mods)
+    for (pos, aa) in enumerate(sequence)
+        if aa ∉ STANDARD_AAS
+            continue
+        end
+        mod_name = get(mods, pos, "unmodified")
+        key = (aa, mod_name)
+        if haskey(model.feature_coefficients, key)
+            error_pred += model.feature_coefficients[key]
         end
     end
 
