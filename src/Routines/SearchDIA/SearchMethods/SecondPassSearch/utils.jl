@@ -838,7 +838,7 @@ function add_features!(psms::DataFrame,
                                     ms_file_idx::Integer,
                                     rt_to_irt_interp::RtConversionModel,
                                     rt_to_refined_irt_interp::RtConversionModel,
-                                    prec_id_to_irt::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_library_irt::Float32, mean_library_irt::Union{Missing, Float32}, var_library_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}}
+                                    prec_id_to_irt::Dictionary{UInt32, @NamedTuple{best_prob::Float32, best_ms_file_idx::UInt32, best_scan_idx::UInt32, best_library_irt::Float32, best_refined_irt::Float32, irt_offset::Float32, mean_library_irt::Union{Missing, Float32}, var_library_irt::Union{Missing, Float32}, n::Union{Missing, UInt16}, mz::Float32}}
                                     )
 
     precursor_sequence = getSequence(getPrecursors(getSpecLib(search_context)))#[:sequence],
@@ -929,14 +929,11 @@ function add_features!(psms::DataFrame,
                     library_irt
                 end
 
-                # Difference between observed and best library iRT from other runs
-                refined_irt_diff[i] = abs(refined_irt_obs[i] - refinement_model(
-                    precursor_sequence[prec_idx],
-                    structural_mods[prec_idx],
-                    prec_id_to_irt[prec_idx].best_library_irt
-                ))
-                
-                irt_diff[i] = abs(irt_obs[i] - prec_id_to_irt[prec_idx].best_library_irt)
+                target_refined_irt = prec_id_to_irt[prec_idx].best_refined_irt
+                target_library_irt = target_refined_irt + prec_id_to_irt[prec_idx].irt_offset
+
+                refined_irt_diff[i] = abs(refined_irt_obs[i] - target_refined_irt)
+                irt_diff[i] = abs(irt_obs[i] - target_library_irt)
 
                 # MS1-level iRT difference
                 if !ms1_missing[i]
