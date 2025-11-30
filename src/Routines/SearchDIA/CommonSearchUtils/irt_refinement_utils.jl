@@ -145,7 +145,8 @@ end
 """
     fit_irt_refinement_model(sequences::Vector{String},
                               irt_predicted::Vector{Float32},
-                              irt_observed::Vector{Float32};
+                              irt_observed::Vector{Float32},
+                              irt_probabilities::AbstractVector;
                               ms_file_idx::Int=1,
                               min_psms::Int=20,
                               train_fraction::Float64=0.67)
@@ -167,6 +168,7 @@ Train linear regression model to predict library iRT prediction errors.
 - `structural_mods`: Structural modification annotations aligned with sequences
 - `irt_predicted`: Library iRT predictions
 - `irt_observed`: Observed iRT from RT alignment
+- `irt_probabilities`: Per-PSM probabilities used as training weights
 - `ms_file_idx`: File index for logging
 - `min_psms`: Minimum PSMs required (default: 20)
 - `train_fraction`: Training set fraction (default: 0.67)
@@ -184,13 +186,15 @@ function fit_irt_refinement_model(
     sequences::Vector{String},
     structural_mods::AbstractVector,
     irt_predicted::Vector{Float32},
-    irt_observed::Vector{Float32};
+    irt_observed::Vector{Float32},
+    irt_probabilities::AbstractVector;
     ms_file_idx::Int=1,
     min_psms::Int=20,
     train_fraction::Float64=0.67
 )::Union{IrtRefinementModel, Nothing}
 
     n = length(sequences)
+    weights = Float64.(irt_probabilities)
 
     # Check minimum data requirement
     if n < min_psms
@@ -225,6 +229,8 @@ function fit_irt_refinement_model(
 
     train_df = features_df[train_idx, :]
     val_df = features_df[val_idx, :]
+    train_weights = weights[train_idx]
+    val_weights = weights[val_idx]
 
     # Build formula (modified amino acid counts only)
     formula_str = "error ~ 1"
@@ -234,7 +240,7 @@ function fit_irt_refinement_model(
     formula = @eval @formula($(Meta.parse(formula_str)))
 
     # Train model
-    model = lm(formula, train_df)
+    model = lm(formula, train_df; wts=train_weights)
     coef_values = coef(model)
 
     intercept = Float32(coef_values[1])
@@ -246,13 +252,14 @@ function fit_irt_refinement_model(
     val_predictions = val_matrix * coef_values
 
     val_errors = val_df.error
-    ss_res = sum((val_errors .- val_predictions).^2)
-    ss_tot = sum((val_errors .- mean(val_errors)).^2)
+    weighted_mean_error = sum(val_weights .* val_errors) / sum(val_weights)
+    ss_res = sum(val_weights .* (val_errors .- val_predictions).^2)
+    ss_tot = sum(val_weights .* (val_errors .- weighted_mean_error).^2)
     r2_val = Float32(1 - ss_res / ss_tot)
 
     # Calculate MAEs
-    mae_original = Float32(mean(abs.(val_errors)))
-    mae_refined = Float32(mean(abs.(val_errors .- val_predictions)))
+    mae_original = Float32(sum(val_weights .* abs.(val_errors)) / sum(val_weights))
+    mae_refined = Float32(sum(val_weights .* abs.(val_errors .- val_predictions)) / sum(val_weights))
 
     # Decision: use refinement if MAE improves
     use_refinement = mae_refined < mae_original
@@ -276,7 +283,7 @@ function fit_irt_refinement_model(
     if use_refinement
         @debug_l1 "File $ms_file_idx: Retraining on full dataset"
 
-        final_model = lm(formula, features_df)
+        final_model = lm(formula, features_df; wts=weights)
         final_coef_values = coef(final_model)
 
         final_intercept = Float32(final_coef_values[1])
