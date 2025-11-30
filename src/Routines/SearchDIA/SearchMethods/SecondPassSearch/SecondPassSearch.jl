@@ -583,7 +583,13 @@ function process_search_results!(
                 "second_pass_psms",
                 getParsedFileName(search_context, ms_file_idx) * ".arrow"
             )
+            temp_path2 = joinpath(
+                getDataOutDir(search_context), "temp_data",
+                "second_pass_psms",
+                "init_" * getParsedFileName(search_context, ms_file_idx) * ".arrow"
+            )
             writeArrow(temp_path, psms)
+            #writeArrow(temp_path2, psms)
             setSecondPassPsms!(getMSData(search_context), ms_file_idx, temp_path)
         else
             # No PSMs found - mark as empty but don't fail
