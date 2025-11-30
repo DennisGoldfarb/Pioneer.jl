@@ -718,13 +718,13 @@ end
 
 
 """
-    get_irt_errs(fwhms::Dictionary, prec_to_irt::Dictionary, params::FirstPassSearchParameters)
+    get_irt_errs(fwhms::Dictionary, prec_to_irt::PrecToIrtType, params::FirstPassSearchParameters)
 
 Calculates refined iRT error tolerances based on peak widths and cross-run variation.
 
 # Arguments
 - `fwhms`: Dictionary of FWHM statistics per file
-- `prec_to_irt`: Dictionary of precursor refined iRT data
+- `prec_to_irt`: Dictionary of precursor refined iRT data (see `PrecToIrtType`)
 - `params`: Parameters including FWHM and iRT standard deviation multipliers
 
 # Returns
@@ -733,21 +733,12 @@ Dictionary mapping file indices to refined iRT tolerances, combining:
 - Cross-run refined iRT variation
 """
 function get_irt_errs(
-    fwhms::Dictionary{Int64, 
+    fwhms::Dictionary{Int64,
                         @NamedTuple{
                             median_fwhm::Float32,
                             mad_fwhm::Float32
                         }},
-    prec_to_irt::Dictionary{UInt32,
-    @NamedTuple{best_prob::Float32,
-                best_ms_file_idx::UInt32,
-                best_scan_idx::UInt32,
-                best_library_irt::Float32,
-                mean_library_irt::Union{Missing, Float32},
-                var_library_irt::Union{Missing, Float32},
-                n::Union{Missing, UInt16},
-                mz::Float32}}
-    ,
+    prec_to_irt::PrecToIrtType,
     params::FirstPassSearchParameters
 )
     #Get upper bound on peak fwhm. Use median + n*standard_deviation
