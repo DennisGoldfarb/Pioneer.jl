@@ -287,6 +287,8 @@ function process_file!(
         search_context::SearchContext,
         rt_model::RtConversionModel,
         ms_file_idx::Int64)
+
+        raw_fragment_scores = haskey(psms, :score) ? copy(psms[!, :score]) : nothing
         add_main_search_columns!(
             psms,
             getModel(rt_model),
@@ -304,6 +306,61 @@ function process_file!(
         psms[!, :irt_error] = Float16.(abs.(psms[!, :irt_observed] .- psms[!, :irt_predicted]))
         psms[!, :charge2] = UInt8.(psms[!, :charge] .== 2)
         psms[!, :ms_file_idx] .= UInt32(ms_file_idx)
+
+        train_initial_refinement_and_update_irt_errors!(
+            psms,
+            search_context,
+            ms_file_idx,
+            raw_fragment_scores
+        )
+    end
+
+    function train_initial_refinement_and_update_irt_errors!(
+        psms::DataFrame,
+        search_context::SearchContext,
+        ms_file_idx::Int,
+        raw_fragment_scores::Union{Nothing, AbstractVector}
+    )
+        if isnothing(raw_fragment_scores)
+            return
+        end
+
+        score22_targets = (raw_fragment_scores .== 22) .& psms[!, :target]
+        if !any(score22_targets)
+            return
+        end
+
+        precursors = getPrecursors(getSpecLib(search_context))
+        sequences = getSequence(precursors)
+        structural_mods = getStructuralMods(precursors)
+        precursor_idx = psms[!, :precursor_idx]
+
+        refinement_model = fit_irt_refinement_model(
+            [sequences[idx] for idx in precursor_idx[score22_targets]],
+            [structural_mods[idx] for idx in precursor_idx[score22_targets]],
+            Float32.(psms[!, :irt_predicted][score22_targets]),
+            Float32.(psms[!, :irt_observed][score22_targets]);
+            ms_file_idx = ms_file_idx,
+            min_psms = 20,
+            train_fraction = 0.67
+        )
+
+        temporary_refined_irt_preds = Vector{Float32}(undef, nrow(psms))
+
+        if !isnothing(refinement_model) && refinement_model.use_refinement
+            @inbounds for (i, prec_idx) in enumerate(precursor_idx)
+                temporary_refined_irt_preds[i] = refinement_model(
+                    sequences[prec_idx],
+                    structural_mods[prec_idx],
+                    psms[!, :irt_predicted][i]
+                )
+            end
+        else
+            temporary_refined_irt_preds .= psms[!, :irt_predicted]
+        end
+
+        psms[!, :temporary_refined_irt_pred] = temporary_refined_irt_preds
+        psms[!, :irt_error] = Float16.(abs.(psms[!, :irt_observed] .- temporary_refined_irt_preds))
     end
 
     """
@@ -331,7 +388,7 @@ function process_file!(
 
         # Select scoring columns
         select!(psms, vcat(column_names, [:ms_file_idx, :score, :precursor_idx, :scan_idx,
-            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :target]))
+            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :temporary_refined_irt_pred, :target]))
         sort!(psms, [:rt, :precursor_idx])
         # Score PSMs
         fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
@@ -361,7 +418,7 @@ function process_file!(
         # Process scores
        
         select!(psms, [:ms_file_idx, :score, :precursor_idx, :scan_idx,
-            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :target])
+            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :temporary_refined_irt_pred, :target])
         get_probs!(psms, psms[!,:score])
     end
 
