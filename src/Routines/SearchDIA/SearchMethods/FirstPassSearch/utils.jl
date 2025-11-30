@@ -429,6 +429,7 @@ function map_retention_times!(
                         best_structural_mods,
                         Float32.(psms[:irt_predicted][best_target_hits]),
                         observed_irt,
+                        Float32.(psms[:prob][best_target_hits]);
                         ms_file_idx=ms_file_idx,
                         min_psms=20,
                         train_fraction=0.67
