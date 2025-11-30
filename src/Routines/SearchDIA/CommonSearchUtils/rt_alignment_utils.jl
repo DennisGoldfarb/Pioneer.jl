@@ -185,6 +185,7 @@ function fit_irt_model(
 )::Tuple{RtConversionModel, Vector{Float32}, Vector{Float32}, Float32}
 
     n_psms = nrow(psms)
+    outlier_threshold = 6.0
 
     # Calculate adaptive knots: 1 per 100 PSMs, minimum 3
     n_knots = min(max(3, Int(floor(n_psms / 100))), max_knots)

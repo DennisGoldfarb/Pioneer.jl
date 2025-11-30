@@ -288,7 +288,8 @@ function process_file!(
         rt_model::RtConversionModel,
         ms_file_idx::Int64)
 
-        raw_fragment_scores = haskey(psms, :score) ? copy(psms[!, :score]) : nothing
+        
+        
         add_main_search_columns!(
             psms,
             getModel(rt_model),
@@ -301,6 +302,8 @@ function process_file!(
             getTICs(spectra),
             getMzArrays(spectra)
         )
+
+        raw_fragment_scores = copy(psms[!, :scribe])
         # Calculate RT values
         psms[!, :irt_observed] = rt_model.(psms[!, :rt])
         psms[!, :irt_error] = Float16.(abs.(psms[!, :irt_observed] .- psms[!, :irt_predicted]))
@@ -321,14 +324,9 @@ function process_file!(
         ms_file_idx::Int,
         raw_fragment_scores::Union{Nothing, AbstractVector}
     )
-        if isnothing(raw_fragment_scores)
-            return
-        end
 
-        score22_targets = (raw_fragment_scores .== 22) .& psms[!, :target]
-        if !any(score22_targets)
-            return
-        end
+        score22_targets = (raw_fragment_scores .>= 13) .& psms[!, :target]
+        println(sum(score22_targets), " ", median(raw_fragment_scores), " ", length(raw_fragment_scores), "\n")
 
         precursors = getPrecursors(getSpecLib(search_context))
         sequences = getSequence(precursors)
@@ -347,16 +345,12 @@ function process_file!(
 
         temporary_refined_irt_preds = Vector{Float32}(undef, nrow(psms))
 
-        if !isnothing(refinement_model) && refinement_model.use_refinement
-            @inbounds for (i, prec_idx) in enumerate(precursor_idx)
-                temporary_refined_irt_preds[i] = refinement_model(
-                    sequences[prec_idx],
-                    structural_mods[prec_idx],
-                    psms[!, :irt_predicted][i]
-                )
-            end
-        else
-            temporary_refined_irt_preds .= psms[!, :irt_predicted]
+        @inbounds for (i, prec_idx) in enumerate(precursor_idx)
+            temporary_refined_irt_preds[i] = refinement_model(
+                sequences[prec_idx],
+                structural_mods[prec_idx],
+                psms[!, :irt_predicted][i]
+            )
         end
 
         psms[!, :temporary_refined_irt_pred] = temporary_refined_irt_preds
