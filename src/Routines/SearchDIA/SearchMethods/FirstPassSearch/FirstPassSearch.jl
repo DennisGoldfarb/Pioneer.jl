@@ -74,10 +74,143 @@ Holds FWHM statistics, PSM file paths, and model updates.
 struct FirstPassSearchResults <: SearchResults
     fwhms::Dictionary{Int64, @NamedTuple{median_fwhm::Float32,mad_fwhm::Float32}}
     psms::Base.Ref{DataFrame}
-    ms1_mass_err_model::Base.Ref{<:MassErrorModel}
+    ms1_mass_err_model::Base.Ref{Union{Nothing, MassErrorModel}}
     ms1_ppm_errs::Vector{Float32}
     ms1_mass_plots::Vector{Plots.Plot}
     qc_plots_folder_path::String
+    rescoring_psm_paths::Dictionary{Int64, String}
+    rescoring_psm_folder::String
+end
+
+function cache_psms_for_rescoring!(
+    results::FirstPassSearchResults,
+    search_context::SearchContext,
+    psms::DataFrame,
+    ms_file_idx::Int64
+)
+    parsed_fname = getParsedFileName(getMSData(search_context), ms_file_idx)
+    rescore_path = joinpath(results.rescoring_psm_folder, parsed_fname * ".arrow")
+    Arrow.write(rescore_path, psms)
+    insert!(results.rescoring_psm_paths, ms_file_idx, rescore_path)
+    return nothing
+end
+
+function rescore_first_pass_psms!(
+    search_context::SearchContext,
+    results::FirstPassSearchResults,
+    params
+)
+    if isempty(results.rescoring_psm_paths)
+        return nothing
+    end
+
+    ms_data = getMSData(search_context)
+    precursors = getPrecursors(getSpecLib(search_context))
+    prec_mz = getMz(precursors)
+    fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
+
+    column_names = [
+        :spectral_contrast, :city_block, :entropy_score, :scribe, :percent_theoretical_ignored,
+        :charge2, :poisson, :irt_error,
+        :missed_cleavage,
+        :Mox,
+        :TIC, :y_count, :err_norm, :spectrum_peak_count, :intercept
+    ]
+
+    fallback_columns = [
+        :spectral_contrast, :city_block, :entropy_score, :scribe,
+        :charge2, :poisson, :irt_error, :TIC, :y_count, :err_norm, :spectrum_peak_count, :intercept
+    ]
+
+    valid_files = get_valid_file_indices(search_context)
+
+    for ms_file_idx in valid_files
+        if is_file_failed(search_context, ms_file_idx)
+            continue
+        end
+
+        rescore_path = get(results.rescoring_psm_paths, ms_file_idx, "")
+        if isempty(rescore_path) || !isfile(rescore_path)
+            continue
+        end
+
+        psms = DataFrame(Arrow.Table(rescore_path))
+        if nrow(psms) == 0
+            continue
+        end
+
+        rt_model = getRtIrtModel(search_context, ms_file_idx)
+        precursor_idx = psms[!, :precursor_idx]::Vector{UInt32}
+        updated_pred = Vector{Float32}(undef, length(precursor_idx))
+        for (i, pid) in enumerate(precursor_idx)
+            updated_pred[i] = Float32(getPredIrt(search_context, pid))
+        end
+        psms[!, :irt_predicted] .= updated_pred
+
+        observed_irt = Float32.(rt_model.(psms[!, :rt]))
+        psms[!, :irt_error] = Float16.(abs.(observed_irt .- updated_pred))
+
+        if :ms_file_idx in names(psms)
+            psms[!, :ms_file_idx] .= UInt32(ms_file_idx)
+        else
+            psms[!, :ms_file_idx] = fill(UInt32(ms_file_idx), nrow(psms))
+        end
+
+        if :score ∉ names(psms)
+            psms[!, :score] = zeros(Float32, nrow(psms))
+        end
+        if :q_value ∉ names(psms)
+            psms[!, :q_value] = zeros(Float16, nrow(psms))
+        end
+
+        sort!(psms, [:rt, :precursor_idx])
+
+        try
+            score_main_search_psms!(
+                psms,
+                column_names,
+                n_train_rounds = params.n_train_rounds_probit,
+                max_iter_per_round = params.max_iter_probit,
+                max_q_value = Float64(params.max_q_value_probit_rescore),
+                fdr_scale_factor = fdr_scale_factor
+            )
+        catch
+            score_main_search_psms!(
+                psms,
+                fallback_columns,
+                n_train_rounds = params.n_train_rounds_probit,
+                max_iter_per_round = params.max_iter_probit,
+                max_q_value = Float64(params.max_q_value_probit_rescore),
+                fdr_scale_factor = fdr_scale_factor
+            )
+        end
+
+        get_probs!(psms, psms[!, :score])
+        Arrow.write(rescore_path, psms)
+
+        psms_for_selection = copy(psms)
+        select_best_psms!(
+            psms_for_selection,
+            prec_mz,
+            params,
+            search_context
+        )
+
+        if :ms_file_idx in names(psms_for_selection)
+            psms_for_selection[!, :ms_file_idx] .= UInt32(ms_file_idx)
+        else
+            psms_for_selection[!, :ms_file_idx] = fill(UInt32(ms_file_idx), nrow(psms_for_selection))
+        end
+
+        output_path = getFirstPassPsms(ms_data, ms_file_idx)
+        Arrow.write(
+            output_path,
+            select!(copy(psms_for_selection), [:ms_file_idx, :scan_idx, :precursor_idx, :rt,
+                                               :irt_predicted, :q_value, :score, :prob, :scan_count])
+        )
+    end
+
+    return nothing
 end
 
 """
@@ -185,11 +318,18 @@ Interface Implementation
 ==========================================================#
 
 get_parameters(::FirstPassSearch, params::Any) = FirstPassSearchParameters(params)
-getMs1MassErrorModel(ptsr::FirstPassSearchResults) = ptsr.ms1_mass_err_model[]
-getMs1TolPpm(params::FirstPassSearchParameters) = params.ms1_tol_ppm
+function getMs1MassErrorModel(results::FirstPassSearchResults)
+    model = results.ms1_mass_err_model[]
+    if model isa MassErrorModel
+        return model
+    end
+    @user_warn "MS1 mass error model missing on first-pass results. Falling back to ±30 ppm default."
+    return MassErrorModel(zero(Float32), (30.0f0, 30.0f0))
+end
+getMs1TolPpm(params::FirstPassSearchParameters{<:PrecEstimation}) = params.ms1_tol_ppm
 
 function init_search_results(
-    ::FirstPassSearchParameters,
+    ::FirstPassSearchParameters{<:PrecEstimation},
     search_context::SearchContext
 )
     temp_folder = joinpath(getDataOutDir(search_context), "temp_data", "first_pass_psms")
@@ -198,13 +338,17 @@ function init_search_results(
     qc_dir = joinpath(out_dir, "qc_plots")
     ms1_mass_error_plots = joinpath(qc_dir, "ms1_mass_error_plots")
     !isdir(ms1_mass_error_plots ) && mkdir(ms1_mass_error_plots )
+    rescore_folder = joinpath(out_dir, "temp_data", "first_pass_rescore_psms")
+    !isdir(rescore_folder) && mkdir(rescore_folder)
     return FirstPassSearchResults(
         Dictionary{Int64, NamedTuple{(:median_fwhm, :mad_fwhm), Tuple{Float32, Float32}}}(),
         Base.Ref{DataFrame}(),
-        Base.Ref{MassErrorModel}(),
+        Base.Ref{Union{Nothing, MassErrorModel}}(nothing),
         Vector{Float32}(),
         Plots.Plot[],
-        qc_dir
+        qc_dir,
+        Dictionary{Int64, String}(),
+        rescore_folder
     )
 end
 
@@ -217,11 +361,11 @@ Process a single MS file in the first pass search.
 """
 function process_file!(
     results::FirstPassSearchResults,
-    params::P, 
+    params::FirstPassSearchParameters{P},
     search_context::SearchContext,
     ms_file_idx::Int64,
     spectra::MassSpecData
-) where {P<:FirstPassSearchParameters}
+) where {P<:PrecEstimation}
 
     """
     Perform library search with current parameters.
@@ -229,7 +373,7 @@ function process_file!(
     function perform_library_search(
         spectra::MassSpecData,
         search_context::SearchContext,
-        params::FirstPassSearchParameters,
+        params::FirstPassSearchParameters{<:PrecEstimation},
         ms_file_idx::Int64)
         return library_search(spectra, search_context, params, ms_file_idx)
     end
@@ -238,10 +382,11 @@ function process_file!(
     Process PSMs from library search.
     """
     function process_psms!(
+        results::FirstPassSearchResults,
         psms::DataFrame,
         spectra::MassSpecData,
         search_context::SearchContext,
-        params::FirstPassSearchParameters,
+        params::FirstPassSearchParameters{<:PrecEstimation},
         ms_file_idx::Int64)
 
         """
@@ -250,7 +395,7 @@ function process_file!(
         function select_best_psms!(
             psms::DataFrame,
             precursor_mzs::AbstractVector,
-            params::FirstPassSearchParameters,
+            params::FirstPassSearchParameters{<:PrecEstimation},
             search_context::SearchContext
         )
             fdr_scale_factor = getLibraryFdrScaleFactor(search_context)
@@ -268,6 +413,7 @@ function process_file!(
         
         # Score PSMs
         score_psms!(psms, params, search_context)
+        cache_psms_for_rescoring!(results, search_context, psms, ms_file_idx)
         # Get best PSMs
         select_best_psms!(
             psms,
@@ -311,7 +457,7 @@ function process_file!(
     """
     function score_psms!(
         psms::DataFrame,
-        params::FirstPassSearchParameters,
+        params::FirstPassSearchParameters{<:PrecEstimation},
         search_context::SearchContext)
         column_names = [
             :spectral_contrast, :city_block, :entropy_score, :scribe, :percent_theoretical_ignored,
@@ -359,16 +505,14 @@ function process_file!(
             )
         end
         # Process scores
-       
-        select!(psms, [:ms_file_idx, :score, :precursor_idx, :scan_idx,
-            :q_value, :log2_summed_intensity, :irt, :rt, :irt_predicted, :target])
+
         get_probs!(psms, psms[!,:score])
     end
 
     try
         # Get models and update fragment lookup table
         psms = perform_library_search(spectra, search_context, params, ms_file_idx)
-        results.psms[] = process_psms!(psms, spectra, search_context, params, ms_file_idx)
+        results.psms[] = process_psms!(results, psms, spectra, search_context, params, ms_file_idx)
 
         temp_psms = results.psms[] 
         temp_psms = temp_psms[temp_psms[!,:q_value].<=0.001,:]
@@ -470,11 +614,11 @@ Initial file processing complete, no additional processing needed.
 """
 function process_search_results!(
     results::FirstPassSearchResults,
-    params::P,
+    params::FirstPassSearchParameters{P},
     search_context::SearchContext,
     ms_file_idx::Int64,
-    ::MassSpecData
-) where {P<:FirstPassSearchParameters}
+    _
+) where {P<:PrecEstimation}
     psms = results.psms[]
     fwhms = skipmissing(psms[!, :fwhm])
     fwhm_points = count(!ismissing, fwhms)
@@ -505,7 +649,12 @@ function process_search_results!(
     # Generate mass error plot
     push!(results.ms1_mass_plots, generate_ms1_mass_error_plot(results, parsed_fname))
     # Update models in search context
-    setMs1MassErrorModel!(search_context, ms_file_idx, getMs1MassErrorModel(results))
+    model = results.ms1_mass_err_model[]
+    if model isa MassErrorModel
+        setMs1MassErrorModel!(search_context, ms_file_idx, model)
+    else
+        setMs1MassErrorModel!(search_context, ms_file_idx, getMassErrorModel(search_context, ms_file_idx))
+    end
 end
 
 """
@@ -522,9 +671,9 @@ Summarize results across all files.
 """
 function summarize_results!(
     results::FirstPassSearchResults,
-    params::P,
+    params::FirstPassSearchParameters{P},
     search_context::SearchContext
-) where {P<:FirstPassSearchParameters}
+) where {P<:PrecEstimation}
     
     """
     Process precursors and calculate iRT errors.
@@ -532,7 +681,7 @@ function summarize_results!(
     function get_best_precursors_accross_runs!(
         search_context::SearchContext,
         results::FirstPassSearchResults,
-        params::FirstPassSearchParameters
+        params::FirstPassSearchParameters{<:PrecEstimation}
     )
 
         # Filter out failed files
@@ -560,6 +709,8 @@ function summarize_results!(
     # Map retention times and update iRT observations
     map_retention_times!(search_context, results, params)
     correct_first_pass_irt_errors!(search_context)
+    rescore_first_pass_psms!(search_context, results, params)
+    map_retention_times!(search_context, results, params)
     # Process precursors
     precursor_dict = get_best_precursors_accross_runs!(search_context, results, params)
 
