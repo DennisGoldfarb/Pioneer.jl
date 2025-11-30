@@ -36,6 +36,8 @@ Dictionary mapping precursor indices to NamedTuple containing:
 - `best_ms_file_idx`: File index with best match
 - `best_scan_idx`: Scan index of best match
 - `best_library_irt`: Library iRT value of best match
+- `best_refined_irt`: Refined predicted iRT of best match
+- `irt_offset`: Difference between observed iRT and refined prediction
 - `mean_library_irt`: Mean library iRT across qualifying matches
 - `var_library_irt`: Variance in library iRT across qualifying matches
 - `n`: Number of qualifying matches
@@ -58,6 +60,8 @@ function get_best_precursors_accross_runs(
                                                     best_ms_file_idx::UInt32,
                                                     best_scan_idx::UInt32,
                                                     best_library_irt::Float32,
+                                                    best_refined_irt::Float32,
+                                                    irt_offset::Float32,
                                                     mean_library_irt::Union{Missing, Float32},
                                                     var_library_irt::Union{Missing, Float32},
                                                     n::Union{Missing, UInt16},
@@ -66,6 +70,7 @@ function get_best_precursors_accross_runs(
         q_values::AbstractVector{Float16},
         probs::AbstractVector{Float32},
         rts::AbstractVector{Float32},
+        refined_irts::AbstractVector{Float32},
         scan_idxs::AbstractVector{UInt32},
         ms_file_idxs::AbstractVector{UInt32},
         rt_to_library_irt::RtConversionModel,
@@ -77,8 +82,10 @@ function get_best_precursors_accross_runs(
             precursor_idx = precursor_idxs[row]
             prob = probs[row]
             library_irt = rt_to_library_irt(rts[row])
+            refined_pred_irt = refined_irts[row]
             scan_idx = UInt32(scan_idxs[row])
             ms_file_idx = UInt32(ms_file_idxs[row])
+            irt_offset = library_irt - refined_pred_irt
 
             # Initialize running statistics
             passed_q_val = (q_value <= max_q_val)
@@ -91,7 +98,7 @@ function get_best_precursors_accross_runs(
             #Keep a running mean library_irt for instances below q-val threshold
             if haskey(prec_to_best_prob, precursor_idx)
                 # Update existing precursor entry
-                best_prob, best_ms_file_idx, best_scan_idx, best_library_irt, old_mean_library_irt, var_library_irt, old_n, mz = prec_to_best_prob[precursor_idx]
+                best_prob, best_ms_file_idx, best_scan_idx, best_library_irt, best_refined_irt, best_irt_offset, old_mean_library_irt, var_library_irt, old_n, mz = prec_to_best_prob[precursor_idx]
 
                 # Update best match if current is better
                 if (best_prob < prob)
@@ -99,6 +106,8 @@ function get_best_precursors_accross_runs(
                     best_library_irt = library_irt
                     best_scan_idx = scan_idx
                     best_ms_file_idx = ms_file_idx
+                    best_refined_irt = refined_pred_irt
+                    best_irt_offset = irt_offset
                 end
 
                 # Update running statistics
@@ -109,6 +118,8 @@ function get_best_precursors_accross_runs(
                                                 best_ms_file_idx = best_ms_file_idx,
                                                 best_scan_idx = best_scan_idx,
                                                 best_library_irt = best_library_irt,
+                                                best_refined_irt = best_refined_irt,
+                                                irt_offset = best_irt_offset,
                                                 mean_library_irt = mean_library_irt,
                                                 var_library_irt = var_library_irt,
                                                 n = n,
@@ -119,6 +130,8 @@ function get_best_precursors_accross_runs(
                         best_ms_file_idx = ms_file_idx,
                         best_scan_idx = scan_idx,
                         best_library_irt = library_irt,
+                        best_refined_irt = refined_pred_irt,
+                        irt_offset = irt_offset,
                         mean_library_irt = mean_library_irt,
                         var_library_irt = var_library_irt,
                         n = n,
@@ -132,6 +145,8 @@ function get_best_precursors_accross_runs(
                                                     best_ms_file_idx::UInt32,
                                                     best_scan_idx::UInt32,
                                                     best_library_irt::Float32,
+                                                    best_refined_irt::Float32,
+                                                    irt_offset::Float32,
                                                     mean_library_irt::Union{Missing, Float32},
                                                     var_library_irt::Union{Missing, Float32},
                                                     n::Union{Missing, UInt16},
@@ -154,13 +169,15 @@ function get_best_precursors_accross_runs(
             end
             if haskey(prec_to_best_prob, precursor_idx)
                 # Update variance calculation
-                best_prob, best_ms_file_idx, best_scan_idx, best_library_irt, mean_library_irt, var_library_irt, n, mz = prec_to_best_prob[precursor_idx]
+                best_prob, best_ms_file_idx, best_scan_idx, best_library_irt, best_refined_irt, irt_offset, mean_library_irt, var_library_irt, n, mz = prec_to_best_prob[precursor_idx]
                 var_library_irt += (library_irt - mean_library_irt/n)^2
                 prec_to_best_prob[precursor_idx] = (
                     best_prob = best_prob,
                     best_ms_file_idx= best_ms_file_idx,
                     best_scan_idx = best_scan_idx,
                     best_library_irt = best_library_irt,
+                    best_refined_irt = best_refined_irt,
+                    irt_offset = irt_offset,
                     mean_library_irt = mean_library_irt,
                     var_library_irt = var_library_irt,
                     n = n,
@@ -174,6 +191,8 @@ function get_best_precursors_accross_runs(
                                                         best_ms_file_idx::UInt32,
                                                         best_scan_idx::UInt32,
                                                         best_library_irt::Float32,
+                                                        best_refined_irt::Float32,
+                                                        irt_offset::Float32,
                                                         mean_library_irt::Union{Missing, Float32},
                                                         var_library_irt::Union{Missing, Float32},
                                                         n::Union{Missing, UInt16},
@@ -205,6 +224,7 @@ function get_best_precursors_accross_runs(
             psms[:q_value],
             psms[:prob],
             psms[:rt],
+            psms[:refined_irt],
             psms[:scan_idx],
             psms[:ms_file_idx],
             rt_to_library_irt[file_idx],

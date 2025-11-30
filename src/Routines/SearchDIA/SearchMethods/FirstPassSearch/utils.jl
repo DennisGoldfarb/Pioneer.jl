@@ -631,8 +631,8 @@ end
 
 PrecToIrtType = Dictionary{UInt32,
     NamedTuple{
-        (:best_prob, :best_ms_file_idx, :best_scan_idx, :best_library_irt, :mean_library_irt, :var_library_irt, :n, :mz),
-        Tuple{Float32, UInt32, UInt32, Float32, Union{Missing, Float32}, Union{Missing, Float32}, Union{Missing, UInt16}, Float32}
+        (:best_prob, :best_ms_file_idx, :best_scan_idx, :best_library_irt, :best_refined_irt, :irt_offset, :mean_library_irt, :var_library_irt, :n, :mz),
+        Tuple{Float32, UInt32, UInt32, Float32, Float32, Float32, Union{Missing, Float32}, Union{Missing, Float32}, Union{Missing, UInt16}, Float32}
     }
 }
 
@@ -669,7 +669,7 @@ function create_rt_indices!(
     setIrtErrors!(search_context, irt_errs)
 
     # Create precursor to library iRT mapping
-    prec_to_irt = map(x -> (irt=x[:best_library_irt], mz=x[:mz]),
+    prec_to_irt = map(x -> (irt = x[:best_refined_irt] + x[:irt_offset], mz = x[:mz]),
                       precursor_dict)
 
     # Set up indices folder
@@ -718,13 +718,13 @@ end
 
 
 """
-    get_irt_errs(fwhms::Dictionary, prec_to_irt::Dictionary, params::FirstPassSearchParameters)
+    get_irt_errs(fwhms::Dictionary, prec_to_irt::PrecToIrtType, params::FirstPassSearchParameters)
 
 Calculates refined iRT error tolerances based on peak widths and cross-run variation.
 
 # Arguments
 - `fwhms`: Dictionary of FWHM statistics per file
-- `prec_to_irt`: Dictionary of precursor refined iRT data
+- `prec_to_irt`: Dictionary of precursor refined iRT data (see `PrecToIrtType`)
 - `params`: Parameters including FWHM and iRT standard deviation multipliers
 
 # Returns
@@ -733,21 +733,12 @@ Dictionary mapping file indices to refined iRT tolerances, combining:
 - Cross-run refined iRT variation
 """
 function get_irt_errs(
-    fwhms::Dictionary{Int64, 
+    fwhms::Dictionary{Int64,
                         @NamedTuple{
                             median_fwhm::Float32,
                             mad_fwhm::Float32
                         }},
-    prec_to_irt::Dictionary{UInt32,
-    @NamedTuple{best_prob::Float32,
-                best_ms_file_idx::UInt32,
-                best_scan_idx::UInt32,
-                best_library_irt::Float32,
-                mean_library_irt::Union{Missing, Float32},
-                var_library_irt::Union{Missing, Float32},
-                n::Union{Missing, UInt16},
-                mz::Float32}}
-    ,
+    prec_to_irt::PrecToIrtType,
     params::FirstPassSearchParameters
 )
     #Get upper bound on peak fwhm. Use median + n*standard_deviation
