@@ -631,8 +631,8 @@ end
 
 PrecToIrtType = Dictionary{UInt32,
     NamedTuple{
-        (:best_prob, :best_ms_file_idx, :best_scan_idx, :best_library_irt, :mean_library_irt, :var_library_irt, :n, :mz),
-        Tuple{Float32, UInt32, UInt32, Float32, Union{Missing, Float32}, Union{Missing, Float32}, Union{Missing, UInt16}, Float32}
+        (:best_prob, :best_ms_file_idx, :best_scan_idx, :best_library_irt, :best_refined_irt, :irt_offset, :mean_library_irt, :var_library_irt, :n, :mz),
+        Tuple{Float32, UInt32, UInt32, Float32, Float32, Float32, Union{Missing, Float32}, Union{Missing, Float32}, Union{Missing, UInt16}, Float32}
     }
 }
 
@@ -669,7 +669,7 @@ function create_rt_indices!(
     setIrtErrors!(search_context, irt_errs)
 
     # Create precursor to library iRT mapping
-    prec_to_irt = map(x -> (irt=x[:best_library_irt], mz=x[:mz]),
+    prec_to_irt = map(x -> (irt = x[:best_refined_irt] + x[:irt_offset], mz = x[:mz]),
                       precursor_dict)
 
     # Set up indices folder
