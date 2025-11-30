@@ -68,7 +68,6 @@ modification-specific composition.
 - `feature_coefficients::Dict{Tuple{Char, String}, Float32}`: Weights for
   amino acid + modification combinations
 - `intercept::Float32`: Model intercept
-- `irt_coefficient::Float32`: Weight for library_irt feature
 - `mae_original::Float32`: Validation MAE without refinement
 - `mae_refined::Float32`: Validation MAE with refinement
 - `r2_train::Float32`: Training R²
@@ -78,12 +77,12 @@ modification-specific composition.
 Model is callable: `refined_irt = model(sequence::String, structural_mods, library_irt)`
 
 # Algorithm
-Predicts error = library_irt - observed_irt, then:
+Predicts error = library_irt - observed_irt using amino-acid composition, then:
 refined_irt = library_irt - predicted_error
 
 # Example
 ```julia
-model = IrtRefinementModel(true, feature_weights, 0.5f0, 0.1f0, ...)
+model = IrtRefinementModel(true, feature_weights, 0.5f0, 0.1f0, 0.05f0, 0.9f0, 0.85f0)
 refined = model("PEPTIDE", missing, 50.0f0)  # Returns refined iRT
 ```
 """
@@ -91,7 +90,6 @@ struct IrtRefinementModel
     use_refinement::Bool
     feature_coefficients::Dict{Tuple{Char, String}, Float32}
     intercept::Float32
-    irt_coefficient::Float32
     mae_original::Float32
     mae_refined::Float32
     r2_train::Float32
@@ -115,7 +113,7 @@ function (model::IrtRefinementModel)(
     end
 
     # Calculate predicted error
-    error_pred = model.intercept + model.irt_coefficient * library_irt
+    error_pred = model.intercept
 
     # Add AA contributions
     mods = parse_structural_modifications(structural_mods)

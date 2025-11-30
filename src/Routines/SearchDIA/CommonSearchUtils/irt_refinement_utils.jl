@@ -136,7 +136,6 @@ function prepare_features_dataframe(
         end
     end
 
-    features[:irt_predicted] = Float64.(library_irt)
     features[:error] = Float64.(irt_errors)
 
     feature_terms = [feature_symbols[key] for key in feature_keys]
@@ -157,8 +156,8 @@ Train linear regression model to predict library iRT prediction errors.
 # Workflow
 1. Filter to sequences with sufficient PSMs (min_psms)
 2. Split into training (train_fraction) and validation sets
-3. Train linear model: error ~ irt_predicted + counts for each observed
-   amino-acid/modification combination
+3. Train linear model: error ~ counts for each observed amino-acid/
+   modification combination
 4. Evaluate on validation set
 5. If validation MAE improves, retrain on full dataset
 6. Return model if refinement helps, nothing otherwise
@@ -176,8 +175,7 @@ Train linear regression model to predict library iRT prediction errors.
 `IrtRefinementModel` if refinement improves MAE, `nothing` otherwise
 
 # Model Details
-- Features: Counts for every observed amino acid + modification pairing plus
-  library_irt
+- Features: Counts for every observed amino acid + modification pairing
 - Response: error = irt_predicted - irt_observed
 - Algorithm: Ordinary least squares (GLM.lm)
 - Validation: MAE on held-out validation set
@@ -228,8 +226,8 @@ function fit_irt_refinement_model(
     train_df = features_df[train_idx, :]
     val_df = features_df[val_idx, :]
 
-    # Build formula (modified amino acid counts + irt_predicted)
-    formula_str = "error ~ irt_predicted"
+    # Build formula (modified amino acid counts only)
+    formula_str = "error ~ 1"
     if !isempty(feature_terms)
         formula_str *= " + " * join(string.(feature_terms), " + ")
     end
@@ -240,12 +238,11 @@ function fit_irt_refinement_model(
     coef_values = coef(model)
 
     intercept = Float32(coef_values[1])
-    irt_coef = Float32(coef_values[2])
     r2_train = Float32(r2(model))
 
     # Validate
     feature_matrix = isempty(feature_terms) ? zeros(Float64, n_val, 0) : Matrix(val_df[:, feature_terms])
-    val_matrix = hcat(ones(n_val), val_df[:, :irt_predicted], feature_matrix)
+    val_matrix = hcat(ones(n_val), feature_matrix)
     val_predictions = val_matrix * coef_values
 
     val_errors = val_df.error
@@ -283,18 +280,16 @@ function fit_irt_refinement_model(
         final_coef_values = coef(final_model)
 
         final_intercept = Float32(final_coef_values[1])
-        final_irt_coef = Float32(final_coef_values[2])
 
         feature_weights = Dict{Tuple{Char, String}, Float32}()
         for (i, key) in enumerate(feature_keys)
-            feature_weights[key] = Float32(final_coef_values[2 + i])
+            feature_weights[key] = Float32(final_coef_values[1 + i])
         end
 
         return IrtRefinementModel(
             true,
             feature_weights,
             final_intercept,
-            final_irt_coef,
             mae_original,
             mae_refined,
             r2_train,

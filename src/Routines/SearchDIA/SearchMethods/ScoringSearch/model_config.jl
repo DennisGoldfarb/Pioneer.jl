@@ -112,7 +112,7 @@ const REDUCED_FEATURE_SET = [
     # Core peptide properties
     :missed_cleavage, :Mox, :prec_mz_qbin, :sequence_length, :charge,
     # RT features
-    :irt_pred_qbin, :irt_error, :irt_diff,
+    :irt_pred_qbin, :refined_irt_error, :irt_error, :irt_diff, :refined_irt_pred_qbin,
     :ms1_ms2_rt_diff,  # MS1-MS2 RT difference in iRT space
     #:ms1_irt_diff,
     # Spectral features

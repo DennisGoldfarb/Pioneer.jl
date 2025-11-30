@@ -100,7 +100,6 @@ function score_precursor_isotope_traces(
         best_psms = load_psms_for_lightgbm(second_pass_folder)
 
         temp_folder = dirname(second_pass_folder)
-        write_input_psms_tsv(joinpath(temp_folder, "percolator_input_psms.tsv"), best_psms)
 
         # Add quantile-binned features before training
         features_to_bin = [:prec_mz, :refined_irt_pred, :irt_pred, :weight, :tic]
@@ -119,6 +118,10 @@ function score_precursor_isotope_traces(
             )
         end
         
+
+       
+        write_input_psms_tsv(joinpath(temp_folder, "percolator_input_psms.tsv"), best_psms)
+
         # Execute selected model using unified function
         @user_info "Training final model: $(model_config.name)"
         models = score_precursor_isotope_traces_in_memory(
