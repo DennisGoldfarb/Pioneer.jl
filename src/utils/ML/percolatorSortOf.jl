@@ -851,7 +851,8 @@ function update_mbr_features!(psms_train::AbstractDataFrame,
     if itr == mbr_start_iter - 1
         sqrt_n_runs = begin
             n_runs = length(unique(vcat(psms_train.ms_file_idx, psms_test.ms_file_idx)))
-            max(1, floor(Int, sqrt(n_runs)))
+            effective_runs = max(1, n_runs - 1)
+            max(1, floor(Int, sqrt(effective_runs)))
         end
 
         compute_mbr_global_prob!(psms_train, sqrt_n_runs)
@@ -868,12 +869,10 @@ function compute_mbr_global_prob!(psms::AbstractDataFrame, sqrt_n_runs::Int)
 
         for i in 1:nrow(sub_psms)
             run = ms_files[i]
-            current_precursor = sub_psms.precursor_idx[i]
             candidate_precursors = sub_psms.MBR_is_best_decoy[i] ? decoy_precursors : target_precursors
 
             best_global_prob = zero(Float32)
             for precursor in candidate_precursors
-                precursor == current_precursor && continue
                 precursor_probs = sub_psms.trace_prob[
                     (sub_psms.precursor_idx .== precursor) .& (ms_files .!= run)
                 ]
