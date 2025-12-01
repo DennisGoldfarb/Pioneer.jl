@@ -861,8 +861,15 @@ function update_mbr_features!(psms_train::AbstractDataFrame,
 end
 
 function compute_mbr_global_prob!(psms::AbstractDataFrame, sqrt_n_runs::Int)
-    transform!(groupby(psms, [:precursor_idx, :isotopes_captured]),
-               :trace_prob => (p -> logodds(p, sqrt_n_runs)) => :MBR_global_prob)
+    for sub_psms in groupby(psms, [:precursor_idx, :isotopes_captured])
+        ms_files = sub_psms.ms_file_idx
+        probs = sub_psms.trace_prob
+
+        for run in unique(ms_files)
+            other_probs = probs[ms_files .!= run]
+            sub_psms.MBR_global_prob[ms_files .== run] .= logodds(other_probs, sqrt_n_runs)
+        end
+    end
 
     return psms
 end
