@@ -863,16 +863,24 @@ end
 function compute_mbr_global_prob!(psms::AbstractDataFrame, sqrt_n_runs::Int)
     for sub_psms in groupby(psms, [:pair_id, :isotopes_captured])
         ms_files = sub_psms.ms_file_idx
-        precursors = unique(sub_psms.precursor_idx)
+        decoy_precursors = unique(sub_psms.precursor_idx[sub_psms.decoy])
+        target_precursors = unique(sub_psms.precursor_idx[.!sub_psms.decoy])
 
-        for run in unique(ms_files)
+        for i in 1:nrow(sub_psms)
+            run = ms_files[i]
+            current_precursor = sub_psms.precursor_idx[i]
+            candidate_precursors = sub_psms.MBR_is_best_decoy[i] ? decoy_precursors : target_precursors
+
             best_global_prob = zero(Float32)
-            for precursor in precursors
-                precursor_probs = sub_psms.trace_prob[(sub_psms.precursor_idx .== precursor) .& (ms_files .!= run)]
+            for precursor in candidate_precursors
+                precursor == current_precursor && continue
+                precursor_probs = sub_psms.trace_prob[
+                    (sub_psms.precursor_idx .== precursor) .& (ms_files .!= run)
+                ]
                 best_global_prob = max(best_global_prob, logodds(precursor_probs, sqrt_n_runs))
             end
 
-            sub_psms.MBR_global_prob[ms_files .== run] .= best_global_prob
+            sub_psms.MBR_global_prob[i] = best_global_prob
         end
     end
 
