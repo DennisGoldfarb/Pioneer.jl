@@ -442,7 +442,8 @@ function select_mbr_features(df::DataFrame)
     candidate_features = [
                         :trace_prob,
                         :irt_error, :ms1_ms2_rt_diff, :MBR_max_pair_prob, :MBR_best_irt_diff,
-                        :MBR_rv_coefficient, :MBR_log2_weight_ratio, :MBR_log2_explained_ratio
+                        :MBR_rv_coefficient, :MBR_log2_weight_ratio, :MBR_log2_explained_ratio,
+                        :MBR_global_prob
                         #, :MBR_num_runs
                         ]
     
