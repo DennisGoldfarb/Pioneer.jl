@@ -849,8 +849,22 @@ function update_mbr_features!(psms_train::AbstractDataFrame,
         summarize_precursors!(psms_train, q_cutoff = max_q_value_lightgbm_rescore)
     end
     if itr == mbr_start_iter - 1
+        sqrt_n_runs = begin
+            n_runs = length(unique(vcat(psms_train.ms_file_idx, psms_test.ms_file_idx)))
+            max(1, floor(Int, sqrt(n_runs)))
+        end
+
+        compute_mbr_global_prob!(psms_train, sqrt_n_runs)
+        compute_mbr_global_prob!(psms_test, sqrt_n_runs)
         prob_test[test_fold_idxs] = psms_test.trace_prob
     end
+end
+
+function compute_mbr_global_prob!(psms::AbstractDataFrame, sqrt_n_runs::Int)
+    transform!(groupby(psms, [:precursor_idx, :isotopes_captured]),
+               :trace_prob => (p -> logodds(p, sqrt_n_runs)) => :MBR_global_prob)
+
+    return psms
 end
 
 function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01f0)
@@ -960,6 +974,7 @@ function initialize_prob_group_features!(
         psms[!, :MBR_rv_coefficient]            = zeros(Float32, n)
         psms[!, :MBR_is_best_decoy]             = trues(n)
         psms[!, :MBR_num_runs]                  = zeros(Int32, n)
+        psms[!, :MBR_global_prob]               = zeros(Float32, n)
         psms[!, :MBR_transfer_candidate]        = falses(n)
         psms[!, :MBR_is_missing]                = falses(n)
     end
