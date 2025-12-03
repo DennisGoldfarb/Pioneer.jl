@@ -946,8 +946,12 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
     @debug_l2 "MBR Feature Computation: $n_unique_pairs unique pair_ids × $n_unique_isotopes isotope combinations = $n_pair_isotope_groups groups"
     @debug_l2 "Isotope combinations present: $unique_isotopes"
 
+    decoy_rows_with_matches_mask = falses(nrow(psms))
+    decoy_alternative_indices = zeros(Int, nrow(psms))
+
     Threads.@threads for idx in eachindex(pair_groups)
         _, sub_psms = pair_groups[idx]
+        parent_rows = parentindices(sub_psms)[1]
         
         # Efficient way to find the top 2 precursors so we can do MBR on the 
         # best precursor match that isn't itself. It's always one of the top 2.
@@ -1011,9 +1015,6 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
         end
 
         # Compute MBR features
-        decoy_candidate_cache = Dict{Int, Int}()
-        decoy_rows_with_matches = Int[]
-
         function apply_candidate_index!(psms_block::AbstractDataFrame, row_idx::Int, candidate_idx::Int)
             best_log2_weights = log2.(psms_block.weights[candidate_idx])
             best_iRTs = psms_block.irts[candidate_idx]
@@ -1035,6 +1036,8 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
         for i in 1:nrow(sub_psms)
             sub_psms.MBR_num_runs[i] = num_runs_passing - (sub_psms.q_value[i] .<= q_cutoff)
 
+            parent_idx = parent_rows[i]
+
             idx = Int(sub_psms.ms_file_idx[i]) - offset + 1
             best_idx = run_best_indices[idx]
             if best_idx == 0 || sub_psms.MBR_num_runs[i] == 0
@@ -1052,30 +1055,31 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
 
             if sub_psms.decoy[i]
                 if best_idx != 0
-                    push!(decoy_rows_with_matches, i)
+                    decoy_rows_with_matches_mask[parent_idx] = true
                 end
 
                 best_decoy_idx = run_best_decoy_indices[idx]
                 if best_decoy_idx != 0 && best_decoy_idx != best_idx
-                    decoy_candidate_cache[i] = best_decoy_idx
+                    decoy_alternative_indices[parent_idx] = parent_rows[best_decoy_idx]
                 end
             end
         end
+    end
 
-        if !isempty(decoy_rows_with_matches)
-            total_decoy_matches = length(decoy_rows_with_matches)
-            decoy_decoy_matches = count(identity, sub_psms.MBR_is_best_decoy[decoy_rows_with_matches])
-            required_decoy_matches = ceil(Int, total_decoy_matches / 2)
-            needed = max(0, required_decoy_matches - decoy_decoy_matches)
+    decoy_rows_with_matches = findall(decoy_rows_with_matches_mask)
+    if !isempty(decoy_rows_with_matches)
+        total_decoy_matches = length(decoy_rows_with_matches)
+        decoy_decoy_matches = count(identity, psms.MBR_is_best_decoy[decoy_rows_with_matches])
+        required_decoy_matches = ceil(Int, total_decoy_matches / 2)
+        needed = max(0, required_decoy_matches - decoy_decoy_matches)
 
-            if needed > 0
-                candidate_rows = [i for i in decoy_rows_with_matches if !sub_psms.MBR_is_best_decoy[i] && haskey(decoy_candidate_cache, i)]
-                if !isempty(candidate_rows)
-                    rng = MersenneTwister(1776)
-                    selected = candidate_rows[randperm(rng, length(candidate_rows))[1:min(needed, length(candidate_rows))]]
-                    for i in selected
-                        apply_candidate_index!(sub_psms, i, decoy_candidate_cache[i])
-                    end
+        if needed > 0
+            candidate_rows = [i for i in decoy_rows_with_matches if !psms.MBR_is_best_decoy[i] && decoy_alternative_indices[i] != 0]
+            if !isempty(candidate_rows)
+                rng = MersenneTwister(1776)
+                selected = candidate_rows[randperm(rng, length(candidate_rows))[1:min(needed, length(candidate_rows))]]
+                for i in selected
+                    apply_candidate_index!(psms, i, decoy_alternative_indices[i])
                 end
             end
         end
