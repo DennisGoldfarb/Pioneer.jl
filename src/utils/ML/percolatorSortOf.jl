@@ -871,17 +871,24 @@ function compute_mbr_global_prob!(psms::AbstractDataFrame, sqrt_n_runs::Int)
 
         for i in 1:nrow(sub_psms)
             run = ms_files[i]
-            candidate_precursors = sub_psms.MBR_is_best_decoy[i] ? decoy_precursors : target_precursors
 
-            best_global_prob = zero(Float32)
-            for precursor in candidate_precursors
+            best_target_prob = zero(Float32)
+            for precursor in target_precursors
                 precursor_probs = sub_psms.trace_prob[
                     (sub_psms.precursor_idx .== precursor) .& (ms_files .!= run)
                 ]
-                best_global_prob = max(best_global_prob, logodds(precursor_probs, sqrt_n_runs))
+                best_target_prob = max(best_target_prob, logodds(precursor_probs, sqrt_n_runs))
             end
 
-            sub_psms.MBR_global_prob[i] = best_global_prob
+            best_decoy_prob = zero(Float32)
+            for precursor in decoy_precursors
+                precursor_probs = sub_psms.trace_prob[
+                    (sub_psms.precursor_idx .== precursor) .& (ms_files .!= run)
+                ]
+                best_decoy_prob = max(best_decoy_prob, logodds(precursor_probs, sqrt_n_runs))
+            end
+
+            sub_psms.MBR_global_prob[i] = max(best_target_prob, best_decoy_prob)
         end
     end
 
