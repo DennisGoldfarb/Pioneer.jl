@@ -678,6 +678,8 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                     required_decoy_matches = ceil(Int, total_decoy_matches / 2)
                     needed = max(0, required_decoy_matches - decoy_decoy_matches)
 
+                    @user_info "MBR decoy rebalance: need $needed additional decoy-decoy matches out of $total_decoy_matches total decoy matches"
+
                     candidate_rows = [i for i in decoy_rows_with_matches if !psms_subset.MBR_is_best_decoy[i] && haskey(decoy_candidate_cache, i)]
                     if needed > 0 && !isempty(candidate_rows)
                         rng = MersenneTwister(1776)
@@ -1072,6 +1074,8 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
         decoy_decoy_matches = count(identity, psms.MBR_is_best_decoy[decoy_rows_with_matches])
         required_decoy_matches = ceil(Int, total_decoy_matches / 2)
         needed = max(0, required_decoy_matches - decoy_decoy_matches)
+
+        @user_info "MBR decoy rebalance: need $needed additional decoy-decoy matches out of $total_decoy_matches total decoy matches"
 
         if needed > 0
             candidate_rows = [i for i in decoy_rows_with_matches if !psms.MBR_is_best_decoy[i] && decoy_alternative_indices[i] != 0]
