@@ -461,12 +461,47 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
         non_mbr_features::Vector{Symbol},
         match_between_runs::Bool;
         is_last_iteration::Bool = false)
-    
+
+        function get_candidate(scores, slot::Int)
+            log2_weights = getfield(scores, Symbol("best_log2_weights_$slot"))
+            isempty(log2_weights) && return nothing
+
+            return (
+                prob                      = getfield(scores, Symbol("best_prob_$slot")),
+                log2_weights              = log2_weights,
+                irts                      = getfield(scores, Symbol("best_irts_$slot")),
+                irt_residual              = getfield(scores, Symbol("best_irt_residual_$slot")),
+                weight                    = getfield(scores, Symbol("best_weight_$slot")),
+                log2_intensity_explained  = getfield(scores, Symbol("best_log2_intensity_explained_$slot")),
+                ms_file_idx               = getfield(scores, Symbol("best_ms_file_idx_$slot")),
+                is_decoy                  = getfield(scores, Symbol("is_best_decoy_$slot")),
+            )
+        end
+
+        function apply_mbr_candidate!(psms_subset::AbstractDataFrame, i::Int, candidate)
+            best_log2_weights_padded, weights_padded = pad_equal_length(candidate.log2_weights, log2.(psms_subset.weights[i]))
+            best_iRTs_padded, iRTs_padded = pad_rt_equal_length(candidate.irts, psms_subset.irts[i])
+
+            current_residual = irt_residual(psms_subset, i)
+            psms_subset.MBR_max_pair_prob[i] = candidate.prob
+            psms_subset.MBR_best_irt_diff[i] = abs(candidate.irt_residual - current_residual)
+            psms_subset.MBR_rv_coefficient[i] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
+            psms_subset.MBR_log2_weight_ratio[i] = log2(psms_subset.weight[i] / candidate.weight)
+            psms_subset.MBR_log2_explained_ratio[i] = psms_subset.log2_intensity_explained[i] - candidate.log2_intensity_explained
+            psms_subset.MBR_is_best_decoy[i] = candidate.is_decoy
+            psms_subset.MBR_is_missing[i] = false
+        end
+
         # Reset counts for new scores
         reset_precursor_scores!(prec_to_best_score_new)
-            
+
+        decoy_candidate_cache = Dict{Int, NamedTuple}()
+        decoy_rows_with_matches = Int[]
+
         for file_path in file_paths
             psms_subset = DataFrame(Arrow.Table(file_path))
+            empty!(decoy_candidate_cache)
+            empty!(decoy_rows_with_matches)
 
             trace_probs = predict_cv_models(models, psms_subset, features)
 
@@ -594,31 +629,15 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
 
                         psms_subset.MBR_num_runs[i] = length(scores.unique_passing_runs)
 
-                        best_log2_weights = Float32[]
-                        best_irts = Float32[]
-                        best_weight = zero(Float32)
-                        best_log2_ie = zero(Float32)
-                        best_residual = zero(Float32)
+                        candidates = NamedTuple[]
+                        for slot in 1:2
+                            candidate = get_candidate(scores, slot)
+                            if candidate !== nothing && candidate.ms_file_idx != psms_subset.ms_file_idx[i]
+                                push!(candidates, candidate)
+                            end
+                        end
 
-                        if (scores.best_ms_file_idx_1 != psms_subset.ms_file_idx[i]) &&
-                           (!isempty(scores.best_log2_weights_1))
-                            best_log2_weights                   = scores.best_log2_weights_1
-                            best_irts                           = scores.best_irts_1
-                            best_weight                         = scores.best_weight_1
-                            best_log2_ie                        = scores.best_log2_intensity_explained_1
-                            best_residual                       = scores.best_irt_residual_1
-                            psms_subset.MBR_max_pair_prob[i]    = scores.best_prob_1
-                            MBR_is_best_decoy                   = scores.is_best_decoy_1
-                        elseif (scores.best_ms_file_idx_2 != psms_subset.ms_file_idx[i]) &&
-                               (!isempty(scores.best_log2_weights_2))
-                            best_log2_weights                   = scores.best_log2_weights_2
-                            best_irts                           = scores.best_irts_2
-                            best_weight                         = scores.best_weight_2
-                            best_log2_ie                        = scores.best_log2_intensity_explained_2
-                            best_residual                       = scores.best_irt_residual_2
-                            psms_subset.MBR_max_pair_prob[i]    = scores.best_prob_2
-                            MBR_is_best_decoy                   = scores.is_best_decoy_2
-                        else
+                        if isempty(candidates)
                             psms_subset.MBR_best_irt_diff[i]        = -1.0f0
                             psms_subset.MBR_rv_coefficient[i]       = -1.0f0
                             psms_subset.MBR_is_best_decoy[i]        = true
@@ -629,15 +648,45 @@ function sort_of_percolator_out_of_memory!(psms::DataFrame,
                             continue
                         end
 
-                        best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(psms_subset.weights[i]))
-                        best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_irts, psms_subset.irts[i])
+                        best_candidate = argmax(candidates) do cand
+                            cand.prob
+                        end
 
-                        current_residual = irt_residual(psms_subset, i)
-                        psms_subset.MBR_best_irt_diff[i] = abs(best_residual - current_residual)
-                        psms_subset.MBR_rv_coefficient[i] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
-                        psms_subset.MBR_log2_weight_ratio[i] = log2(psms_subset.weight[i] / best_weight)
-                        psms_subset.MBR_log2_explained_ratio[i] = psms_subset.log2_intensity_explained[i] - best_log2_ie
-                        psms_subset.MBR_is_best_decoy[i] = MBR_is_best_decoy
+                        decoy_candidate = begin
+                            decoy_candidates = filter(cand -> cand.is_decoy, candidates)
+                            isempty(decoy_candidates) ? nothing : decoy_candidates[argmax(decoy_candidates) do cand
+                                cand.prob
+                            end]
+                        end
+
+                        apply_mbr_candidate!(psms_subset, i, best_candidate)
+
+                        if psms_subset.decoy[i]
+                            if decoy_candidate !== nothing
+                                decoy_candidate_cache[i] = (primary = best_candidate, decoy = decoy_candidate)
+                            end
+                            push!(decoy_rows_with_matches, i)
+                        end
+                    end
+                end
+            end
+
+            if match_between_runs && !is_last_iteration
+                total_decoy_matches = length(decoy_rows_with_matches)
+                if total_decoy_matches > 0
+                    decoy_decoy_matches = count(identity, psms_subset.MBR_is_best_decoy[decoy_rows_with_matches])
+                    required_decoy_matches = ceil(Int, total_decoy_matches / 2)
+                    needed = max(0, required_decoy_matches - decoy_decoy_matches)
+
+                    @user_info "MBR decoy rebalance: need $needed additional decoy-decoy matches out of $total_decoy_matches total decoy matches"
+
+                    candidate_rows = [i for i in decoy_rows_with_matches if !psms_subset.MBR_is_best_decoy[i] && haskey(decoy_candidate_cache, i)]
+                    if needed > 0 && !isempty(candidate_rows)
+                        rng = MersenneTwister(1776)
+                        selected = candidate_rows[randperm(rng, length(candidate_rows))[1:min(needed, length(candidate_rows))]]
+                        for i in selected
+                            apply_mbr_candidate!(psms_subset, i, decoy_candidate_cache[i].decoy)
+                        end
                     end
                 end
             end
@@ -849,8 +898,41 @@ function update_mbr_features!(psms_train::AbstractDataFrame,
         summarize_precursors!(psms_train, q_cutoff = max_q_value_lightgbm_rescore)
     end
     if itr == mbr_start_iter - 1
+        sqrt_n_runs = begin
+            n_runs = length(unique(vcat(psms_train.ms_file_idx, psms_test.ms_file_idx)))
+            effective_runs = max(1, n_runs - 1)
+            max(1, floor(Int, sqrt(effective_runs)))
+        end
+
+        compute_mbr_global_prob!(psms_train, sqrt_n_runs)
+        compute_mbr_global_prob!(psms_test, sqrt_n_runs)
         prob_test[test_fold_idxs] = psms_test.trace_prob
     end
+end
+
+function compute_mbr_global_prob!(psms::AbstractDataFrame, sqrt_n_runs::Int)
+    for sub_psms in groupby(psms, [:pair_id, :isotopes_captured])
+        ms_files = sub_psms.ms_file_idx
+        decoy_precursors = unique(sub_psms.precursor_idx[sub_psms.decoy])
+        target_precursors = unique(sub_psms.precursor_idx[.!sub_psms.decoy])
+
+        for i in 1:nrow(sub_psms)
+            run = ms_files[i]
+            candidate_precursors = sub_psms.MBR_is_best_decoy[i] ? decoy_precursors : target_precursors
+
+            best_global_prob = zero(Float32)
+            for precursor in candidate_precursors
+                precursor_probs = sub_psms.trace_prob[
+                    (sub_psms.precursor_idx .== precursor) .& (ms_files .!= run)
+                ]
+                best_global_prob = max(best_global_prob, logodds(precursor_probs, sqrt_n_runs))
+            end
+
+            sub_psms.MBR_global_prob[i] = best_global_prob
+        end
+    end
+
+    return psms
 end
 
 function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01f0)
@@ -866,8 +948,35 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
     @debug_l2 "MBR Feature Computation: $n_unique_pairs unique pair_ids × $n_unique_isotopes isotope combinations = $n_pair_isotope_groups groups"
     @debug_l2 "Isotope combinations present: $unique_isotopes"
 
+    decoy_rows_with_matches_mask = falses(nrow(psms))
+    decoy_alternative_indices = zeros(Int, nrow(psms))
+
+    parent_row_indices = parentindices(psms)[1]
+    parent_to_local_index = isempty(parent_row_indices) ? Int[] : zeros(Int, maximum(parent_row_indices))
+    for (local_idx, parent_idx) in enumerate(parent_row_indices)
+        parent_to_local_index[parent_idx] = local_idx
+    end
+
+    function apply_candidate_index!(psms_block::AbstractDataFrame, row_idx::Int, candidate_idx::Int)
+        best_log2_weights = log2.(psms_block.weights[candidate_idx])
+        best_iRTs = psms_block.irts[candidate_idx]
+        best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(psms_block.weights[row_idx]))
+        best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_iRTs, psms_block.irts[row_idx])
+
+        psms_block.MBR_max_pair_prob[row_idx] = psms_block.trace_prob[candidate_idx]
+        best_residual = irt_residual(psms_block, candidate_idx)
+        current_residual = irt_residual(psms_block, row_idx)
+        psms_block.MBR_best_irt_diff[row_idx] = abs(best_residual - current_residual)
+        psms_block.MBR_rv_coefficient[row_idx] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
+        psms_block.MBR_log2_weight_ratio[row_idx] = log2(psms_block.weight[row_idx] / psms_block.weight[candidate_idx])
+        psms_block.MBR_log2_explained_ratio[row_idx] = psms_block.log2_intensity_explained[row_idx] - psms_block.log2_intensity_explained[candidate_idx]
+        psms_block.MBR_is_best_decoy[row_idx] = psms_block.decoy[candidate_idx]
+        psms_block.MBR_is_missing[row_idx] = false
+    end
+
     Threads.@threads for idx in eachindex(pair_groups)
         _, sub_psms = pair_groups[idx]
+        parent_rows = parentindices(sub_psms)[1]
         
         # Efficient way to find the top 2 precursors so we can do MBR on the 
         # best precursor match that isn't itself. It's always one of the top 2.
@@ -877,12 +986,19 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
         range_len = Int(maximum(sub_psms.ms_file_idx)) - offset + 1
         best_i = zeros(Int, range_len)
         best_p = fill(-Inf, range_len)
+        best_decoy_i = zeros(Int, range_len)
+        best_decoy_p = fill(-Inf, range_len)
         for (i, run) in enumerate(sub_psms.ms_file_idx)
             idx = Int(run) - offset + 1
             p = sub_psms.trace_prob[i]
             if p > best_p[idx]
                 best_p[idx] = p
                 best_i[idx] = i
+            end
+
+            if sub_psms.decoy[i] && p > best_decoy_p[idx]
+                best_decoy_p[idx] = p
+                best_decoy_i[idx] = i
             end
         end
 
@@ -909,10 +1025,26 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
             end
         end
 
+        run_best_decoy_indices = zeros(Int, range_len)
+        decoy_runs = findall(!=(0), best_decoy_i)
+        if length(decoy_runs) > 1
+            decoy_order = sort(decoy_runs; by=r -> best_decoy_p[r], rev=true)
+            for r in runs
+                for candidate_run in decoy_order
+                    if candidate_run != r
+                        run_best_decoy_indices[r] = best_decoy_i[candidate_run]
+                        break
+                    end
+                end
+            end
+        end
+
         # Compute MBR features
         num_runs_passing = length(sub_psms.ms_file_idx[sub_psms.q_value .<= q_cutoff])
         for i in 1:nrow(sub_psms)
             sub_psms.MBR_num_runs[i] = num_runs_passing - (sub_psms.q_value[i] .<= q_cutoff)
+
+            parent_idx = parent_rows[i]
 
             idx = Int(sub_psms.ms_file_idx[i]) - offset + 1
             best_idx = run_best_indices[idx]
@@ -927,19 +1059,41 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
                 continue
             end
 
-            best_log2_weights = log2.(sub_psms.weights[best_idx])
-            best_iRTs = sub_psms.irts[best_idx]
-            best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(sub_psms.weights[i]))
-            best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_iRTs, sub_psms.irts[i])
+            apply_candidate_index!(sub_psms, i, best_idx)
 
-            sub_psms.MBR_max_pair_prob[i] = sub_psms.trace_prob[best_idx]
-            best_residual = irt_residual(sub_psms, best_idx)
-            current_residual = irt_residual(sub_psms, i)
-            sub_psms.MBR_best_irt_diff[i] = abs(best_residual - current_residual)
-            sub_psms.MBR_rv_coefficient[i] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
-            sub_psms.MBR_log2_weight_ratio[i] = log2(sub_psms.weight[i] / sub_psms.weight[best_idx])
-            sub_psms.MBR_log2_explained_ratio[i] = sub_psms.log2_intensity_explained[i] - sub_psms.log2_intensity_explained[best_idx]
-            sub_psms.MBR_is_best_decoy[i] = sub_psms.decoy[best_idx]
+            if sub_psms.decoy[i]
+                if best_idx != 0
+                    local_idx = parent_to_local_index[parent_idx]
+                    decoy_rows_with_matches_mask[local_idx] = true
+                end
+
+                best_decoy_idx = run_best_decoy_indices[idx]
+                if best_decoy_idx != 0 && best_decoy_idx != best_idx
+                    alternative_local_idx = parent_to_local_index[parent_rows[best_decoy_idx]]
+                    decoy_alternative_indices[parent_to_local_index[parent_idx]] = alternative_local_idx
+                end
+            end
+        end
+    end
+
+    decoy_rows_with_matches = findall(decoy_rows_with_matches_mask)
+    if !isempty(decoy_rows_with_matches)
+        total_decoy_matches = length(decoy_rows_with_matches)
+        decoy_decoy_matches = count(identity, psms.MBR_is_best_decoy[decoy_rows_with_matches])
+        required_decoy_matches = ceil(Int, total_decoy_matches / 2)
+        needed = max(0, required_decoy_matches - decoy_decoy_matches)
+
+        @user_info "MBR decoy rebalance: need $needed additional decoy-decoy matches out of $total_decoy_matches total decoy matches"
+
+        if needed > 0
+            candidate_rows = [i for i in decoy_rows_with_matches if !psms.MBR_is_best_decoy[i] && decoy_alternative_indices[i] != 0]
+            if !isempty(candidate_rows)
+                rng = MersenneTwister(1776)
+                selected = candidate_rows[randperm(rng, length(candidate_rows))[1:min(needed, length(candidate_rows))]]
+                for i in selected
+                    apply_candidate_index!(psms, i, decoy_alternative_indices[i])
+                end
+            end
         end
     end
 end
@@ -960,6 +1114,7 @@ function initialize_prob_group_features!(
         psms[!, :MBR_rv_coefficient]            = zeros(Float32, n)
         psms[!, :MBR_is_best_decoy]             = trues(n)
         psms[!, :MBR_num_runs]                  = zeros(Int32, n)
+        psms[!, :MBR_global_prob]               = zeros(Float32, n)
         psms[!, :MBR_transfer_candidate]        = falses(n)
         psms[!, :MBR_is_missing]                = falses(n)
     end
