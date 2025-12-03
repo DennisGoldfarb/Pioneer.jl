@@ -957,6 +957,23 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
         parent_to_local_index[parent_idx] = local_idx
     end
 
+    function apply_candidate_index!(psms_block::AbstractDataFrame, row_idx::Int, candidate_idx::Int)
+        best_log2_weights = log2.(psms_block.weights[candidate_idx])
+        best_iRTs = psms_block.irts[candidate_idx]
+        best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(psms_block.weights[row_idx]))
+        best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_iRTs, psms_block.irts[row_idx])
+
+        psms_block.MBR_max_pair_prob[row_idx] = psms_block.trace_prob[candidate_idx]
+        best_residual = irt_residual(psms_block, candidate_idx)
+        current_residual = irt_residual(psms_block, row_idx)
+        psms_block.MBR_best_irt_diff[row_idx] = abs(best_residual - current_residual)
+        psms_block.MBR_rv_coefficient[row_idx] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
+        psms_block.MBR_log2_weight_ratio[row_idx] = log2(psms_block.weight[row_idx] / psms_block.weight[candidate_idx])
+        psms_block.MBR_log2_explained_ratio[row_idx] = psms_block.log2_intensity_explained[row_idx] - psms_block.log2_intensity_explained[candidate_idx]
+        psms_block.MBR_is_best_decoy[row_idx] = psms_block.decoy[candidate_idx]
+        psms_block.MBR_is_missing[row_idx] = false
+    end
+
     Threads.@threads for idx in eachindex(pair_groups)
         _, sub_psms = pair_groups[idx]
         parent_rows = parentindices(sub_psms)[1]
@@ -1023,23 +1040,6 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
         end
 
         # Compute MBR features
-        function apply_candidate_index!(psms_block::AbstractDataFrame, row_idx::Int, candidate_idx::Int)
-            best_log2_weights = log2.(psms_block.weights[candidate_idx])
-            best_iRTs = psms_block.irts[candidate_idx]
-            best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(psms_block.weights[row_idx]))
-            best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_iRTs, psms_block.irts[row_idx])
-
-            psms_block.MBR_max_pair_prob[row_idx] = psms_block.trace_prob[candidate_idx]
-            best_residual = irt_residual(psms_block, candidate_idx)
-            current_residual = irt_residual(psms_block, row_idx)
-            psms_block.MBR_best_irt_diff[row_idx] = abs(best_residual - current_residual)
-            psms_block.MBR_rv_coefficient[row_idx] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
-            psms_block.MBR_log2_weight_ratio[row_idx] = log2(psms_block.weight[row_idx] / psms_block.weight[candidate_idx])
-            psms_block.MBR_log2_explained_ratio[row_idx] = psms_block.log2_intensity_explained[row_idx] - psms_block.log2_intensity_explained[candidate_idx]
-            psms_block.MBR_is_best_decoy[row_idx] = psms_block.decoy[candidate_idx]
-            psms_block.MBR_is_missing[row_idx] = false
-        end
-
         num_runs_passing = length(sub_psms.ms_file_idx[sub_psms.q_value .<= q_cutoff])
         for i in 1:nrow(sub_psms)
             sub_psms.MBR_num_runs[i] = num_runs_passing - (sub_psms.q_value[i] .<= q_cutoff)
