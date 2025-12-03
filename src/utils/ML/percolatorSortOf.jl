@@ -910,12 +910,19 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
         range_len = Int(maximum(sub_psms.ms_file_idx)) - offset + 1
         best_i = zeros(Int, range_len)
         best_p = fill(-Inf, range_len)
+        best_target_i = zeros(Int, range_len)
+        best_target_p = fill(-Inf, range_len)
         for (i, run) in enumerate(sub_psms.ms_file_idx)
             idx = Int(run) - offset + 1
             p = sub_psms.trace_prob[i]
             if p > best_p[idx]
                 best_p[idx] = p
                 best_i[idx] = i
+            end
+
+            if sub_psms.target[i] && p > best_target_p[idx]
+                best_target_p[idx] = p
+                best_target_i[idx] = i
             end
         end
 
@@ -942,13 +949,45 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
             end
         end
 
+        # Find the best target run to compare against when evaluating decoys
+        run_best_target_indices = zeros(Int, range_len)
+        target_runs = findall(!=(0), best_target_i)
+        if !isempty(target_runs)
+            r1 = target_runs[argmax(best_target_p[target_runs])]
+            p2 = -Inf
+            r2 = 0
+            if length(target_runs) > 1
+                for r in target_runs
+                    if r == r1
+                        continue
+                    end
+                    p = best_target_p[r]
+                    if p > p2
+                        r2, p2 = r, p
+                    end
+                end
+            end
+
+            for r in 1:range_len
+                if r == r1
+                    run_best_target_indices[r] = r2 == 0 ? 0 : best_target_i[r2]
+                else
+                    run_best_target_indices[r] = best_target_i[r1]
+                end
+            end
+        end
+
         # Compute MBR features
         num_runs_passing = length(sub_psms.ms_file_idx[sub_psms.q_value .<= q_cutoff])
         for i in 1:nrow(sub_psms)
             sub_psms.MBR_num_runs[i] = num_runs_passing - (sub_psms.q_value[i] .<= q_cutoff)
 
             idx = Int(sub_psms.ms_file_idx[i]) - offset + 1
-            best_idx = run_best_indices[idx]
+            if sub_psms.decoy[i]
+                best_idx = run_best_target_indices[idx]
+            else
+                best_idx = run_best_indices[idx]
+            end
             if best_idx == 0 || sub_psms.MBR_num_runs[i] == 0
                 sub_psms.MBR_best_irt_diff[i]           = -1.0f0
                 sub_psms.MBR_rv_coefficient[i]          = -1.0f0
