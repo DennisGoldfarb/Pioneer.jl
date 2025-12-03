@@ -864,8 +864,10 @@ end
 function compute_mbr_global_prob!(psms::AbstractDataFrame, sqrt_n_runs::Int)
     for sub_psms in groupby(psms, [:pair_id, :isotopes_captured])
         ms_files = sub_psms.ms_file_idx
-        decoy_precursors = unique(sub_psms.precursor_idx[sub_psms.decoy])
-        target_precursors = unique(sub_psms.precursor_idx[.!sub_psms.decoy])
+
+        q_value_pass_mask = sub_psms.q_value .<= 0.01
+        decoy_precursors = unique(sub_psms.precursor_idx[sub_psms.decoy .& q_value_pass_mask])
+        target_precursors = unique(sub_psms.precursor_idx[.!sub_psms.decoy .& q_value_pass_mask])
 
         for i in 1:nrow(sub_psms)
             run = ms_files[i]
