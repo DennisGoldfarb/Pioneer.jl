@@ -951,6 +951,12 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
     decoy_rows_with_matches_mask = falses(nrow(psms))
     decoy_alternative_indices = zeros(Int, nrow(psms))
 
+    parent_row_indices = parentindices(psms)[1]
+    parent_to_local_index = isempty(parent_row_indices) ? Int[] : zeros(Int, maximum(parent_row_indices))
+    for (local_idx, parent_idx) in enumerate(parent_row_indices)
+        parent_to_local_index[parent_idx] = local_idx
+    end
+
     Threads.@threads for idx in eachindex(pair_groups)
         _, sub_psms = pair_groups[idx]
         parent_rows = parentindices(sub_psms)[1]
@@ -1057,12 +1063,14 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
 
             if sub_psms.decoy[i]
                 if best_idx != 0
-                    decoy_rows_with_matches_mask[parent_idx] = true
+                    local_idx = parent_to_local_index[parent_idx]
+                    decoy_rows_with_matches_mask[local_idx] = true
                 end
 
                 best_decoy_idx = run_best_decoy_indices[idx]
                 if best_decoy_idx != 0 && best_decoy_idx != best_idx
-                    decoy_alternative_indices[parent_idx] = parent_rows[best_decoy_idx]
+                    alternative_local_idx = parent_to_local_index[parent_rows[best_decoy_idx]]
+                    decoy_alternative_indices[parent_to_local_index[parent_idx]] = alternative_local_idx
                 end
             end
         end
