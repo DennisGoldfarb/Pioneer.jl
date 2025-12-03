@@ -957,12 +957,19 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
         range_len = Int(maximum(sub_psms.ms_file_idx)) - offset + 1
         best_i = zeros(Int, range_len)
         best_p = fill(-Inf, range_len)
+        best_decoy_i = zeros(Int, range_len)
+        best_decoy_p = fill(-Inf, range_len)
         for (i, run) in enumerate(sub_psms.ms_file_idx)
             idx = Int(run) - offset + 1
             p = sub_psms.trace_prob[i]
             if p > best_p[idx]
                 best_p[idx] = p
                 best_i[idx] = i
+            end
+
+            if sub_psms.decoy[i] && p > best_decoy_p[idx]
+                best_decoy_p[idx] = p
+                best_decoy_i[idx] = i
             end
         end
 
@@ -989,7 +996,41 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
             end
         end
 
+        run_best_decoy_indices = zeros(Int, range_len)
+        decoy_runs = findall(!=(0), best_decoy_i)
+        if length(decoy_runs) > 1
+            decoy_order = sort(decoy_runs; by=r -> best_decoy_p[r], rev=true)
+            for r in runs
+                for candidate_run in decoy_order
+                    if candidate_run != r
+                        run_best_decoy_indices[r] = best_decoy_i[candidate_run]
+                        break
+                    end
+                end
+            end
+        end
+
         # Compute MBR features
+        decoy_candidate_cache = Dict{Int, Int}()
+        decoy_rows_with_matches = Int[]
+
+        function apply_candidate_index!(psms_block::AbstractDataFrame, row_idx::Int, candidate_idx::Int)
+            best_log2_weights = log2.(psms_block.weights[candidate_idx])
+            best_iRTs = psms_block.irts[candidate_idx]
+            best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(psms_block.weights[row_idx]))
+            best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_iRTs, psms_block.irts[row_idx])
+
+            psms_block.MBR_max_pair_prob[row_idx] = psms_block.trace_prob[candidate_idx]
+            best_residual = irt_residual(psms_block, candidate_idx)
+            current_residual = irt_residual(psms_block, row_idx)
+            psms_block.MBR_best_irt_diff[row_idx] = abs(best_residual - current_residual)
+            psms_block.MBR_rv_coefficient[row_idx] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
+            psms_block.MBR_log2_weight_ratio[row_idx] = log2(psms_block.weight[row_idx] / psms_block.weight[candidate_idx])
+            psms_block.MBR_log2_explained_ratio[row_idx] = psms_block.log2_intensity_explained[row_idx] - psms_block.log2_intensity_explained[candidate_idx]
+            psms_block.MBR_is_best_decoy[row_idx] = psms_block.decoy[candidate_idx]
+            psms_block.MBR_is_missing[row_idx] = false
+        end
+
         num_runs_passing = length(sub_psms.ms_file_idx[sub_psms.q_value .<= q_cutoff])
         for i in 1:nrow(sub_psms)
             sub_psms.MBR_num_runs[i] = num_runs_passing - (sub_psms.q_value[i] .<= q_cutoff)
@@ -1007,19 +1048,36 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
                 continue
             end
 
-            best_log2_weights = log2.(sub_psms.weights[best_idx])
-            best_iRTs = sub_psms.irts[best_idx]
-            best_log2_weights_padded, weights_padded = pad_equal_length(best_log2_weights, log2.(sub_psms.weights[i]))
-            best_iRTs_padded, iRTs_padded = pad_rt_equal_length(best_iRTs, sub_psms.irts[i])
+            apply_candidate_index!(sub_psms, i, best_idx)
 
-            sub_psms.MBR_max_pair_prob[i] = sub_psms.trace_prob[best_idx]
-            best_residual = irt_residual(sub_psms, best_idx)
-            current_residual = irt_residual(sub_psms, i)
-            sub_psms.MBR_best_irt_diff[i] = abs(best_residual - current_residual)
-            sub_psms.MBR_rv_coefficient[i] = MBR_rv_coefficient(best_log2_weights_padded, best_iRTs_padded, weights_padded, iRTs_padded)
-            sub_psms.MBR_log2_weight_ratio[i] = log2(sub_psms.weight[i] / sub_psms.weight[best_idx])
-            sub_psms.MBR_log2_explained_ratio[i] = sub_psms.log2_intensity_explained[i] - sub_psms.log2_intensity_explained[best_idx]
-            sub_psms.MBR_is_best_decoy[i] = sub_psms.decoy[best_idx]
+            if sub_psms.decoy[i]
+                if best_idx != 0
+                    push!(decoy_rows_with_matches, i)
+                end
+
+                best_decoy_idx = run_best_decoy_indices[idx]
+                if best_decoy_idx != 0 && best_decoy_idx != best_idx
+                    decoy_candidate_cache[i] = best_decoy_idx
+                end
+            end
+        end
+
+        if !isempty(decoy_rows_with_matches)
+            total_decoy_matches = length(decoy_rows_with_matches)
+            decoy_decoy_matches = count(identity, sub_psms.MBR_is_best_decoy[decoy_rows_with_matches])
+            required_decoy_matches = ceil(Int, total_decoy_matches / 2)
+            needed = max(0, required_decoy_matches - decoy_decoy_matches)
+
+            if needed > 0
+                candidate_rows = [i for i in decoy_rows_with_matches if !sub_psms.MBR_is_best_decoy[i] && haskey(decoy_candidate_cache, i)]
+                if !isempty(candidate_rows)
+                    rng = MersenneTwister(1776)
+                    selected = candidate_rows[randperm(rng, length(candidate_rows))[1:min(needed, length(candidate_rows))]]
+                    for i in selected
+                        apply_candidate_index!(sub_psms, i, decoy_candidate_cache[i])
+                    end
+                end
+            end
         end
     end
 end
