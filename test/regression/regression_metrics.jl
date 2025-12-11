@@ -54,6 +54,7 @@ function compute_wide_metrics(
     df::DataFrame,
     quant_col_names::AbstractVector{<:Union{Symbol, String}};
     table_label::AbstractString = "wide_table",
+    dataset_name::AbstractString = "dataset",
 )
     existing_quant_cols = select_quant_columns(df, quant_col_names)
     runs = length(existing_quant_cols)
@@ -63,7 +64,7 @@ function compute_wide_metrics(
 
     if length(existing_quant_cols) < length(quant_col_names)
         missing_cols = setdiff(Symbol.(quant_col_names), Symbol.(existing_quant_cols))
-        @warn "Missing quantification columns in dataset" missing_cols=missing_cols
+        @warn "Missing quantification columns in dataset" dataset=dataset_name table_label=table_label missing_cols=missing_cols
     end
 
     quant_data = df[:, existing_quant_cols]
@@ -491,10 +492,16 @@ function compute_dataset_metrics(
 
         if need_cv
             precursor_wide_metrics = compute_wide_metrics(
-                precursors_wide, quant_col_names; table_label = "precursors_wide"
+                precursors_wide,
+                quant_col_names;
+                table_label = "precursors_wide",
+                dataset_name = dataset_name,
             )
             protein_wide_metrics = compute_wide_metrics(
-                protein_groups_wide, quant_col_names; table_label = "protein_groups_wide"
+                protein_groups_wide,
+                quant_col_names;
+                table_label = "protein_groups_wide",
+                dataset_name = dataset_name,
             )
             precursor_cv_metrics = compute_cv_metrics(
                 precursors_wide, quant_col_names; table_label = "precursors_wide"
