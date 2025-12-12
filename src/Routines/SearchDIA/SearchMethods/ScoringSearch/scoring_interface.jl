@@ -147,7 +147,7 @@ function apply_mbr_filter!(
     end
 
     # Apply best method's filtering
-    return apply_filtering(best_result, merged_df, candidate_mask, params)
+    return apply_filtering(best_result, merged_df, candidate_mask, is_bad_transfer, params)
 end
 
 #==========================================================
@@ -401,20 +401,36 @@ Filtering Application
 ==========================================================#
 
 """
-    apply_filtering(result, merged_df, candidate_mask, params) -> NamedTuple
+    apply_filtering(result, merged_df, candidate_mask, is_bad_transfer, params) -> NamedTuple
 
-Apply the filtering result to the full dataframe.
+Apply the filtering result to the full dataframe, zeroing out candidates below the
+selected threshold **and** any bad transfers regardless of their score.
 Returns a NamedTuple with both MBR_boosted_trace_prob and trace_prob filtered.
 """
-function apply_filtering(result::FilterResult, merged_df::DataFrame, candidate_mask::AbstractVector{Bool}, params)
+function apply_filtering(
+    result::FilterResult,
+    merged_df::DataFrame,
+    candidate_mask::AbstractVector{Bool},
+    is_bad_transfer::AbstractVector{Bool},
+    params,
+)
+
     filtered_MBR_boosted_trace_probs = copy(merged_df.MBR_boosted_trace_prob)
     filtered_trace_probs = copy(merged_df.trace_prob)
     candidate_indices = findall(candidate_mask)
+    failed_initial_mask = merged_df.q_value .> params.max_q_value_lightgbm_rescore
+    non_candidate_failed_mask = .!candidate_mask .& failed_initial_mask
+
+    println("**************************")
+    println("Initial")
+    println("Candidates: ", sum(candidate_mask))
+    println("Num non-zero MBR probs: ", sum(filtered_MBR_boosted_trace_probs .> 0.0f0))
+    println("**************************\n")
 
     if result.method_name == "Threshold"
         # Simple threshold on probability
         for idx in candidate_indices
-            if merged_df.MBR_boosted_trace_prob[idx] < result.threshold
+            if merged_df.MBR_boosted_trace_prob[idx] <= result.threshold
                 filtered_MBR_boosted_trace_probs[idx] = 0.0f0
                 filtered_trace_probs[idx] = 0.0f0
             end
@@ -428,6 +444,39 @@ function apply_filtering(result::FilterResult, merged_df::DataFrame, candidate_m
             end
         end
     end
+
+
+    println("**************************")
+    println("Post threshold")
+    println("Num non-zero MBR probs: ", sum(filtered_MBR_boosted_trace_probs .> 0.0f0))
+    println("**************************\n")
+
+    # Explicitly remove bad transfers even if they cleared the threshold
+    for idx in candidate_indices
+        if is_bad_transfer[idx]
+            filtered_MBR_boosted_trace_probs[idx] = 0.0f0
+            filtered_trace_probs[idx] = 0.0f0
+        end
+    end
+
+    println("**************************")
+    println("Post bad transfers")
+    println("Num non-zero MBR probs: ", sum(filtered_MBR_boosted_trace_probs .> 0.0f0))
+    println("**************************\n")
+
+    # Also clear entries that were not transfer candidates and failed the initial q-value cutoff
+    for idx in findall(non_candidate_failed_mask)
+        filtered_MBR_boosted_trace_probs[idx] = 0.0f0
+        filtered_trace_probs[idx] = 0.0f0
+    end
+
+    println("**************************")
+    println("final")
+    println("non candidate failed: ", sum(non_candidate_failed_mask))
+    println("candidate mask: ", sum(candidate_mask))
+    println("failed initial: ", sum(failed_initial_mask))
+    println("Num non-zero MBR probs: ", sum(filtered_MBR_boosted_trace_probs .> 0.0f0))
+    println("**************************\n")
 
     return (MBR_boosted_trace_prob = filtered_MBR_boosted_trace_probs,
             trace_prob = filtered_trace_probs)
