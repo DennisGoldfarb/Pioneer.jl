@@ -123,8 +123,8 @@ function assign_random_target_decoy_pairs!(psms::DataFrame)
     psms[!,:pair_id] = zeros(UInt32, nrow(psms))  # Initialize pair_id column
     psms[!,:irt_bin_idx] = getIrtBins(psms.refined_irt_pred)  # Ensure irt_bin_idx column exists
 
-    irt_bin_groups = groupby(psms, :irt_bin_idx)
-    for (irt_bin_idx, sub_psms) in pairs(irt_bin_groups)
+    irt_bin_groups = groupby(psms, [:irt_bin_idx, :cv_fold, :isotopes_captured])
+    for (_, sub_psms) in pairs(irt_bin_groups)
         last_pair_id = assignPairIds!(sub_psms, last_pair_id)
     end
 end
@@ -132,21 +132,24 @@ end
 
 function assignPairIds!(psms::AbstractDataFrame, last_pair_id::UInt32)
     psms[!,:pair_id], last_pair_id = assign_pair_ids(
-        psms.target, psms.decoy, psms.precursor_idx, psms.irt_bin_idx, last_pair_id
+        psms.target, psms.decoy, psms.precursor_idx, psms.irt_bin_idx,
+        psms.cv_fold, psms.isotopes_captured, last_pair_id
     )
     return last_pair_id
 end
 
 """
-    assign_pair_ids(target, decoy, precursor_idx, irt_bin_idx, last_pair_id)
+    assign_pair_ids(target, decoy, precursor_idx, irt_bin_idx, cv_fold, isotopes_captured, last_pair_id)
 
-Randomly assign pair IDs to precursors within an iRT bin, allowing all pairing types.
+Randomly assign pair IDs to precursors within an iRT bin, CV fold, and isotopes_captured group, allowing all pairing types.
 
 # Arguments
 - `target::AbstractVector{Bool}`: Target/decoy labels (used only for statistics)
 - `decoy::AbstractVector{Bool}`: Decoy flags (used only for statistics)
 - `precursor_idx::AbstractVector{UInt32}`: Unique precursor identifiers
 - `irt_bin_idx::AbstractVector{UInt32}`: iRT bin identifiers
+- `cv_fold::AbstractVector`: Cross-validation fold identifiers (for reporting)
+- `isotopes_captured::AbstractVector`: Captured isotope sets (pairing is per set)
 - `last_pair_id::UInt32`: Last assigned pair_id (for continuity across bins)
 
 # Returns
@@ -170,6 +173,7 @@ consecutively: (1,2), (3,4), (5,6), etc. This creates:
 function assign_pair_ids(
     target::AbstractVector{Bool}, decoy::AbstractVector{Bool},
     precursor_idx::AbstractVector{UInt32}, irt_bin_idx::AbstractVector{UInt32},
+    cv_fold::AbstractVector, isotopes_captured::AbstractVector,
     last_pair_id::UInt32
 )
     # Get all unique precursors in this iRT bin (regardless of target/decoy status)
@@ -228,7 +232,7 @@ function assign_pair_ids(
     end
 
     # Report pairing statistics for this bin
-    @debug_l2 "iRT bin $(first(irt_bin_idx)): $(n_pairs) pairs (T-T: $n_target_target, T-D: $n_target_decoy, D-D: $n_decoy_decoy), Singletons: $n_singleton"
+    @debug_l2 "iRT bin $(first(irt_bin_idx)) fold $(first(cv_fold)) isotopes $(first(isotopes_captured)): $(n_pairs) pairs (T-T: $n_target_target, T-D: $n_target_decoy, D-D: $n_decoy_decoy), Singletons: $n_singleton"
 
     # Map all rows to their pair_ids
     pair_ids = similar(precursor_idx, UInt32)
@@ -377,15 +381,11 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
             prob_test[test_idx] = predict(bst, psms_test)
             psms_test[!,:trace_prob] = prob_test[test_idx]
 
-            #if itr == 1
-            #    first_pass_estimates[test_idx] = prob_test[test_idx]
-            #end
-
             if itr == (mbr_start_iter - 1)
 			    nonMBR_estimates[test_idx] = prob_test[test_idx]
             end
 
-            if match_between_runs
+            if match_between_runs && itr == (mbr_start_iter - 1)
                 update_mbr_features!(psms_train, psms_test, prob_test,
                                      test_idx, itr, mbr_start_iter,
                                      max_q_value_lightgbm_rescore)
@@ -409,15 +409,17 @@ function sort_of_percolator_in_memory!(psms::DataFrame,
 
     if match_between_runs
         # Determine which precursors failed the q-value cutoff prior to MBR
-        qvals_prev = Vector{Float32}(undef, length(nonMBR_estimates))
-        get_qvalues!(nonMBR_estimates, psms.target, qvals_prev)
-        pass_mask = (qvals_prev .<= max_q_value_lightgbm_rescore)
+        #qvals_prev = Vector{Float32}(undef, length(nonMBR_estimates))
+        get_qvalues!(nonMBR_estimates, psms.target, psms.q_value)
+        pass_mask = (psms.q_value .<= max_q_value_lightgbm_rescore)
         has_passing_psms = !isempty(pass_mask) && any(pass_mask)
         prob_thresh = has_passing_psms ? minimum(nonMBR_estimates[pass_mask]) : typemax(Float32)
         # Label as transfer candidates only those failing the q-value cutoff but
         # whose best matched pair surpassed the passing probability threshold.
         psms[!, :MBR_transfer_candidate] .= .!pass_mask .&
                                             (psms.MBR_max_pair_prob .>= prob_thresh)
+
+        println("sum(prob): ", sum(nonMBR_estimates), " passing: ", sum(pass_mask), " failing: ", sum(.!pass_mask), " thresh: ", prob_thresh, " passing pair: ", sum(psms.MBR_max_pair_prob .>= prob_thresh), " candidates: ", sum(psms[!, :MBR_transfer_candidate]), "\n")
 
         # Store base trace probabilities (non-MBR)
         psms[!, :trace_prob] = nonMBR_estimates
@@ -845,10 +847,10 @@ function update_mbr_features!(psms_train::AbstractDataFrame,
                               max_q_value_lightgbm_rescore::Float32)
     if itr >= mbr_start_iter - 1
         get_qvalues!(psms_test.trace_prob, psms_test.target, psms_test.q_value)
+        get_qvalues!(psms_train.trace_prob, psms_train.target, psms_train.q_value)
         summarize_precursors!(psms_test, q_cutoff = max_q_value_lightgbm_rescore)
         summarize_precursors!(psms_train, q_cutoff = max_q_value_lightgbm_rescore)
-    end
-    if itr == mbr_start_iter - 1
+
         sqrt_n_runs = begin
             n_runs = length(unique(vcat(psms_train.ms_file_idx, psms_test.ms_file_idx)))
             effective_runs = max(1, n_runs - 1)
@@ -857,6 +859,8 @@ function update_mbr_features!(psms_train::AbstractDataFrame,
 
         compute_mbr_global_prob!(psms_train, sqrt_n_runs)
         compute_mbr_global_prob!(psms_test, sqrt_n_runs)
+    end
+    if itr == mbr_start_iter - 1
         prob_test[test_fold_idxs] = psms_test.trace_prob
     end
 end
@@ -872,23 +876,28 @@ function compute_mbr_global_prob!(psms::AbstractDataFrame, sqrt_n_runs::Int)
         for i in 1:nrow(sub_psms)
             run = ms_files[i]
 
-            best_target_prob = zero(Float32)
-            for precursor in target_precursors
+            candidate_precursors = sub_psms.MBR_is_best_decoy[i] ? decoy_precursors : target_precursors
+
+            best_global_prob = -1.0f0
+            for precursor in candidate_precursors
                 precursor_probs = sub_psms.trace_prob[
-                    (sub_psms.precursor_idx .== precursor) .& (ms_files .!= run)
+                    (sub_psms.precursor_idx .== precursor) .& (ms_files .!= run) .& q_value_pass_mask
                 ]
-                best_target_prob = max(best_target_prob, logodds(precursor_probs, sqrt_n_runs))
+                if length(precursor_probs) > 0
+                    best_global_prob = max(best_global_prob, logodds(precursor_probs, sqrt_n_runs))
+                end
             end
 
-            best_decoy_prob = zero(Float32)
-            for precursor in decoy_precursors
-                precursor_probs = sub_psms.trace_prob[
-                    (sub_psms.precursor_idx .== precursor) .& (ms_files .!= run)
-                ]
-                best_decoy_prob = max(best_decoy_prob, logodds(precursor_probs, sqrt_n_runs))
+            sub_psms.MBR_global_prob[i] = best_global_prob
+            if abs(best_global_prob - sub_psms.MBR_max_pair_prob[i]) > 0.5
+                println(best_global_prob, " ", sub_psms.MBR_max_pair_prob[i], " ", sub_psms.ms_file_idx[i], " ", i)
+                println(precursor_probs)
+                println(sub_psms)
+                println(sub_psms.trace_prob)
+                println(sub_psms.decoy)
+                println(sub_psms.MBR_is_best_decoy)
+                println("\n")
             end
-
-            sub_psms.MBR_global_prob[i] = max(best_target_prob, best_decoy_prob)
         end
     end
 
@@ -901,12 +910,35 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
     unique_isotopes = unique(psms.isotopes_captured)
     n_unique_isotopes = length(unique_isotopes)
 
+
     # Compute pair specific features that rely on decoys and chromatograms
     pair_groups = collect(pairs(groupby(psms, [:pair_id, :isotopes_captured])))
     n_pair_isotope_groups = length(pair_groups)
 
-    @debug_l2 "MBR Feature Computation: $n_unique_pairs unique pair_ids × $n_unique_isotopes isotope combinations = $n_pair_isotope_groups groups"
-    @debug_l2 "Isotope combinations present: $unique_isotopes"
+    # count missing pairs
+    pair_groups_global = collect(pairs(groupby(psms, [:pair_id])))
+
+    num_isotope_pairs = 0
+    num_pair_groups = length(pair_groups_global)
+    num_pairs = 0
+    for idx in eachindex(pair_groups)
+        _, sub_psms = pair_groups[idx]
+        if length(unique(sub_psms.precursor_idx)) > 1
+            num_isotope_pairs += 1
+        end
+    end
+    for idx in eachindex(pair_groups_global)
+        _, sub_psms = pair_groups_global[idx]
+        if length(unique(sub_psms.precursor_idx)) > 1
+            num_pairs += 1
+        end
+    end
+    println("n_pair_isotope_groups: ", n_pair_isotope_groups, " num_valid_isotope_pairs: ", num_isotope_pairs)
+    println("num_pairs: ", num_pair_groups, " num_valid_pairs: ", num_pairs, "\n")
+
+
+    @user_info "MBR Feature Computation: $n_unique_pairs unique pair_ids × $n_unique_isotopes isotope combinations = $n_pair_isotope_groups groups"
+    @user_info "Isotope combinations present: $unique_isotopes"
 
     Threads.@threads for idx in eachindex(pair_groups)
         _, sub_psms = pair_groups[idx]
@@ -921,17 +953,21 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
         best_p = fill(-Inf, range_len)
         for (i, run) in enumerate(sub_psms.ms_file_idx)
             idx = Int(run) - offset + 1
-            p = sub_psms.trace_prob[i]
-            if p > best_p[idx]
-                best_p[idx] = p
-                best_i[idx] = i
+            if sub_psms.q_value[i] <= q_cutoff
+                p = sub_psms.trace_prob[i]
+                if p > best_p[idx]
+                    best_p[idx] = p
+                    best_i[idx] = i
+                end
             end
         end
 
         # if more than one run, find the global top-2 runs by their best-PSM prob
         run_best_indices = zeros(Int, range_len)
         runs = findall(!=(0), best_i)
-        if length(runs) > 1
+        num_runs_passing = length(runs)
+
+        if num_runs_passing > 0
             # track top two runs (r1 > r2)
             r1 = 0; p1 = -Inf
             r2 = 0; p2 = -Inf
@@ -945,19 +981,31 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
                 end
             end
 
-            # assign, for each run, the best index in “any other” run
-            for r in runs
-                run_best_indices[r] = (r == r1 ? best_i[r2] : best_i[r1])
+            # assign, for each run, the best index in “any other” passing run
+            for r in 1:range_len
+                if num_runs_passing == 1
+                    run_best_indices[r] = r == r1 ? 0 : best_i[r1]
+                else
+                    if r == r1
+                        run_best_indices[r] = best_i[r2]
+                    elseif r == r2
+                        run_best_indices[r] = best_i[r1]
+                    else
+                        run_best_indices[r] = best_i[r1]
+                    end
+                end
             end
         end
 
-        # Compute MBR features
+        # Compute MBR features using only runs with passing q-values
         num_runs_passing = length(sub_psms.ms_file_idx[sub_psms.q_value .<= q_cutoff])
         for i in 1:nrow(sub_psms)
-            sub_psms.MBR_num_runs[i] = num_runs_passing - (sub_psms.q_value[i] .<= q_cutoff)
+            run_idx = Int(sub_psms.ms_file_idx[i]) - offset + 1
+            current_run_passing = run_idx in runs
+            sub_psms.MBR_num_runs[i] = num_runs_passing - (current_run_passing ? 1 : 0)
 
-            idx = Int(sub_psms.ms_file_idx[i]) - offset + 1
-            best_idx = run_best_indices[idx]
+
+            best_idx = run_best_indices[run_idx]
             if best_idx == 0 || sub_psms.MBR_num_runs[i] == 0
                 sub_psms.MBR_best_irt_diff[i]           = -1.0f0
                 sub_psms.MBR_rv_coefficient[i]          = -1.0f0
@@ -968,6 +1016,11 @@ function summarize_precursors!(psms::AbstractDataFrame; q_cutoff::Float32 = 0.01
                 sub_psms.MBR_is_missing[i]              = true
                 continue
             end
+
+            #if sub_psms.trace_prob[best_idx] < 0.1
+            #    println(sub_psms.trace_prob[best_idx], " ",  sub_psms.q_value[best_idx], " ", sub_psms.trace_prob[i], " ", sub_psms.q_value[i], " ", num_runs_passing, " ", sub_psms.MBR_num_runs[i])
+            #    println(sub_psms)
+            #end
 
             best_log2_weights = log2.(sub_psms.weights[best_idx])
             best_iRTs = sub_psms.irts[best_idx]

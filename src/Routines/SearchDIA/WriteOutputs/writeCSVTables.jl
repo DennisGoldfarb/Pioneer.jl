@@ -249,6 +249,8 @@ function writePrecursorCSV(
         :missed_cleavage,
         :global_score,
         :score,
+        :MBR_boosted_global_prob,
+        :MBR_boosted_prec_prob,
         global_qval_col,  # Conditional: MBR_boosted_global_qval or global_qval
         qval_col,         # Conditional: MBR_boosted_qval or qval
         :pep,

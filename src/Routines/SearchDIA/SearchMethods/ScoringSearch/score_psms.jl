@@ -129,6 +129,8 @@ function score_precursor_isotope_traces(
             match_between_runs, max_q_value_lightgbm_rescore,
             max_q_value_mbr_itr, min_PEP_neg_threshold_itr
         )
+
+        write_input_psms_tsv(joinpath(temp_folder, "percolator_output_psms.tsv"), best_psms)
         
         # Write scored PSMs to files
         write_scored_psms_to_files!(best_psms, file_paths)
