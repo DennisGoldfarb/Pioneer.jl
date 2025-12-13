@@ -62,6 +62,39 @@ Creates the following files in `spec_lib_path`:
 - detailed_fragments.jld2: Detailed fragment information
 - precursor_to_fragment_indices.jld2: Mapping of precursors to fragment indices
 """
+
+const TARGET_FRAGMENT_PRECURSOR_ID = UInt32(348795)
+const TARGET_FRAGMENT_MZ = 231.06f0
+const TARGET_FRAGMENT_MZ_TOL = 0.01f0
+const TARGET_FRAGMENT_CHARGE = UInt8(1)
+const TARGET_FRAGMENT_INDEX = UInt8(2)
+
+is_target_fragment(
+    frag_mz::AbstractFloat,
+    frag_charge::UInt8,
+    frag_index::UInt8,
+    is_b::Bool,
+    precursor_id::UInt32,
+) =
+    precursor_id == TARGET_FRAGMENT_PRECURSOR_ID &&
+    is_b &&
+    frag_charge == TARGET_FRAGMENT_CHARGE &&
+    frag_index == TARGET_FRAGMENT_INDEX &&
+    abs(frag_mz - TARGET_FRAGMENT_MZ) <= TARGET_FRAGMENT_MZ_TOL
+
+is_target_fragment(frag::SimpleFrag{T}) where {T<:AbstractFloat} =
+    getPrecID(frag) == TARGET_FRAGMENT_PRECURSOR_ID &&
+    abs(getMZ(frag) - TARGET_FRAGMENT_MZ) <= TARGET_FRAGMENT_MZ_TOL
+
+function contains_target_fragment(frag_ions::AbstractVector{<:SimpleFrag}, start_idx::Int, stop_idx::Int)
+    for idx in start_idx:stop_idx
+        if is_target_fragment(frag_ions[idx])
+            return true
+        end
+    end
+    return false
+end
+
 function buildPionLib(spec_lib_path::String,
                       y_start_index::UInt8,
                       y_start::UInt8,
@@ -656,6 +689,27 @@ function getSimpleFrags(
                     max_frag_charge)==false
                 continue
             end
+            if is_target_fragment(
+                frag_mz[frag_idx],
+                frag_charge[frag_idx],
+                frag_index[frag_idx],
+                frag_is_b[frag_idx],
+                pid,
+            )
+                @info "Matched target fragment during simple fragment extraction" (
+                    precursor_idx = pid,
+                    frag_idx = frag_idx,
+                    frag_mz = frag_mz[frag_idx],
+                    frag_charge = frag_charge[frag_idx],
+                    frag_index = frag_index[frag_idx],
+                    is_b = frag_is_b[frag_idx],
+                    is_y = frag_is_y[frag_idx],
+                    is_p = frag_is_p[frag_idx],
+                    precursor_mz = precursor_mz[pid],
+                    precursor_irt = precursor_irt[pid],
+                    precursor_charge = precursor_charge[pid],
+                )
+            end
             simple_frag_idx += 1
             simple_frags[simple_frag_idx] = SimpleFrag(
                 frag_mz[frag_idx],
@@ -750,8 +804,20 @@ function buildFragmentIndex!(
                             frag_bin_idx,
                             frag_ions,
                             start_idx,stop_idx,
-                            frag_bin_tol_ppm)
-                rt_bins[rt_bin_idx] = FragIndexBin(start_irt, 
+                            frag_bin_tol_ppm,
+                            rt_bin_idx)
+                if contains_target_fragment(frag_ions, start_idx, stop_idx)
+                    @info "Target fragment placed into RT bin" (
+                        rt_bin_idx = rt_bin_idx,
+                        start_irt = start_irt,
+                        stop_irt = stop_irt,
+                        first_frag_bin_idx = first_frag_bin_idx,
+                        last_frag_bin_idx = frag_bin_idx - 1,
+                        start_idx = start_idx,
+                        stop_idx = stop_idx,
+                    )
+                end
+                rt_bins[rt_bin_idx] = FragIndexBin(start_irt,
                                                     stop_irt, #important that stop_idx is i - 1 and not i
                                                         UInt32(first_frag_bin_idx),
                                                         UInt32(frag_bin_idx-1)
@@ -775,9 +841,21 @@ function buildFragmentIndex!(
                         frag_bins,
                         frag_bin_idx,
                         frag_ions,
-                        start_idx,stop_idx,frag_bin_tol_ppm)
+                        start_idx,stop_idx,frag_bin_tol_ppm, rt_bin_idx)
 
-            rt_bins[rt_bin_idx] = FragIndexBin(start_irt, 
+            if contains_target_fragment(frag_ions, start_idx, stop_idx)
+                @info "Target fragment placed into RT bin" (
+                    rt_bin_idx = rt_bin_idx,
+                    start_irt = start_irt,
+                    stop_irt = stop_irt,
+                    first_frag_bin_idx = first_frag_bin_idx,
+                    last_frag_bin_idx = frag_bin_idx - 1,
+                    start_idx = start_idx,
+                    stop_idx = stop_idx,
+                )
+            end
+
+            rt_bins[rt_bin_idx] = FragIndexBin(start_irt,
                                                     stop_irt, #important that stop_idx is i - 1 and not i
                                                     UInt32(first_frag_bin_idx),
                                                     UInt32(frag_bin_idx-1)) #-1 is critical
@@ -789,10 +867,21 @@ function buildFragmentIndex!(
                         frag_bins,
                         frag_bin_idx,
                         frag_ions,
-                        start_idx,stop_idx,frag_bin_tol_ppm)
+                        start_idx,stop_idx,frag_bin_tol_ppm, rt_bin_idx)
 
             #Add new fragbin
-            rt_bins[rt_bin_idx] = FragIndexBin(start_irt, 
+            if contains_target_fragment(frag_ions, start_idx, stop_idx)
+                @info "Target fragment placed into RT bin" (
+                    rt_bin_idx = rt_bin_idx,
+                    start_irt = start_irt,
+                    stop_irt = getIRT(frag_ions[stop_idx]),
+                    first_frag_bin_idx = first_frag_bin_idx,
+                    last_frag_bin_idx = frag_bin_idx - 1,
+                    start_idx = start_idx,
+                    stop_idx = stop_idx,
+                )
+            end
+            rt_bins[rt_bin_idx] = FragIndexBin(start_irt,
                                                     getIRT(frag_ions[stop_idx]), #important that stop_idx is i - 1 and not i
                                                     UInt32(first_frag_bin_idx),
                                                     UInt32(frag_bin_idx-1)) #-1 is critical
@@ -802,13 +891,14 @@ function buildFragmentIndex!(
         return frag_bin_idx, rt_bin_idx
     end
 
-    function buildFragBins!(index_fragments::Vector{IndexFragment{T}}, 
+    function buildFragBins!(index_fragments::Vector{IndexFragment{T}},
                             frag_bins::Vector{FragIndexBin{T}},
                             frag_bin_idx::Int64,
-                            frag_ions::Vector{SimpleFrag{T}}, 
-                            start::Int64, 
-                            stop::Int64, 
-                            frag_bin_tol_ppm::AbstractFloat) where {T<:AbstractFloat}
+                            frag_ions::Vector{SimpleFrag{T}},
+                            start::Int64,
+                            stop::Int64,
+                            frag_bin_tol_ppm::AbstractFloat,
+                            rt_bin_idx::Int64) where {T<:AbstractFloat}
         start_idx, stop_idx = start, start
         start_fragmz, stop_fragmz = getMZ(frag_ions[start]), getMZ(frag_ions[start])
         for i in range(start, stop)
@@ -823,11 +913,22 @@ function buildFragmentIndex!(
                 stop_fragmz =  getMZ(frag_ions[stop_idx]) #Need to set before sorting 
                 sort!(@view(frag_ions[start_idx:stop_idx]), by = x->getPrecMZ(x))# Try stable sorting for now, alg=QuickSort)
                 #Add new rt bin
-                frag_bins[frag_bin_idx] = FragIndexBin(start_fragmz, 
+                frag_bins[frag_bin_idx] = FragIndexBin(start_fragmz,
                                                         stop_fragmz, #important that stop_idx is i - 1 and not i
                                                     UInt32(start_idx),
                                                     UInt32(stop_idx)
                                                 )
+                if contains_target_fragment(frag_ions, start_idx, stop_idx)
+                    @info "Target fragment placed into fragment bin" (
+                        rt_bin_idx = rt_bin_idx,
+                        frag_bin_idx = frag_bin_idx,
+                        start_fragmz = start_fragmz,
+                        stop_fragmz = stop_fragmz,
+                        start_idx = start_idx,
+                        stop_idx = stop_idx,
+                        precursor_id = getPrecID(frag_ions[start_idx]),
+                    )
+                end
                 frag_bin_idx += 1
                 for idx in range(start_idx, stop_idx)
                     index_fragments[idx] = IndexFragment(
@@ -847,11 +948,22 @@ function buildFragmentIndex!(
             stop_fragmz = getMZ(frag_ions[stop_idx])
             sort!(@view(frag_ions[start_idx:stop_idx]), by = x->getPrecMZ(x))# Try stable sorting for now, alg=QuickSort), alg=QuickSort)
             #Add new fragbin
-            frag_bins[frag_bin_idx] = FragIndexBin(start_fragmz, 
+            frag_bins[frag_bin_idx] = FragIndexBin(start_fragmz,
                         stop_fragmz, #important that stop_idx is i - 1 and not i
                         UInt32(start_idx),
                         UInt32(stop_idx)
                     )
+            if contains_target_fragment(frag_ions, start_idx, stop_idx)
+                @info "Target fragment placed into fragment bin" (
+                    rt_bin_idx = rt_bin_idx,
+                    frag_bin_idx = frag_bin_idx,
+                    start_fragmz = start_fragmz,
+                    stop_fragmz = stop_fragmz,
+                    start_idx = start_idx,
+                    stop_idx = stop_idx,
+                    precursor_id = getPrecID(frag_ions[start_idx]),
+                )
+            end
             frag_bin_idx += 1
             for idx in range(start_idx, stop_idx)
                 index_fragments[idx] = IndexFragment(
@@ -862,11 +974,22 @@ function buildFragmentIndex!(
                                                 )
             end
         else
-            frag_bins[frag_bin_idx] = FragIndexBin(start_fragmz, 
+            frag_bins[frag_bin_idx] = FragIndexBin(start_fragmz,
                         getMZ(frag_ions[stop]), #important that stop_idx is i - 1 and not i
                         UInt32(start_idx),
                         UInt32(stop_idx)
                     )
+            if contains_target_fragment(frag_ions, start_idx, stop_idx)
+                @info "Target fragment placed into fragment bin" (
+                    rt_bin_idx = rt_bin_idx,
+                    frag_bin_idx = frag_bin_idx,
+                    start_fragmz = start_fragmz,
+                    stop_fragmz = getMZ(frag_ions[stop]),
+                    start_idx = start_idx,
+                    stop_idx = stop_idx,
+                    precursor_id = getPrecID(frag_ions[start_idx]),
+                )
+            end
             frag_bin_idx += 1
             index_fragments[stop_idx] = IndexFragment(
                 getPrecID(frag_ions[stop_idx]),
