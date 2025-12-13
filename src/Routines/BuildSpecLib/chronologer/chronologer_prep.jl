@@ -318,10 +318,30 @@ multiple modification variants.
 """
 function add_mods(
     fasta_peptides::Vector{FastaEntry},
-    fixed_mod_names::Vector{NamedTuple{(:p, :r), Tuple{Regex, String}}}, 
+    fixed_mod_names::Vector{NamedTuple{(:p, :r), Tuple{Regex, String}}},
     var_mod_names::Vector{NamedTuple{(:p, :r), Tuple{Regex, String}}},
     max_var_mods::Int)
 
+
+    target_peptide = "ENALDRAEQAEADK"
+
+    format_mods(mods::Vector{PeptideMod}) = isempty(mods) ? "<none>" :
+        join("$(getModName(m))@$(getPosition(m))$(getAA(m))" for m in mods, ", ")
+
+    function log_target_mods(stage::String; fixed_mods::Vector{PeptideMod}, var_sites::Vector{NamedTuple{(:regex_match, :name), Tuple{RegexMatch, String}}}, combination_idx::Union{Nothing, Int}=nothing, combination_total::Union{Nothing, Int}=nothing, applied_mods::Union{Nothing, Vector{PeptideMod}}=nothing)
+        println("[PeptideTracker] add_mods: $stage")
+        println("    Fixed mods: $(format_mods(fixed_mods))")
+        if !isnothing(combination_total)
+            println("    Variable mod combinations: $(combination_total)")
+        end
+        if !isempty(var_sites)
+            site_strings = join("$(match.regex_match.offset)$(match.regex_match.match)=>$(match.name)" for match in var_sites, "; ")
+            println("    Variable mod sites: $(site_strings)")
+        end
+        if !isnothing(combination_idx) && !isnothing(applied_mods)
+            println("    Emitting combination $(combination_idx)/$(combination_total): $(format_mods(applied_mods))")
+        end
+    end
 
     fasta_mods = Vector{FastaEntry}()
     # NOTE: base_pep_id will be preserved from original peptides (not made unique per modification)
@@ -340,18 +360,37 @@ function add_mods(
 
         #Get each instance of a variable mod
         var_mod_matches = matchVarMods(sequence, var_mod_names)
-        #Count number of unique variable mod combinations 
+        #Count number of unique variable mod combinations
         n_var_mod_combinations = countVarModCombinations(var_mod_matches, max_var_mods)
-        
+
+        if sequence == target_peptide
+            log_target_mods(
+                "target sequence identified",
+                fixed_mods = fixed_mods_vector,
+                var_sites = var_mod_matches,
+                combination_total = n_var_mod_combinations,
+            )
+        end
+
         var_mods = Vector{Vector{PeptideMod}}(undef, n_var_mod_combinations)
-        #Build modification strings for all combinations of variable mods 
+        #Build modification strings for all combinations of variable mods
         fillVarModStrings!(var_mods,
                             var_mod_matches,
                             fixed_mods_vector,
                             max_var_mods
                             )
 
-        for var_mod in var_mods
+        for (i, var_mod) in enumerate(var_mods)
+            if sequence == target_peptide
+                log_target_mods(
+                    "target variant generated",
+                    fixed_mods = fixed_mods_vector,
+                    var_sites = var_mod_matches,
+                    combination_idx = i,
+                    combination_total = n_var_mod_combinations,
+                    applied_mods = var_mod,
+                )
+            end
             # NOTE: Preserve original base_pep_id to maintain link with entrapment sequences
             push!(fasta_mods,
                 FastaEntry(
