@@ -86,6 +86,16 @@ function prepare_chronologer_input(
     chronologer_out_path::String,
     proteins_out_path::String)
 
+    target_peptide = "ENALDRAEQAEADK"
+
+    log_peptide_presence(stage::String, sequences::AbstractVector{<:AbstractString}) = begin
+        count_hits = count(==(target_peptide), sequences)
+        println("[PeptideTracker] $stage: $target_peptide occurrences = $count_hits")
+    end
+
+    log_peptide_presence(stage::String, entries::Vector{FastaEntry}) =
+        log_peptide_presence(stage, get_sequence.(entries))
+
     # Parse parameters into structured format
     _params = (
         fasta_digest_params = Dict{String, Any}(k => v for (k, v) in params["fasta_digest_params"]),
@@ -167,6 +177,8 @@ function prepare_chronologer_input(
         )
     end
 
+    log_peptide_presence("After digestion", fasta_entries)
+
     protein_df = build_protein_df(protein_entries)
     Arrow.write(proteins_out_path, protein_df)
 
@@ -176,13 +188,15 @@ function prepare_chronologer_input(
 
     # Step 1: Combine shared peptides (I/L equivalence)
     fasta_entries = combine_shared_peptides(fasta_entries)
-    
+
     # Step 2: Add modifications (creates peptide variants before entrapment)
     fasta_entries = add_mods(
-        fasta_entries, 
-        fixed_mods, 
+        fasta_entries,
+        fixed_mods,
         var_mods,
         _params.fasta_digest_params["max_var_mods"])
+
+    log_peptide_presence("After adding modifications", fasta_entries)
 
     # Step 3: Assign base_pep_id for peptide tracking (after modifications)
     pep_entries_processed = assign_base_pep_ids!(fasta_entries)
@@ -195,6 +209,8 @@ function prepare_chronologer_input(
         entrapment_method = entrapment_method
     )
 
+    log_peptide_presence("After entrapment sequence generation", fasta_entries)
+
     # Step 5: Assign base_target_id values for entrapment grouping
     assign_base_target_ids!(fasta_entries)
 
@@ -202,14 +218,17 @@ function prepare_chronologer_input(
     if _params.fasta_digest_params["add_decoys"]
         decoy_method = get(_params.fasta_digest_params, "decoy_method", "shuffle")
         fasta_entries = add_decoy_sequences_grouped(fasta_entries; decoy_method=decoy_method)
+        log_peptide_presence("After decoy generation", fasta_entries)
     end
-        
+
     # Step 7: Add charges (creates precursor variants)
     fasta_entries = add_charge(
         fasta_entries,
         _params.fasta_digest_params["min_charge"],
         _params.fasta_digest_params["max_charge"]
     )
+
+    log_peptide_presence("After charge state expansion", fasta_entries)
 
     # Build UniSpec input dataframe
     fasta_df = build_fasta_df(
@@ -238,6 +257,8 @@ function prepare_chronologer_input(
 
     # Filter by mass rang
     filter!(x -> (x.mz >= prec_mz_min) & (x.mz <= prec_mz_max), fasta_df)
+
+    log_peptide_presence("After m/z filtering", fasta_df[!, :sequence])
 
     # Apply charge-specific target-decoy pairing AFTER all filtering is complete
     # This ensures partner_precursor_idx values are valid row indices
