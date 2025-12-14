@@ -69,6 +69,29 @@ const TARGET_FRAGMENT_MZ_TOL = 0.01f0
 const TARGET_FRAGMENT_CHARGE = UInt8(1)
 const TARGET_FRAGMENT_INDEX = UInt8(2)
 
+function log_target_precursor_fragment_index_entry(
+    frag_ion::SimpleFrag,
+    idx::Integer,
+    rt_bin_idx::Integer,
+    frag_bin_idx::Integer,
+)
+    if getPrecID(frag_ion) != TARGET_FRAGMENT_PRECURSOR_ID
+        return
+    end
+
+    @info "Added fragment from target precursor to fragment index" (
+        rt_bin_idx = rt_bin_idx,
+        frag_bin_idx = frag_bin_idx,
+        index_position = idx,
+        precursor_id = getPrecID(frag_ion),
+        precursor_mz = getPrecMZ(frag_ion),
+        precursor_irt = getIRT(frag_ion),
+        precursor_charge = getPrecCharge(frag_ion),
+        frag_mz = getMZ(frag_ion),
+        frag_score = getScore(frag_ion),
+    )
+end
+
 function log_target_precursor_fragments(
     pid::UInt32,
     frag_start_idx::UInt64,
@@ -1045,6 +1068,12 @@ function buildFragmentIndex!(
                                                     getScore(frag_ions[idx]),
                                                     getPrecCharge(frag_ions[idx])
                                                     )
+                    log_target_precursor_fragment_index_entry(
+                        frag_ions[idx],
+                        idx,
+                        rt_bin_idx,
+                        frag_bin_idx - 1,
+                    )
                 end
                 start_idx, stop_idx = i, i
                 start_fragmz = getMZ(frag_ions[stop_idx])
@@ -1080,6 +1109,12 @@ function buildFragmentIndex!(
                                                 getScore(frag_ions[idx]),
                                                 getPrecCharge(frag_ions[idx])
                                                 )
+                log_target_precursor_fragment_index_entry(
+                    frag_ions[idx],
+                    idx,
+                    rt_bin_idx,
+                    frag_bin_idx - 1,
+                )
             end
         else
             frag_bins[frag_bin_idx] = FragIndexBin(start_fragmz,
@@ -1105,6 +1140,12 @@ function buildFragmentIndex!(
                 getScore(frag_ions[stop_idx]),
                 getPrecCharge(frag_ions[stop_idx])
                 )
+            log_target_precursor_fragment_index_entry(
+                frag_ions[stop_idx],
+                stop_idx,
+                rt_bin_idx,
+                frag_bin_idx - 1,
+            )
         end
         return frag_bin_idx
     end
