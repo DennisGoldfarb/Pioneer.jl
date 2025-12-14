@@ -65,6 +65,74 @@ Creates the following files in `spec_lib_path`:
 
 const TARGET_FRAGMENT_PRECURSOR_ID = UInt32(348795)
 
+function frag_filter_outcome(
+    frag_is_y::Bool,
+    frag_is_b::Bool,
+    frag_is_p::Bool,
+    frag_index::UInt8,
+    frag_charge::UInt8,
+    frag_isotope::UInt8,
+    frag_internal::Bool,
+    frag_immonium::Bool,
+    frag_neutral_diff::Bool,
+    frag_mz::Float32,
+    frag_bounds::FragBoundModel,
+    prec_mz::Float32,
+    y_start::UInt8,
+    b_start::UInt8,
+    include_p::Bool,
+    include_isotope::Bool,
+    include_immonium::Bool,
+    include_internal::Bool,
+    include_neutral_diff::Bool,
+    max_frag_charge::UInt8,
+)
+    min_frag_mz, max_frag_mz = frag_bounds(prec_mz)
+    if (frag_mz < min_frag_mz) | (frag_mz > max_frag_mz)
+        return false, :frag_mz_out_of_bounds, min_frag_mz, max_frag_mz
+    end
+    if frag_is_y
+        if frag_index < y_start
+            return false, :y_index_below_threshold, min_frag_mz, max_frag_mz
+        end
+    end
+    if frag_is_b
+        if frag_index < b_start
+            return false, :b_index_below_threshold, min_frag_mz, max_frag_mz
+        end
+    end
+    if frag_is_p
+        if !include_p
+            return false, :exclude_precursor_fragment, min_frag_mz, max_frag_mz
+        end
+    end
+    if frag_immonium
+        if !include_immonium
+            return false, :exclude_immonium_fragment, min_frag_mz, max_frag_mz
+        end
+    end
+    if frag_internal
+        if !include_internal
+            return false, :exclude_internal_fragment, min_frag_mz, max_frag_mz
+        end
+    end
+    if frag_neutral_diff
+        if !include_neutral_diff
+            return false, :exclude_neutral_diff_fragment, min_frag_mz, max_frag_mz
+        end
+    end
+    if !include_isotope
+        if !iszero(frag_isotope)
+            return false, :exclude_isotope_fragment, min_frag_mz, max_frag_mz
+        end
+    end
+    if frag_charge > max_frag_charge
+        return false, :frag_charge_above_max, min_frag_mz, max_frag_mz
+    end
+
+    return true, nothing, min_frag_mz, max_frag_mz
+end
+
 function log_target_precursor_fragment_index_entry(
     frag_ion::SimpleFrag,
     idx::Integer,
@@ -129,7 +197,7 @@ function log_target_precursor_fragments(
     )
 
     for frag_idx in range(frag_start_idx, frag_stop_idx)
-        passes_filter = fragFilter(
+        passes_filter, failed_condition, min_frag_mz, max_frag_mz = frag_filter_outcome(
             frag_is_y[frag_idx],
             frag_is_b[frag_idx],
             frag_is_p[frag_idx],
@@ -164,6 +232,9 @@ function log_target_precursor_fragments(
             is_internal = frag_internal[frag_idx],
             is_immonium = frag_immonium[frag_idx],
             has_neutral_diff = frag_neutral_diff[frag_idx],
+            frag_bounds_min = min_frag_mz,
+            frag_bounds_max = max_frag_mz,
+            failed_condition = failed_condition,
             passes_filter = passes_filter,
         )
     end
@@ -603,51 +674,31 @@ function fragFilter(
     include_internal::Bool,
     include_neutral_diff::Bool,
     max_frag_charge::UInt8)
-    
-    #println("frag_neutral_diff $frag_neutral_diff")
-    min_frag_mz, max_frag_mz = frag_bounds(prec_mz)
-    if (frag_mz < min_frag_mz) | (frag_mz > max_frag_mz)
-        return false
-    end
-    if frag_is_y
-        if frag_index < y_start
-            return false
-        end
-    end
-    if frag_is_b
-        if frag_index < b_start
-            return false
-        end
-    end
-    if frag_is_p
-        if !include_p
-            return false
-        end
-    end
-    if frag_immonium
-        if !include_immonium
-            return false
-        end
-    end
-    if frag_internal
-        if !include_internal
-            return false
-        end
-    end
-    if frag_neutral_diff
-        if !include_neutral_diff
-            return false
-        end
-    end
-    if !include_isotope
-        if !iszero(frag_isotope)
-            return false
-        end
-    end
-    if frag_charge > max_frag_charge
-        return false
-    end
-    return true
+
+    passes_filter, _, _, _ = frag_filter_outcome(
+        frag_is_y,
+        frag_is_b,
+        frag_is_p,
+        frag_index,
+        frag_charge,
+        frag_isotope,
+        frag_internal,
+        frag_immonium,
+        frag_neutral_diff,
+        frag_mz,
+        frag_bounds,
+        prec_mz,
+        y_start,
+        b_start,
+        include_p,
+        include_isotope,
+        include_immonium,
+        include_internal,
+        include_neutral_diff,
+        max_frag_charge,
+    )
+
+    return passes_filter
 end
 
 """
