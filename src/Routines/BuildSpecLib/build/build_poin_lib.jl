@@ -69,6 +69,92 @@ const TARGET_FRAGMENT_MZ_TOL = 0.01f0
 const TARGET_FRAGMENT_CHARGE = UInt8(1)
 const TARGET_FRAGMENT_INDEX = UInt8(2)
 
+function log_target_precursor_fragments(
+    pid::UInt32,
+    frag_start_idx::UInt64,
+    frag_stop_idx::UInt64,
+    frag_mz::AbstractVector{Float32},
+    frag_charge::AbstractVector{UInt8},
+    frag_index::AbstractVector{UInt8},
+    frag_is_y::AbstractVector{Bool},
+    frag_is_b::AbstractVector{Bool},
+    frag_is_p::AbstractVector{Bool},
+    frag_isotope::AbstractVector{UInt8},
+    frag_internal::AbstractVector{Bool},
+    frag_immonium::AbstractVector{Bool},
+    frag_neutral_diff::AbstractVector{Bool},
+    frag_bounds::FragBoundModel,
+    prec_mz::Float32,
+    y_start::UInt8,
+    b_start::UInt8,
+    include_p::Bool,
+    include_isotope::Bool,
+    include_immonium::Bool,
+    include_internal::Bool,
+    include_neutral_diff::Bool,
+    max_frag_charge::UInt8,
+    precursor_irt::Float32,
+    precursor_charge::UInt8,
+)
+    if pid != TARGET_FRAGMENT_PRECURSOR_ID
+        return
+    end
+
+    fragments = NamedTuple[]
+    for frag_idx in range(frag_start_idx, frag_stop_idx)
+        passes_filter = fragFilter(
+            frag_is_y[frag_idx],
+            frag_is_b[frag_idx],
+            frag_is_p[frag_idx],
+            frag_index[frag_idx],
+            frag_charge[frag_idx],
+            frag_isotope[frag_idx],
+            frag_internal[frag_idx],
+            frag_immonium[frag_idx],
+            frag_neutral_diff[frag_idx],
+            frag_mz[frag_idx],
+            frag_bounds,
+            prec_mz,
+            y_start,
+            b_start,
+            include_p,
+            include_isotope,
+            include_immonium,
+            include_internal,
+            include_neutral_diff,
+            max_frag_charge,
+        )
+
+        push!(
+            fragments,
+            (
+                frag_idx = frag_idx,
+                frag_mz = frag_mz[frag_idx],
+                frag_charge = frag_charge[frag_idx],
+                frag_index = frag_index[frag_idx],
+                is_y = frag_is_y[frag_idx],
+                is_b = frag_is_b[frag_idx],
+                is_p = frag_is_p[frag_idx],
+                isotope = frag_isotope[frag_idx],
+                is_internal = frag_internal[frag_idx],
+                is_immonium = frag_immonium[frag_idx],
+                has_neutral_diff = frag_neutral_diff[frag_idx],
+                passes_filter = passes_filter,
+            ),
+        )
+    end
+
+    @info "Fragments observed for target precursor" (
+        precursor_idx = pid,
+        precursor_mz = prec_mz,
+        precursor_irt = precursor_irt,
+        precursor_charge = precursor_charge,
+        frag_start_idx = frag_start_idx,
+        frag_stop_idx = frag_stop_idx,
+        fragments = fragments,
+    )
+end
+
 is_target_fragment(
     frag_mz::AbstractFloat,
     frag_charge::UInt8,
@@ -657,13 +743,40 @@ function getSimpleFrags(
     end
     #Maximum ranked fragment that can be included in the fragment index
     max_rank_index = length(rank_to_score)
-    #Number of precursors 
+    #Number of precursors
     n_precursors = UInt32(length(precursor_mz))
     simple_frags = Vector{SimpleFrag{Float32}}(undef, n_precursors*max_rank_index)
     simple_frag_idx = 0
     for pid in range(one(UInt32), n_precursors)
         prec_mz = precursor_mz[pid]
         frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
+        log_target_precursor_fragments(
+            pid,
+            frag_start_idx,
+            frag_stop_idx,
+            frag_mz,
+            frag_charge,
+            frag_index,
+            frag_is_y,
+            frag_is_b,
+            frag_is_p,
+            frag_isotope,
+            frag_internal,
+            frag_immonium,
+            frag_neutral_diff,
+            frag_bounds,
+            prec_mz,
+            y_start,
+            b_start,
+            include_p,
+            include_isotope,
+            include_immonium,
+            include_internal,
+            include_neutral_diff,
+            max_frag_charge,
+            precursor_irt[pid],
+            precursor_charge[pid],
+        )
         rank = 1
         for frag_idx in range(frag_start_idx, frag_stop_idx)
             if fragFilter(
