@@ -51,14 +51,35 @@ function inc!(c::Counter{I,C}, id::I, pred_intensity::C) where {I,C<:Unsigned}
     return nothing
 end
 =#
-function inc!(c::Counter{I,C}, id::I, pred_intensity::C) where {I,C<:Unsigned} 
-    @inbounds @fastmath begin 
+function inc!(c::Counter{I,C}, id::I, pred_intensity::C) where {I,C<:Unsigned}
+    @inbounds @fastmath begin
         no_previous_encounter = c.counts[id]===zero(C)
         c.ids[c.size] = id
         c.size += no_previous_encounter
         c.counts[id] += pred_intensity;
     end
     return nothing
+end
+
+function or_inc!(c::Counter{I,C}, id::I, frag_score::C) where {I,C<:Unsigned}
+    @inbounds @fastmath begin
+        prev_score = c.counts[id]
+        no_previous_encounter = prev_score === zero(C)
+        c.ids[c.size] = id
+        c.size += no_previous_encounter
+        c.counts[id] = prev_score | frag_score
+    end
+    return nothing
+end
+
+const FRAG_SCORE_WEIGHTS = UInt8[1, 1, 2, 2, 4, 4, 8]
+
+@inline function convert_frag_score(score::C) where {C<:Unsigned}
+    weighted_score = zero(C)
+    @inbounds @fastmath for (idx, weight) in pairs(FRAG_SCORE_WEIGHTS)
+        weighted_score += ((score >> (idx - 1)) & one(C)) * weight
+    end
+    return weighted_score
 end
 
 import Base.sort!
@@ -85,11 +106,12 @@ end
 function countFragMatches(c::Counter{I,C}, min_count::C) where {I,C<:Unsigned}
     @inbounds for i in 1:(getSize(c) - 1)
         id = c.ids[i]
-        if getCount(c, id)>=min_count
+        weighted_score = convert_frag_score(getCount(c, id))
+        if weighted_score >= min_count
                 c.ids[c.matches + 1] = c.ids[i]
                 c.matches += 1
         end
-        c.counts[id] = zero(Float32);
+        c.counts[id] = zero(C);
     end
     return 0#c.matches
 end
