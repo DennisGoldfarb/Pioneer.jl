@@ -100,7 +100,15 @@ function log_target_precursor_fragments(
         return
     end
 
-    fragments = NamedTuple[]
+    @info "Fragments observed for target precursor" (
+        precursor_idx = pid,
+        precursor_mz = prec_mz,
+        precursor_irt = precursor_irt,
+        precursor_charge = precursor_charge,
+        frag_start_idx = frag_start_idx,
+        frag_stop_idx = frag_stop_idx,
+    )
+
     for frag_idx in range(frag_start_idx, frag_stop_idx)
         passes_filter = fragFilter(
             frag_is_y[frag_idx],
@@ -125,34 +133,21 @@ function log_target_precursor_fragments(
             max_frag_charge,
         )
 
-        push!(
-            fragments,
-            (
-                frag_idx = frag_idx,
-                frag_mz = frag_mz[frag_idx],
-                frag_charge = frag_charge[frag_idx],
-                frag_index = frag_index[frag_idx],
-                is_y = frag_is_y[frag_idx],
-                is_b = frag_is_b[frag_idx],
-                is_p = frag_is_p[frag_idx],
-                isotope = frag_isotope[frag_idx],
-                is_internal = frag_internal[frag_idx],
-                is_immonium = frag_immonium[frag_idx],
-                has_neutral_diff = frag_neutral_diff[frag_idx],
-                passes_filter = passes_filter,
-            ),
+        @info "Fragment entry for target precursor" (
+            frag_idx = frag_idx,
+            frag_mz = frag_mz[frag_idx],
+            frag_charge = frag_charge[frag_idx],
+            frag_index = frag_index[frag_idx],
+            is_y = frag_is_y[frag_idx],
+            is_b = frag_is_b[frag_idx],
+            is_p = frag_is_p[frag_idx],
+            isotope = frag_isotope[frag_idx],
+            is_internal = frag_internal[frag_idx],
+            is_immonium = frag_immonium[frag_idx],
+            has_neutral_diff = frag_neutral_diff[frag_idx],
+            passes_filter = passes_filter,
         )
     end
-
-    @info "Fragments observed for target precursor" (
-        precursor_idx = pid,
-        precursor_mz = prec_mz,
-        precursor_irt = precursor_irt,
-        precursor_charge = precursor_charge,
-        frag_start_idx = frag_start_idx,
-        frag_stop_idx = frag_stop_idx,
-        fragments = fragments,
-    )
 end
 
 is_target_fragment(
