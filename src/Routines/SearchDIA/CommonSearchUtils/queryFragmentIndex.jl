@@ -215,10 +215,10 @@ function searchFragmentBin!(prec_id_to_score::Counter{UInt32, UInt8},
         #range that matches the precursor tolerance. 
         if window_start === window_stop
             if (getPrecMZ(fragments[window_start])>window_max)
-                return nothing
+                return 0, 0
             end
             if getPrecMZ(fragments[window_stop])<window_min
-                return nothing
+                return 0, 0
             end
         end
     end
@@ -262,8 +262,6 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
         frag_mz_max,
         UInt32(2048) #step size
     )
-    single_increment = 0
-    double_increment = 0
     #First frag_bin matching fragment tolerance
     frag_bin_idx = findFirstFragmentBin(
                                     frag_bins,
@@ -271,10 +269,12 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
                                     upper_bound_guess,
                                     frag_mz_min
                                     )
-    @inbounds @fastmath begin 
+    single_increment = 0
+    double_increment = 0
+    @inbounds @fastmath begin
         #No fragment bins contain the fragment m/z
         if iszero(frag_bin_idx)
-            return lower_bound_guess, upper_bound_guess
+            return lower_bound_guess, upper_bound_guess, single_increment, double_increment
         end
 
         #Search subsequent frag bins until no more bins or untill a bin is outside the fragment tolerance
