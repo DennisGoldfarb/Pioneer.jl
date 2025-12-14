@@ -64,10 +64,6 @@ Creates the following files in `spec_lib_path`:
 """
 
 const TARGET_FRAGMENT_PRECURSOR_ID = UInt32(348795)
-const TARGET_FRAGMENT_MZ = 231.06f0
-const TARGET_FRAGMENT_MZ_TOL = 0.01f0
-const TARGET_FRAGMENT_CHARGE = UInt8(1)
-const TARGET_FRAGMENT_INDEX = UInt8(2)
 
 function log_target_precursor_fragment_index_entry(
     frag_ion::SimpleFrag,
@@ -173,26 +169,9 @@ function log_target_precursor_fragments(
     end
 end
 
-is_target_fragment(
-    frag_mz::AbstractFloat,
-    frag_charge::UInt8,
-    frag_index::UInt8,
-    is_b::Bool,
-    precursor_id::UInt32,
-) =
-    precursor_id == TARGET_FRAGMENT_PRECURSOR_ID &&
-    is_b &&
-    frag_charge == TARGET_FRAGMENT_CHARGE &&
-    frag_index == TARGET_FRAGMENT_INDEX &&
-    abs(frag_mz - TARGET_FRAGMENT_MZ) <= TARGET_FRAGMENT_MZ_TOL
-
-is_target_fragment(frag::SimpleFrag{T}) where {T<:AbstractFloat} =
-    getPrecID(frag) == TARGET_FRAGMENT_PRECURSOR_ID &&
-    abs(getMZ(frag) - TARGET_FRAGMENT_MZ) <= TARGET_FRAGMENT_MZ_TOL
-
-function contains_target_fragment(frag_ions::AbstractVector{<:SimpleFrag}, start_idx::Int, stop_idx::Int)
+function contains_target_precursor_fragment(frag_ions::AbstractVector{<:SimpleFrag}, start_idx::Int, stop_idx::Int)
     for idx in start_idx:stop_idx
-        if is_target_fragment(frag_ions[idx])
+        if getPrecID(frag_ions[idx]) == TARGET_FRAGMENT_PRECURSOR_ID
             return true
         end
     end
@@ -820,27 +799,6 @@ function getSimpleFrags(
                     max_frag_charge)==false
                 continue
             end
-            if is_target_fragment(
-                frag_mz[frag_idx],
-                frag_charge[frag_idx],
-                frag_index[frag_idx],
-                frag_is_b[frag_idx],
-                pid,
-            )
-                @info "Matched target fragment during simple fragment extraction" (
-                    precursor_idx = pid,
-                    frag_idx = frag_idx,
-                    frag_mz = frag_mz[frag_idx],
-                    frag_charge = frag_charge[frag_idx],
-                    frag_index = frag_index[frag_idx],
-                    is_b = frag_is_b[frag_idx],
-                    is_y = frag_is_y[frag_idx],
-                    is_p = frag_is_p[frag_idx],
-                    precursor_mz = precursor_mz[pid],
-                    precursor_irt = precursor_irt[pid],
-                    precursor_charge = precursor_charge[pid],
-                )
-            end
             simple_frag_idx += 1
             simple_frags[simple_frag_idx] = SimpleFrag(
                 frag_mz[frag_idx],
@@ -937,8 +895,8 @@ function buildFragmentIndex!(
                             start_idx,stop_idx,
                             frag_bin_tol_ppm,
                             rt_bin_idx)
-                if contains_target_fragment(frag_ions, start_idx, stop_idx)
-                    @info "Target fragment placed into RT bin" (
+                if contains_target_precursor_fragment(frag_ions, start_idx, stop_idx)
+                    @info "Target precursor fragments placed into RT bin" (
                         rt_bin_idx = rt_bin_idx,
                         start_irt = start_irt,
                         stop_irt = stop_irt,
@@ -974,8 +932,8 @@ function buildFragmentIndex!(
                         frag_ions,
                         start_idx,stop_idx,frag_bin_tol_ppm, rt_bin_idx)
 
-            if contains_target_fragment(frag_ions, start_idx, stop_idx)
-                @info "Target fragment placed into RT bin" (
+            if contains_target_precursor_fragment(frag_ions, start_idx, stop_idx)
+                @info "Target precursor fragments placed into RT bin" (
                     rt_bin_idx = rt_bin_idx,
                     start_irt = start_irt,
                     stop_irt = stop_irt,
@@ -1001,8 +959,8 @@ function buildFragmentIndex!(
                         start_idx,stop_idx,frag_bin_tol_ppm, rt_bin_idx)
 
             #Add new fragbin
-            if contains_target_fragment(frag_ions, start_idx, stop_idx)
-                @info "Target fragment placed into RT bin" (
+            if contains_target_precursor_fragment(frag_ions, start_idx, stop_idx)
+                @info "Target precursor fragments placed into RT bin" (
                     rt_bin_idx = rt_bin_idx,
                     start_irt = start_irt,
                     stop_irt = getIRT(frag_ions[stop_idx]),
@@ -1049,8 +1007,8 @@ function buildFragmentIndex!(
                                                     UInt32(start_idx),
                                                     UInt32(stop_idx)
                                                 )
-                if contains_target_fragment(frag_ions, start_idx, stop_idx)
-                    @info "Target fragment placed into fragment bin" (
+                if contains_target_precursor_fragment(frag_ions, start_idx, stop_idx)
+                    @info "Target precursor fragments placed into fragment bin" (
                         rt_bin_idx = rt_bin_idx,
                         frag_bin_idx = frag_bin_idx,
                         start_fragmz = start_fragmz,
@@ -1090,8 +1048,8 @@ function buildFragmentIndex!(
                         UInt32(start_idx),
                         UInt32(stop_idx)
                     )
-            if contains_target_fragment(frag_ions, start_idx, stop_idx)
-                @info "Target fragment placed into fragment bin" (
+            if contains_target_precursor_fragment(frag_ions, start_idx, stop_idx)
+                @info "Target precursor fragments placed into fragment bin" (
                     rt_bin_idx = rt_bin_idx,
                     frag_bin_idx = frag_bin_idx,
                     start_fragmz = start_fragmz,
@@ -1122,8 +1080,8 @@ function buildFragmentIndex!(
                         UInt32(start_idx),
                         UInt32(stop_idx)
                     )
-            if contains_target_fragment(frag_ions, start_idx, stop_idx)
-                @info "Target fragment placed into fragment bin" (
+            if contains_target_precursor_fragment(frag_ions, start_idx, stop_idx)
+                @info "Target precursor fragments placed into fragment bin" (
                     rt_bin_idx = rt_bin_idx,
                     frag_bin_idx = frag_bin_idx,
                     start_fragmz = start_fragmz,
