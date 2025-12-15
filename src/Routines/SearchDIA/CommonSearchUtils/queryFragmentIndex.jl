@@ -336,9 +336,34 @@ function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
     return nothing#filterPrecursorMatches!(prec_id_to_score, min_score)
 end
 
-function filterPrecursorMatches!(prec_id_to_score::Counter{UInt32, UInt8}, min_score::UInt8)
+function filterPrecursorMatches!(prec_id_to_score::Counter{I, C}, min_score::C) where {I, C<:Unsigned}
     match_count = countFragMatches(prec_id_to_score, min_score)
     prec_count = getSize(prec_id_to_score) - 1
-    sortCounter!(prec_id_to_score);
+    sortCounter!(prec_id_to_score)
+    return match_count, prec_count
+end
+
+function filterPrecursorMatches!(smoothed_scores::Counter{I, C},
+                                 local_scores::Counter{I, C},
+                                 min_smoothed_score::C,
+                                 min_local_score::C) where {I, C<:Unsigned}
+    prec_count = getSize(smoothed_scores) - 1
+    match_count = 0
+
+    @inbounds @fastmath for idx in 1:prec_count
+        id = getID(smoothed_scores, idx)
+        smoothed_weighted = convert_frag_score(getCount(smoothed_scores, id))
+        local_weighted = convert_frag_score(getCount(local_scores, id))
+
+        if smoothed_weighted >= min_smoothed_score && local_weighted >= min_local_score
+            match_count += 1
+            smoothed_scores.ids[match_count] = id
+        end
+
+        smoothed_scores.counts[id] = zero(C)
+    end
+
+    smoothed_scores.matches = match_count
+    sortCounter!(smoothed_scores)
     return match_count, prec_count
 end

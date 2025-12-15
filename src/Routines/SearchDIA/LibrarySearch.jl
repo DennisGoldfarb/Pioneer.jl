@@ -38,6 +38,13 @@ function searchFragmentIndex(
     free_counters = Counter{UInt32, UInt8}[raw_counters...]
     smoothed_counter = Counter(UInt32, UInt8, counter_size)
 
+    @inline uses_smoothed_scores(::FragmentIndexSearchParameters) = true
+    @inline uses_smoothed_scores(::ParameterTuningSearchParameters) = false
+    @inline uses_smoothed_scores(::NceTuningSearchParameters) = false
+    @inline uses_smoothed_scores(::QuadTuningSearchParameters) = false
+
+    local_score_threshold(min_score::UInt8) = UInt8(max(Int(min_score) - 1, 0))
+
     acquire_counter!() = pop!(free_counters)
 
     function release_counter!(counter::Counter{UInt32, UInt8})
@@ -97,9 +104,20 @@ function searchFragmentIndex(
     end
 
     function finalize_scan!(target, left, right)
-        smooth_scores!(smoothed_counter, target, left, right)
-        filterPrecursorMatches!(smoothed_counter, getMinIndexSearchScore(params))
-        record_matches!(smoothed_counter, target.scan_idx)
+        min_score = getMinIndexSearchScore(params)
+        if uses_smoothed_scores(params)
+            smooth_scores!(smoothed_counter, target, left, right)
+            filterPrecursorMatches!(
+                smoothed_counter,
+                target.counter,
+                min_score,
+                local_score_threshold(min_score)
+            )
+            record_matches!(smoothed_counter, target.scan_idx)
+        else
+            filterPrecursorMatches!(target.counter, min_score)
+            record_matches!(target.counter, target.scan_idx)
+        end
         return nothing
     end
 
