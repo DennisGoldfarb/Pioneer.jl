@@ -120,7 +120,11 @@ function searchFragmentIndex(
 
         smooth_scores!(smoothed_scores, curr_counter, curr_iso, prev_counter, prev_iso, next_counter, next_iso)
 
-        match_count, prec_count = filterPrecursorMatches!(smoothed_scores, getMinIndexSearchScore(params))
+        match_count, prec_count = filterPrecursorMatches!(
+            smoothed_scores,
+            curr_counter,
+            getMinIndexSearchScore(params),
+        )
 
         if getID(smoothed_scores, 1) > 0
             start_idx = prec_id + 1

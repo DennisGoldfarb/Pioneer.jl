@@ -112,14 +112,35 @@ function reset!(c::Counter{I,C}) where {I,C<:Unsigned}
 end
 
 function countFragMatches(c::Counter{I,C}, min_count::C) where {I,C<:Unsigned}
+    c.matches = 0
     @inbounds for i in 1:(getSize(c) - 1)
         id = c.ids[i]
         weighted_score = convert_frag_score(getCount(c, id))
         if weighted_score >= min_count
-                c.ids[c.matches + 1] = c.ids[i]
-                c.matches += 1
+            c.ids[c.matches + 1] = c.ids[i]
+            c.matches += 1
         end
-        c.counts[id] = zero(C);
     end
     return 0#c.matches
+end
+
+function countFragMatches(
+    smoothed::Counter{I,C},
+    smoothed_min::C,
+    current::Counter{I,C},
+    current_min::C,
+)
+    smoothed.matches = 0
+    @inbounds for i in 1:(getSize(smoothed) - 1)
+        id = smoothed.ids[i]
+        smoothed_score = convert_frag_score(getCount(smoothed, id))
+        if smoothed_score >= smoothed_min
+            current_score = convert_frag_score(getCount(current, id))
+            if current_score >= current_min
+                smoothed.ids[smoothed.matches + 1] = id
+                smoothed.matches += 1
+            end
+        end
+    end
+    return 0
 end
