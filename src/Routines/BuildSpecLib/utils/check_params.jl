@@ -117,6 +117,13 @@ function check_params_bsp(json_string::String)
     check_param(library_params, "rt_bin_tol", Real)
     check_param(library_params, "frag_bin_tol_ppm", Real)
     check_param(library_params, "rank_to_score", Vector)
+    if !haskey(library_params, "rank_to_score_mode")
+        library_params["rank_to_score_mode"] = "fixed"
+    end
+    check_param(library_params, "rank_to_score_mode", String)
+    if !(library_params["rank_to_score_mode"] in ("fixed", "intensity_proportional"))
+        throw(InvalidParametersError("rank_to_score_mode must be 'fixed' or 'intensity_proportional'", params))
+    end
     check_param(library_params, "y_start_index", Integer)
     check_param(library_params, "b_start_index", Integer)
     check_param(library_params, "y_start", Integer)

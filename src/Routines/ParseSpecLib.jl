@@ -372,9 +372,10 @@ function ParseSpecLib(params_path::String)
         Float32(params["library_params"]["length_to_frag_count_multiple"]),
         Float32(params["library_params"]["min_frag_intensity"]),
         UInt8.(params["library_params"]["rank_to_score"]),
+        params["library_params"]["rank_to_score_mode"],
         FragBoundModel(
             ImmutablePolynomial(zero(Float32)),
-            ImmutablePolynomial(Float32(10000.0f0)) 
+            ImmutablePolynomial(Float32(10000.0f0))
         ),
         Float32(params["library_params"]["frag_bin_tol_ppm"]),
         Float32(params["library_params"]["rt_bin_tol"]),
