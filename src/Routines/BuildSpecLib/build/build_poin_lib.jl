@@ -709,75 +709,83 @@ function compute_proportional_fragment_scores(
 
     degree = length(knots) - length(first(frag_coef)) - 1
     gqx, gqw = getSplineQuadrature(Float32, first(knots), last(knots))
-    n_precursors = UInt32(length(precursor_mz))
+    n_precursors = length(precursor_mz)
+    pbar = ProgressBar(total=n_precursors)
+    progress_lock = Threads.SpinLock()
 
-    for pid in range(one(UInt32), n_precursors)
-        prec_mz = precursor_mz[pid]
-        allowed_max = min(max_frag_rank, UInt8(round((prec_len[pid]) * length_to_frag_count_multiple) + 1))
-        frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
-        candidate_indices = Int[]
-        for frag_idx in range(frag_start_idx, frag_stop_idx)
-            if !fragFilter(
-                    frag_is_y[frag_idx],
-                    frag_is_b[frag_idx],
-                    frag_is_p[frag_idx],
-                    frag_index[frag_idx],
-                    frag_charge[frag_idx],
-                    frag_isotope[frag_idx],
-                    frag_internal[frag_idx],
-                    frag_immonium[frag_idx],
-                    frag_neutral_diff[frag_idx],
-                    frag_mz[frag_idx],
-                    frag_bounds,
-                    prec_mz,
-                    y_start,
-                    b_start,
-                    include_p,
-                    include_isotope,
-                    include_immonium,
-                    include_internal,
-                    include_neutral_diff,
-                    max_frag_charge)
+    Threads.@threads for pid_int in range(one(Int), n_precursors)
+        try
+            prec_mz = precursor_mz[pid_int]
+            allowed_max = min(max_frag_rank, UInt8(round((prec_len[pid_int]) * length_to_frag_count_multiple) + 1))
+            frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid_int], prec_to_frag_idx[pid_int+1] - 1
+            candidate_indices = Int[]
+            for frag_idx in range(frag_start_idx, frag_stop_idx)
+                if !fragFilter(
+                        frag_is_y[frag_idx],
+                        frag_is_b[frag_idx],
+                        frag_is_p[frag_idx],
+                        frag_index[frag_idx],
+                        frag_charge[frag_idx],
+                        frag_isotope[frag_idx],
+                        frag_internal[frag_idx],
+                        frag_immonium[frag_idx],
+                        frag_neutral_diff[frag_idx],
+                        frag_mz[frag_idx],
+                        frag_bounds,
+                        prec_mz,
+                        y_start,
+                        b_start,
+                        include_p,
+                        include_isotope,
+                        include_immonium,
+                        include_internal,
+                        include_neutral_diff,
+                        max_frag_charge)
+                    continue
+                end
+                if min_frag_intensity > frag_intensity[frag_idx]
+                    continue
+                end
+                push!(candidate_indices, frag_idx)
+            end
+            if isempty(candidate_indices)
                 continue
             end
-            if min_frag_intensity > frag_intensity[frag_idx]
-                continue
-            end
-            push!(candidate_indices, frag_idx)
-        end
-        if isempty(candidate_indices)
-            continue
-        end
 
-        aucs = map(candidate_indices) do frag_idx
-            splint(knots, frag_coef[frag_idx], degree, gqx, gqw)
-        end
-        ranked_perm = sortperm(aucs, rev=true)
-        top_perm = ranked_perm[1:min(length(ranked_perm), Int(allowed_max))]
-        top_indices = candidate_indices[top_perm]
-        top_aucs = copy(aucs[top_perm])
-        auc_sum = sum(top_aucs)
-        top_count = length(top_indices)
-        if auc_sum == 0
-            top_aucs .= 1 / top_count
+            aucs = map(candidate_indices) do frag_idx
+                splint(knots, frag_coef[frag_idx], degree, gqx, gqw)
+            end
+            ranked_perm = sortperm(aucs, rev=true)
+            top_perm = ranked_perm[1:min(length(ranked_perm), Int(allowed_max))]
+            top_indices = candidate_indices[top_perm]
+            top_aucs = copy(aucs[top_perm])
             auc_sum = sum(top_aucs)
-        end
-        weights = top_aucs ./ auc_sum
-        target_count = min(top_count, length(rank_to_score))
-        target_total = sum(rank_to_score[1:target_count])
-        scaled = round.(Int, weights .* target_total)
-        diff = target_total - sum(scaled)
-        if diff != 0
-            adjust_order = sortperm(weights, rev=true)
-            for i in 1:abs(diff)
-                adj_idx = adjust_order[((i - 1) % length(adjust_order)) + 1]
-                scaled[adj_idx] += sign(diff)
+            top_count = length(top_indices)
+            if auc_sum == 0
+                top_aucs .= 1 / top_count
+                auc_sum = sum(top_aucs)
             end
-        end
+            weights = top_aucs ./ auc_sum
+            target_count = min(top_count, length(rank_to_score))
+            target_total = sum(rank_to_score[1:target_count])
+            scaled = round.(Int, weights .* target_total)
+            diff = target_total - sum(scaled)
+            if diff != 0
+                adjust_order = sortperm(weights, rev=true)
+                for i in 1:abs(diff)
+                    adj_idx = adjust_order[((i - 1) % length(adjust_order)) + 1]
+                    scaled[adj_idx] += sign(diff)
+                end
+            end
 
-        for (local_rank, frag_idx) in enumerate(top_indices)
-            proportional_scores[frag_idx] = UInt8(clamp(scaled[local_rank], 0, typemax(UInt8)))
-            proportional_ranks[frag_idx] = UInt8(local_rank)
+            for (local_rank, frag_idx) in enumerate(top_indices)
+                proportional_scores[frag_idx] = UInt8(clamp(scaled[local_rank], 0, typemax(UInt8)))
+                proportional_ranks[frag_idx] = UInt8(local_rank)
+            end
+        finally
+            Threads.lock(progress_lock) do
+                update(pbar)
+            end
         end
     end
     return proportional_scores, proportional_ranks
