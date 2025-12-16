@@ -708,7 +708,6 @@ function compute_proportional_fragment_scores(
     proportional_ranks = zeros(UInt8, length(frag_coef))
 
     degree = length(knots) - length(first(frag_coef)) - 1
-    gqx, gqw = getSplineQuadrature(Float32, first(knots), last(knots))
     n_precursors = length(precursor_mz)
     progress_batch = max(1, cld(n_precursors, Threads.nthreads() * 20))
     batch_progress_total = cld(n_precursors, progress_batch)
@@ -764,7 +763,9 @@ function compute_proportional_fragment_scores(
 
             top_indices = view(candidate_indices, 1:top_count)
             top_aucs = map(top_indices) do frag_idx
-                splint(knots, frag_coef[frag_idx], degree, gqx, gqw)
+                v25 = splevl(25f0, knots, frag_coef[frag_idx], degree)
+                v30 = splevl(30f0, knots, frag_coef[frag_idx], degree)
+                (v25 + v30) * 2.5f0
             end
             auc_sum = sum(top_aucs)
             if auc_sum == 0
