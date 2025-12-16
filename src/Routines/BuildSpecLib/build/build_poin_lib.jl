@@ -665,7 +665,8 @@ function getSimpleFrags(
         logged_fragments = NamedTuple{(:rank, :weight, :intensity), Tuple{UInt8, UInt8, Any}}[]
         prec_mz = precursor_mz[pid]
         frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
-        rank = 1
+
+        ranked_frags = NamedTuple{(:idx, :intensity), Tuple{Int, Float32}}[]
         for frag_idx in range(frag_start_idx, frag_stop_idx)
             if fragFilter(
                     frag_is_y[frag_idx],
@@ -690,7 +691,23 @@ function getSimpleFrags(
                     max_frag_charge)==false
                 continue
             end
-            frag_score = rank_to_score[rank]
+            intensity = frag_intensity === nothing ? one(Float32) : Float32(frag_intensity[frag_idx])
+            push!(ranked_frags, (idx=frag_idx, intensity=intensity))
+        end
+
+        # Sort by descending intensity so rank_to_score reflects actual predicted strengths
+        sort!(ranked_frags, by = x -> x.intensity, rev = true)
+        max_intensity = isempty(ranked_frags) ? one(Float32) : ranked_frags[1].intensity
+
+        for (rank, frag_info) in enumerate(ranked_frags)
+            if rank > max_rank_index
+                break
+            end
+            frag_idx = frag_info.idx
+            norm_intensity = frag_intensity === nothing ? one(Float32) : frag_info.intensity / max(max_intensity, eps(Float32))
+            raw_score = rank_to_score[rank] * norm_intensity
+            frag_score = UInt8(clamp(round(Int, max(raw_score, one(Float32))), typemin(UInt8), typemax(UInt8)))
+
             simple_frag_idx += 1
             simple_frags[simple_frag_idx] = SimpleFrag(
                 frag_mz[frag_idx],
@@ -701,12 +718,8 @@ function getSimpleFrags(
                 frag_score
             )
             if log_weights
-                frag_int = frag_intensity === nothing ? missing : Float32(frag_intensity[frag_idx])
+                frag_int = frag_intensity === nothing ? missing : frag_info.intensity
                 push!(logged_fragments, (rank=UInt8(rank), weight=frag_score, intensity=frag_int))
-            end
-            rank += 1
-            if rank > max_rank_index
-                break
             end
         end
 
