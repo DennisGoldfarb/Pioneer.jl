@@ -106,7 +106,6 @@ function buildPionLib(spec_lib_path::String,
     #println("Get index fragments...")
     simple_frags = getSimpleFrags(
         fragments_table[:mz],
-        fragments_table[:intensity],
         fragments_table[:is_y],
         fragments_table[:is_b],
         fragments_table[:is_p],
@@ -130,6 +129,7 @@ function buildPionLib(spec_lib_path::String,
         max_frag_charge,
         frag_bounds,
         rank_to_score,
+        fragments_table[:intensity],
         fragments_table[:coefficients],
         spl_knots,
     );
@@ -312,7 +312,6 @@ function buildPionLib(spec_lib_path::String,
     #println("Get index fragments...")
     simple_frags = getSimpleFrags(
         fragments_table[:mz],
-        fragments_table[:intensity],
         fragments_table[:is_y],
         fragments_table[:is_b],
         fragments_table[:is_p],
@@ -336,6 +335,7 @@ function buildPionLib(spec_lib_path::String,
         max_frag_charge,
         frag_bounds,
         rank_to_score,
+        fragments_table[:intensity],
         fragments_table[:coefficients],
         spl_knots,
     );
@@ -582,6 +582,7 @@ end
         max_frag_charge::UInt8,
         frag_bounds::FragBoundModel,
         rank_to_score::Vector{UInt8},
+        frag_intensity::Union{Nothing, AbstractVector}=nothing,
         frag_coef::Union{Nothing, AbstractVector}=nothing,
         spl_knots::Union{Nothing, Any}=nothing,
     )::Vector{SimpleFrag{Float32}}
@@ -590,7 +591,6 @@ Extract fragments for the fragment index from raw fragment data.
 
 # Parameters
 - `frag_mz`: Fragment m/z values
-- `frag_intensity`: Optional fragment intensities used to summarize weight assignment
 - `frag_is_y`: Whether each fragment is a y-ion
 - `frag_is_b`: Whether each fragment is a b-ion
 - `frag_is_p`: Whether each fragment is a precursor ion
@@ -614,6 +614,7 @@ Extract fragments for the fragment index from raw fragment data.
 - `max_frag_charge`: Maximum fragment charge state to include
 - `frag_bounds`: Model defining valid m/z range based on precursor m/z
 - `rank_to_score`: Vector mapping intensity rank to scoring value
+- `frag_intensity`: Optional fragment intensities used to summarize weight assignment
 - `frag_coef`: Optional spline coefficients for fragments
 - `spl_knots`: Optional spline knot vector used for spline-based scoring
 
@@ -622,7 +623,6 @@ Extract fragments for the fragment index from raw fragment data.
 """
 function Pioneer.getSimpleFrags(
     frag_mz::AbstractVector{Float32},
-    frag_intensity::Union{Nothing, AbstractVector}=nothing,
     frag_is_y::AbstractVector{Bool},
     frag_is_b::AbstractVector{Bool},
     frag_is_p::AbstractVector{Bool},
@@ -646,6 +646,7 @@ function Pioneer.getSimpleFrags(
     max_frag_charge::UInt8,
     frag_bounds::FragBoundModel,
     rank_to_score::Vector{UInt8},
+    frag_intensity::Union{Nothing, AbstractVector}=nothing,
     frag_coef::Union{Nothing, AbstractVector}=nothing,
     spl_knots::Union{Nothing, Any}=nothing,
     )
