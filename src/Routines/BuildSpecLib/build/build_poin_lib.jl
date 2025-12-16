@@ -106,6 +106,7 @@ function buildPionLib(spec_lib_path::String,
     #println("Get index fragments...")
     simple_frags = getSimpleFrags(
         fragments_table[:mz],
+        fragments_table[:intensity],
         fragments_table[:is_y],
         fragments_table[:is_b],
         fragments_table[:is_p],
@@ -311,6 +312,7 @@ function buildPionLib(spec_lib_path::String,
     #println("Get index fragments...")
     simple_frags = getSimpleFrags(
         fragments_table[:mz],
+        fragments_table[:intensity],
         fragments_table[:is_y],
         fragments_table[:is_b],
         fragments_table[:is_p],
@@ -588,8 +590,9 @@ Extract fragments for the fragment index from raw fragment data.
 
 # Parameters
 - `frag_mz`: Fragment m/z values
+- `frag_intensity`: Optional fragment intensities used to summarize weight assignment
 - `frag_is_y`: Whether each fragment is a y-ion
-- `frag_is_b`: Whether each fragment is a b-ion  
+- `frag_is_b`: Whether each fragment is a b-ion
 - `frag_is_p`: Whether each fragment is a precursor ion
 - `frag_index`: Index of each fragment in its peptide sequence
 - `frag_charge`: Charge state of each fragment
@@ -619,6 +622,7 @@ Extract fragments for the fragment index from raw fragment data.
 """
 function getSimpleFrags(
     frag_mz::AbstractVector{Float32},
+    frag_intensity::Union{Nothing, AbstractVector}=nothing,
     frag_is_y::AbstractVector{Bool},
     frag_is_b::AbstractVector{Bool},
     frag_is_p::AbstractVector{Bool},
@@ -657,7 +661,7 @@ function getSimpleFrags(
     simple_frag_idx = 0
     for pid in range(one(UInt32), n_precursors)
         log_weights = pid % log_interval == 0
-        logged_weights = UInt8[]
+        logged_fragments = NamedTuple{(:rank, :weight, :intensity), Tuple{UInt8, UInt8, Any}}[]
         prec_mz = precursor_mz[pid]
         frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
         rank = 1
@@ -695,15 +699,25 @@ function getSimpleFrags(
                 precursor_charge[pid],
                 frag_score
             )
-            log_weights && push!(logged_weights, frag_score)
+            if log_weights
+                frag_int = frag_intensity === nothing ? missing : Float32(frag_intensity[frag_idx])
+                push!(logged_fragments, (rank=UInt8(rank), weight=frag_score, intensity=frag_int))
+            end
             rank += 1
             if rank > max_rank_index
                 break
             end
         end
 
-        if log_weights && !isempty(logged_weights)
-            @info "Fragment weights for precursor $(pid)" count=length(logged_weights) weights=logged_weights
+        if log_weights && !isempty(logged_fragments)
+            spline_enabled = frag_coef !== nothing && spl_knots !== nothing
+            intensity_summary = nothing
+            if frag_intensity !== nothing
+                intensities = collect(skipmissing(getfield.(logged_fragments, :intensity)))
+                !isempty(intensities) && (intensity_summary = (min=minimum(intensities), max=maximum(intensities)))
+            end
+            coef_preview = (frag_coef !== nothing && !isempty(logged_fragments)) ? frag_coef[frag_start_idx] : nothing
+            @info "Fragment weights for precursor $(pid)" count=length(logged_fragments) using_splines=spline_enabled rank_to_score=rank_to_score fragments=logged_fragments intensity_summary=intensity_summary spline_coef_preview=coef_preview
         end
 
     end
