@@ -650,11 +650,14 @@ function getSimpleFrags(
     end
     #Maximum ranked fragment that can be included in the fragment index
     max_rank_index = length(rank_to_score)
-    #Number of precursors 
+    #Number of precursors
     n_precursors = UInt32(length(precursor_mz))
+    log_interval = UInt32(100_000)
     simple_frags = Vector{SimpleFrag{Float32}}(undef, n_precursors*max_rank_index)
     simple_frag_idx = 0
     for pid in range(one(UInt32), n_precursors)
+        log_weights = pid % log_interval == 0
+        logged_weights = UInt8[]
         prec_mz = precursor_mz[pid]
         frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
         rank = 1
@@ -682,6 +685,7 @@ function getSimpleFrags(
                     max_frag_charge)==false
                 continue
             end
+            frag_score = rank_to_score[rank]
             simple_frag_idx += 1
             simple_frags[simple_frag_idx] = SimpleFrag(
                 frag_mz[frag_idx],
@@ -689,12 +693,17 @@ function getSimpleFrags(
                 precursor_mz[pid],
                 precursor_irt[pid],
                 precursor_charge[pid],
-                rank_to_score[rank]
+                frag_score
             )
+            log_weights && push!(logged_weights, frag_score)
             rank += 1
             if rank > max_rank_index
                 break
             end
+        end
+
+        if log_weights && !isempty(logged_weights)
+            @info "Fragment weights for precursor $(pid)" count=length(logged_weights) weights=logged_weights
         end
 
     end
