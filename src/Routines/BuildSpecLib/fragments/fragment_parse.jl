@@ -766,9 +766,7 @@ function process_spline_batch!(
         pid = fragment_table[:precursor_idx][actual_frag_idx]
 
         # Handle new precursor
-        rank = Float16(255)
         if pid != last_pid
-            rank -= one(Float16)
             batch_pid += 1
             frag_idx_start = actual_frag_idx
             last_pid = pid
@@ -810,7 +808,11 @@ function process_spline_batch!(
         # Get basic fragment information
         frag_mz = fragment_table[:mz][actual_frag_idx]
         frag_coef = fragment_table[:coefficients][actual_frag_idx]
-        frag_intensity = rank #- one(Float32)#fragment_table[:intensities][actual_frag_idx]
+        frag_intensity = if hasproperty(fragment_table, :intensity)
+            fragment_table[:intensity][actual_frag_idx]
+        else
+            fragment_table[:intensities][actual_frag_idx]
+        end
 
         # Calculate sequence bounds
         start_idx, stop_idx = get_fragment_indices(
