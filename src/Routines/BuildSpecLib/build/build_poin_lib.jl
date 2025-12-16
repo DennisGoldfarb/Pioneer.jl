@@ -699,14 +699,23 @@ function getSimpleFrags(
         sort!(ranked_frags, by = x -> x.intensity, rev = true)
         max_intensity = isempty(ranked_frags) ? one(Float32) : ranked_frags[1].intensity
 
+        raw_scores = NamedTuple{(:idx, :norm_intensity, :raw_score, :intensity), Tuple{Int, Float32, Float32, Any}}[]
         for (rank, frag_info) in enumerate(ranked_frags)
             if rank > max_rank_index
                 break
             end
-            frag_idx = frag_info.idx
             norm_intensity = frag_intensity === nothing ? one(Float32) : frag_info.intensity / max(max_intensity, eps(Float32))
-            raw_score = rank_to_score[rank] * norm_intensity
-            frag_score = UInt8(clamp(round(Int, max(raw_score, one(Float32))), typemin(UInt8), typemax(UInt8)))
+            push!(raw_scores, (idx=frag_info.idx, norm_intensity=norm_intensity, raw_score=rank_to_score[rank] * norm_intensity, intensity=frag_info.intensity))
+        end
+
+        default_score_sum = Float32(sum(@view rank_to_score[1:length(raw_scores)]))
+        raw_score_sum = sum(getfield.(raw_scores, :raw_score))
+        scaling = raw_score_sum > zero(Float32) ? default_score_sum / raw_score_sum : one(Float32)
+
+        for (rank, frag_info) in enumerate(raw_scores)
+            frag_idx = frag_info.idx
+            scaled_score = frag_info.raw_score * scaling
+            frag_score = UInt8(clamp(round(Int, max(scaled_score, one(Float32))), typemin(UInt8), typemax(UInt8)))
 
             simple_frag_idx += 1
             simple_frags[simple_frag_idx] = SimpleFrag(
@@ -731,7 +740,8 @@ function getSimpleFrags(
                 !isempty(intensities) && (intensity_summary = (min=minimum(intensities), max=maximum(intensities)))
             end
             coef_preview = (frag_coef !== nothing && !isempty(logged_fragments)) ? frag_coef[frag_start_idx] : nothing
-            @info "Fragment weights for precursor $(pid)" count=length(logged_fragments) using_splines=spline_enabled rank_to_score=rank_to_score fragments=logged_fragments intensity_summary=intensity_summary spline_coef_preview=coef_preview
+            weight_sum = sum(getfield.(logged_fragments, :weight))
+            @info "Fragment weights for precursor $(pid)" count=length(logged_fragments) using_splines=spline_enabled rank_to_score=rank_to_score fragments=logged_fragments intensity_summary=intensity_summary spline_coef_preview=coef_preview raw_score_sum=raw_score_sum scaling=scaling weight_sum=weight_sum
         end
 
     end
