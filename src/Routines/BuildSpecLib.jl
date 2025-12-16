@@ -248,14 +248,14 @@ function BuildSpecLib(params_path::String)
                 # Load tables
                 precursors_table = Arrow.Table(precursors_arrow_path)
                 fragments_table = Arrow.Table(raw_fragments_arrow_path)
-                #Record the spline knots 
+                ion_dictionary = get_altimeter_ion_dict(asset_path("ion_dictionary.txt"))
+                #Record the spline knots
                 try
                     spl_knots = copy(fragments_table[:knot_vector][1])
                     jldsave(
                         joinpath(lib_dir, "spline_knots.jld2");
                         spl_knots
                     )
-                    ion_dictionary = get_altimeter_ion_dict(asset_path("ion_dictionary.txt"))
 
                     parse_altimeter_fragments(
                         precursors_table,
@@ -274,7 +274,12 @@ function BuildSpecLib(params_path::String)
                     #println("No spline knots. static library")
 
                     # Process ion annotations
-                    ion_annotation_set = get_ion_annotation_set(fragments_table[:annotation])
+                    frag_annotations = if eltype(fragments_table[:annotation]) <: Integer
+                        map(x -> ion_dictionary[x], fragments_table[:annotation])
+                    else
+                        fragments_table[:annotation]
+                    end
+                    ion_annotation_set = get_ion_annotation_set(frag_annotations)
                     frag_name_to_idx = Dict(ion => UInt16(i) for (i, ion) in enumerate(ion_annotation_set))
 
                     ion_annotation_dict = parse_koina_fragments(
