@@ -750,20 +750,24 @@ function compute_proportional_fragment_scores(
                     continue
                 end
                 push!(candidate_indices, frag_idx)
+                if length(candidate_indices) == Int(allowed_max)
+                    break
+                end
             end
             if isempty(candidate_indices)
                 continue
             end
 
-            aucs = map(candidate_indices) do frag_idx
+            top_count = min(length(candidate_indices), Int(allowed_max))
+            if top_count == 0
+                continue
+            end
+
+            top_indices = view(candidate_indices, 1:top_count)
+            top_aucs = map(top_indices) do frag_idx
                 splint(knots, frag_coef[frag_idx], degree, gqx, gqw)
             end
-            ranked_perm = sortperm(aucs, rev=true)
-            top_perm = ranked_perm[1:min(length(ranked_perm), Int(allowed_max))]
-            top_indices = candidate_indices[top_perm]
-            top_aucs = copy(aucs[top_perm])
             auc_sum = sum(top_aucs)
-            top_count = length(top_indices)
             if auc_sum == 0
                 top_aucs .= 1 / top_count
                 auc_sum = sum(top_aucs)
