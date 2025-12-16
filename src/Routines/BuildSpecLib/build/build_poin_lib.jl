@@ -94,7 +94,15 @@ function buildPionLib(spec_lib_path::String,
         return nothing
     end
 
-    #Simple fragments that go into the fragment index 
+    spl_knots = nothing
+    try
+        spl_knots = load(joinpath(spec_lib_path, "spline_knots.jld2"))["spl_knots"]
+        @info "Loaded spline_knots.jld2 for spline scoring"
+    catch
+        @info "No spline_knots.jld2 found; proceeding without spline scoring"
+    end
+
+    #Simple fragments that go into the fragment index
     #println("Get index fragments...")
     simple_frags = getSimpleFrags(
         fragments_table[:mz],
@@ -120,7 +128,9 @@ function buildPionLib(spec_lib_path::String,
         include_neutral_diff,
         max_frag_charge,
         frag_bounds,
-        rank_to_score
+        rank_to_score,
+        fragments_table[:coefficients],
+        spl_knots,
     );
 
     #println("Build fragment index...")
@@ -559,7 +569,9 @@ end
         include_neutral_diff::Bool,
         max_frag_charge::UInt8,
         frag_bounds::FragBoundModel,
-        rank_to_score::Vector{UInt8}
+        rank_to_score::Vector{UInt8},
+        frag_coef::Union{Nothing, AbstractVector}=nothing,
+        spl_knots::Union{Nothing, Any}=nothing,
     )::Vector{SimpleFrag{Float32}}
 
 Extract fragments for the fragment index from raw fragment data.
@@ -589,6 +601,8 @@ Extract fragments for the fragment index from raw fragment data.
 - `max_frag_charge`: Maximum fragment charge state to include
 - `frag_bounds`: Model defining valid m/z range based on precursor m/z
 - `rank_to_score`: Vector mapping intensity rank to scoring value
+- `frag_coef`: Optional spline coefficients for fragments
+- `spl_knots`: Optional spline knot vector used for spline-based scoring
 
 # Returns
 - Vector of SimpleFrag objects, containing filtered fragments for the index
@@ -618,6 +632,8 @@ function getSimpleFrags(
     max_frag_charge::UInt8,
     frag_bounds::FragBoundModel,
     rank_to_score::Vector{UInt8},
+    frag_coef::Union{Nothing, AbstractVector}=nothing,
+    spl_knots::Union{Nothing, Any}=nothing,
     )
     if (length(prec_to_frag_idx) - 1) != (length(precursor_mz))
         #println("mistake")
