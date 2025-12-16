@@ -913,11 +913,53 @@ end
         
         # Should only return 3 fragments due to rank limit
         @test length(rank_limited_frags) == 3
-        
+
         # Test scores are assigned in decreasing order
         @test getScore(rank_limited_frags[1]) == 10
         @test getScore(rank_limited_frags[2]) == 9
         @test getScore(rank_limited_frags[3]) == 8
+
+        @testset "spline-weighted scores" begin
+            frag_coefficients = NTuple{2, Float32}[(10.0f0, 2.0f0), (2.0f0, 2.0f0),
+                                                  (1.0f0, 5.0f0), (4.0f0, 1.0f0)]
+            spline_knots = (0.0f0, 0.0f0, 50.0f0, 50.0f0)
+
+            proportional_frags = getSimpleFrags(
+                frag_mz,
+                frag_is_y,
+                frag_is_b,
+                frag_is_p,
+                frag_index,
+                frag_charge,
+                frag_isotope,
+                frag_internal,
+                frag_immonium,
+                frag_neutral_diff,
+                precursor_mz,
+                precursor_irt,
+                precursor_charge,
+                prec_to_frag_idx,
+                y_start,
+                b_start,
+                include_p,
+                include_isotope,
+                include_immonium,
+                include_internal,
+                include_neutral_diff,
+                max_frag_charge,
+                frag_bounds,
+                rank_to_score;
+                frag_coefficients=frag_coefficients,
+                spline_knots=spline_knots,
+                spline_degree=1,
+                spline_nce=25f0,
+            )
+
+            @test getScore(proportional_frags[1]) == UInt8(14)
+            @test getScore(proportional_frags[2]) == UInt8(5)
+            @test getScore(proportional_frags[3]) == UInt8(10)
+            @test getScore(proportional_frags[4]) == UInt8(9)
+        end
     end
     
     #==========================================================================
