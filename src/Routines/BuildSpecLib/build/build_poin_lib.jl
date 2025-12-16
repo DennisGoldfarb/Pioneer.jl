@@ -712,8 +712,11 @@ function compute_proportional_fragment_scores(
     n_precursors = length(precursor_mz)
     pbar = ProgressBar(total=n_precursors)
     progress_lock = Threads.SpinLock()
+    progress_batch = max(1, cld(n_precursors, Threads.nthreads() * 20))
+    progress_counter = Threads.Atomic{Int}(0)
+    progress_seen = Ref(0)
 
-    Threads.@threads for pid_int in range(one(Int), n_precursors)
+    Threads.@threads :dynamic for pid_int in range(one(Int), n_precursors)
         try
             prec_mz = precursor_mz[pid_int]
             allowed_max = min(max_frag_rank, UInt8(round((prec_len[pid_int]) * length_to_frag_count_multiple) + 1))
@@ -783,8 +786,18 @@ function compute_proportional_fragment_scores(
                 proportional_ranks[frag_idx] = UInt8(local_rank)
             end
         finally
-            Threads.lock(progress_lock) do
-                update(pbar)
+            current = Threads.atomic_add!(progress_counter, 1)
+            if (current % progress_batch) == 0 || current == n_precursors
+                Threads.lock(progress_lock) do
+                    target = Threads.atomic_load(progress_counter)
+                    delta = target - progress_seen[]
+                    if delta > 0
+                        for _ in 1:delta
+                            update(pbar)
+                        end
+                        progress_seen[] = target
+                    end
+                end
             end
         end
     end
