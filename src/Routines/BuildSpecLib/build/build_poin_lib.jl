@@ -710,11 +710,10 @@ function compute_proportional_fragment_scores(
     degree = length(knots) - length(first(frag_coef)) - 1
     gqx, gqw = getSplineQuadrature(Float32, first(knots), last(knots))
     n_precursors = length(precursor_mz)
-    pbar = ProgressBar(total=n_precursors)
-    progress_lock = Threads.SpinLock()
     progress_batch = max(1, cld(n_precursors, Threads.nthreads() * 20))
-    progress_counter = Threads.Atomic{Int}(0)
-    progress_seen = Ref(0)
+    batch_progress_total = cld(n_precursors, progress_batch)
+    pbar = ProgressBar(total=batch_progress_total)
+    first_thread_progress = Ref(0)
 
     Threads.@threads :dynamic for pid_int in range(one(Int), n_precursors)
         try
@@ -790,20 +789,17 @@ function compute_proportional_fragment_scores(
                 proportional_ranks[frag_idx] = UInt8(local_rank)
             end
         finally
-            current = Threads.atomic_add!(progress_counter, 1)
-            if (current % progress_batch) == 0 || current == n_precursors
-                Threads.lock(progress_lock) do
-                    target = Threads.atomic_load(progress_counter)
-                    delta = target - progress_seen[]
-                    if delta > 0
-                        for _ in 1:delta
-                            update(pbar)
-                        end
-                        progress_seen[] = target
-                    end
+            if Threads.threadid() == 1
+                first_thread_progress[] += 1
+                if (first_thread_progress[] % progress_batch) == 0
+                    update(pbar)
                 end
             end
         end
+    end
+    remaining_batches = max(0, batch_progress_total - fld(first_thread_progress[], progress_batch))
+    for _ in 1:remaining_batches
+        update(pbar)
     end
     return proportional_scores, proportional_ranks
 end
