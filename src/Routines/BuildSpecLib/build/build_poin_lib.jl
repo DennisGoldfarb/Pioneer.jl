@@ -666,7 +666,7 @@ function getSimpleFrags(
         prec_mz = precursor_mz[pid]
         frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
 
-        ranked_frags = NamedTuple{(:idx, :intensity), Tuple{Int, Float32}}[]
+        ranked_frags = NamedTuple{(:idx, :intensity, :score_intensity), Tuple{Int, Float32, Float32}}[]
         for frag_idx in range(frag_start_idx, frag_stop_idx)
             if fragFilter(
                     frag_is_y[frag_idx],
@@ -692,19 +692,20 @@ function getSimpleFrags(
                 continue
             end
             intensity = frag_intensity === nothing ? one(Float32) : Float32(frag_intensity[frag_idx])
-            push!(ranked_frags, (idx=frag_idx, intensity=intensity))
+            score_intensity = sqrt(max(intensity, zero(Float32)))
+            push!(ranked_frags, (idx=frag_idx, intensity=intensity, score_intensity=score_intensity))
         end
 
         # Sort by descending intensity so rank_to_score reflects actual predicted strengths
         sort!(ranked_frags, by = x -> x.intensity, rev = true)
-        max_intensity = isempty(ranked_frags) ? one(Float32) : ranked_frags[1].intensity
+        max_intensity = isempty(ranked_frags) ? one(Float32) : ranked_frags[1].score_intensity
 
         raw_scores = NamedTuple{(:idx, :norm_intensity, :raw_score, :intensity), Tuple{Int, Float32, Float32, Any}}[]
         for (rank, frag_info) in enumerate(ranked_frags)
             if rank > max_rank_index
                 break
             end
-            norm_intensity = frag_intensity === nothing ? one(Float32) : frag_info.intensity / max(max_intensity, eps(Float32))
+            norm_intensity = frag_intensity === nothing ? one(Float32) : frag_info.score_intensity / max(max_intensity, eps(Float32))
             push!(raw_scores, (idx=frag_info.idx, norm_intensity=norm_intensity, raw_score=rank_to_score[rank] * norm_intensity, intensity=frag_info.intensity))
         end
 
