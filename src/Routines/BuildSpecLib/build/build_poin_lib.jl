@@ -621,7 +621,7 @@ Extract fragments for the fragment index from raw fragment data.
 # Returns
 - Vector of SimpleFrag objects, containing filtered fragments for the index
 """
-function Pioneer.getSimpleFrags(
+function getSimpleFrags(
     frag_mz::AbstractVector{Float32},
     frag_is_y::AbstractVector{Bool},
     frag_is_b::AbstractVector{Bool},
