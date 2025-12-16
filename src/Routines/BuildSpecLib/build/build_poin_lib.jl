@@ -99,6 +99,11 @@ function buildPionLib(spec_lib_path::String,
     catch
         nothing
     end
+    if isnothing(spline_knots)
+        @info "No spline knots found; using fixed fragment rank weights" spec_lib_path
+    else
+        @info "Loaded spline knots for spline-scored fragment indexing" spec_lib_path knot_count=length(spline_knots)
+    end
 
     #Simple fragments that go into the fragment index
     #println("Get index fragments...")
@@ -642,16 +647,23 @@ function getSimpleFrags(
     simple_frags = Vector{SimpleFrag{Float32}}(undef, n_precursors*max_rank_index)
     simple_frag_idx = 0
     knots_tuple = isnothing(spline_knots) ? nothing : Tuple(Float32.(spline_knots))
+    coeff_count = isnothing(frag_coefficients) ? 0 : length(frag_coefficients)
     use_spline_scores = !isnothing(frag_coefficients) && !isnothing(knots_tuple)
+
+    if use_spline_scores
+        @info "Spline fragment scoring enabled" coeff_count knots_count=length(knots_tuple) spline_degree spline_nce
+    else
+        @info "Spline fragment scoring disabled; falling back to fixed rank weights" has_coefficients=!isnothing(frag_coefficients) coeff_count has_knots=!isnothing(knots_tuple)
+    end
 
     function get_rank_scores(filtered_frag_indices::Vector{UInt32})
         rank_limit = length(filtered_frag_indices)
         if rank_limit == 0
-            return UInt8[]
+            return UInt8[], false
         end
 
         if !use_spline_scores
-            return rank_to_score[1:rank_limit]
+            return rank_to_score[1:rank_limit], false
         end
 
         intensities = Vector{Float32}(undef, rank_limit)
@@ -665,7 +677,7 @@ function getSimpleFrags(
         end
 
         if total_intensity == 0
-            return rank_to_score[1:rank_limit]
+            return rank_to_score[1:rank_limit], false
         end
 
         total_score = sum(rank_to_score[1:rank_limit])
@@ -674,8 +686,10 @@ function getSimpleFrags(
             proportional_score = intensities[i] / total_intensity * total_score
             scores[i] = UInt8(clamp(round(proportional_score), one(UInt8), typemax(UInt8)))
         end
-        return scores
+        return scores, true
     end
+
+    zero_intensity_fallbacks = 0
 
     for pid in range(one(UInt32), n_precursors)
         prec_mz = precursor_mz[pid]
@@ -713,9 +727,16 @@ function getSimpleFrags(
             end
         end
 
-        rank_scores = get_rank_scores(filtered_frag_indices)
-        if use_spline_scores && pid % 100_000 == 0
-            @info "Spline fragment weights sample" pid rank_scores
+        rank_scores, used_spline_rank = get_rank_scores(filtered_frag_indices)
+        if use_spline_scores && !used_spline_rank && !isempty(filtered_frag_indices)
+            zero_intensity_fallbacks += 1
+            if zero_intensity_fallbacks <= 5 || pid % 100_000 == 0
+                @warn "Spline scoring fell back to fixed rank weights" pid rank_limit=length(filtered_frag_indices)
+            end
+        end
+
+        if pid % 100_000 == 0
+            @info "Fragment scoring sample" pid use_spline_scores used_spline_rank rank_scores rank_limit=length(filtered_frag_indices)
         end
         for (local_rank, frag_idx) in enumerate(filtered_frag_indices)
             simple_frag_idx += 1
@@ -728,6 +749,10 @@ function getSimpleFrags(
                 rank_scores[local_rank]
             )
         end
+    end
+
+    if use_spline_scores && zero_intensity_fallbacks > 0
+        @info "Total spline scoring fallbacks to fixed weights" zero_intensity_fallbacks
     end
     return simple_frags[1:simple_frag_idx]
 end
