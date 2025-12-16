@@ -294,12 +294,20 @@ function buildPionLib(spec_lib_path::String,
         fragments_table = Arrow.Table(joinpath(spec_lib_path,"fragments_table.arrow"));
         prec_to_frag = Arrow.Table(joinpath(spec_lib_path,"prec_to_frag.arrow"));
         precursors_table = Arrow.Table(joinpath(spec_lib_path,"precursors_table.arrow"));
-    catch e 
+    catch e
         @error "could not find library..."
         return nothing
     end
 
-    #Simple fragments that go into the fragment index 
+    spl_knots = nothing
+    try
+        spl_knots = load(joinpath(spec_lib_path, "spline_knots.jld2"))["spl_knots"]
+        @info "Loaded spline_knots.jld2 for spline scoring"
+    catch
+        @info "No spline_knots.jld2 found; proceeding without spline scoring"
+    end
+
+    #Simple fragments that go into the fragment index
     #println("Get index fragments...")
     simple_frags = getSimpleFrags(
         fragments_table[:mz],
@@ -325,7 +333,9 @@ function buildPionLib(spec_lib_path::String,
         include_neutral_diff,
         max_frag_charge,
         frag_bounds,
-        rank_to_score
+        rank_to_score,
+        fragments_table[:coefficients],
+        spl_knots,
     );
 
     #println("Build fragment index...")
