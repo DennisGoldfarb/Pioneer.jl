@@ -714,6 +714,9 @@ function getSimpleFrags(
         end
 
         rank_scores = get_rank_scores(filtered_frag_indices)
+        if use_spline_scores && pid % 100_000 == 0
+            @info "Spline fragment weights sample" pid rank_scores
+        end
         for (local_rank, frag_idx) in enumerate(filtered_frag_indices)
             simple_frag_idx += 1
             simple_frags[simple_frag_idx] = SimpleFrag(
