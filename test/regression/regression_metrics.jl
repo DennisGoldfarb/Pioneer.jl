@@ -54,6 +54,7 @@ function compute_wide_metrics(
     df::DataFrame,
     quant_col_names::AbstractVector{<:Union{Symbol, String}};
     table_label::AbstractString = "wide_table",
+    dataset_name::AbstractString = "dataset",
 )
     existing_quant_cols = select_quant_columns(df, quant_col_names)
     runs = length(existing_quant_cols)
@@ -63,7 +64,7 @@ function compute_wide_metrics(
 
     if length(existing_quant_cols) < length(quant_col_names)
         missing_cols = setdiff(Symbol.(quant_col_names), Symbol.(existing_quant_cols))
-        @warn "Missing quantification columns in dataset" missing_cols=missing_cols
+        @warn "Missing quantification columns in dataset" dataset=dataset_name table_label=table_label missing_cols=missing_cols
     end
 
     quant_data = df[:, existing_quant_cols]
@@ -491,10 +492,16 @@ function compute_dataset_metrics(
 
         if need_cv
             precursor_wide_metrics = compute_wide_metrics(
-                precursors_wide, quant_col_names; table_label = "precursors_wide"
+                precursors_wide,
+                quant_col_names;
+                table_label = "precursors_wide",
+                dataset_name = dataset_name,
             )
             protein_wide_metrics = compute_wide_metrics(
-                protein_groups_wide, quant_col_names; table_label = "protein_groups_wide"
+                protein_groups_wide,
+                quant_col_names;
+                table_label = "protein_groups_wide",
+                dataset_name = dataset_name,
             )
             precursor_cv_metrics = compute_cv_metrics(
                 precursors_wide, quant_col_names; table_label = "precursors_wide"
@@ -579,7 +586,7 @@ function compute_dataset_metrics(
             ftr_metrics = compute_ftr_metrics(
                 dataset_name,
                 precursors_wide,
-                quant_col_names,
+                protein_groups_wide,
                 experimental_design,
                 dataset_paths,
             )
@@ -913,6 +920,35 @@ function count_total_ids(
     count(!ismissing, quant_matrix)
 end
 
+function ftr_metrics_for_table(
+    mbr_df::DataFrame,
+    no_mbr_df::DataFrame,
+    mbr_quant_cols::AbstractVector{<:Union{Symbol, String}},
+    no_mbr_quant_cols::AbstractVector{<:Union{Symbol, String}},
+    human_only_runs::AbstractVector{<:AbstractString};
+    table_label::AbstractString,
+)
+    yeast_human_only_mbr = count_yeast_ids(mbr_df, mbr_quant_cols, human_only_runs; table_label = table_label)
+    yeast_human_only_no_mbr = count_yeast_ids(no_mbr_df, no_mbr_quant_cols, human_only_runs; table_label = table_label)
+
+    total_ids_human_only_mbr = count_total_ids(mbr_df, mbr_quant_cols, human_only_runs; table_label = table_label)
+    total_ids_human_only_no_mbr = count_total_ids(no_mbr_df, no_mbr_quant_cols, human_only_runs; table_label = table_label)
+
+    additional_yeast_in_human_only = max(yeast_human_only_mbr - yeast_human_only_no_mbr, 0)
+    additional_ids_in_human_only = max(total_ids_human_only_mbr - total_ids_human_only_no_mbr, 0)
+    ftr = additional_ids_in_human_only > 0 ? additional_yeast_in_human_only / additional_ids_in_human_only : 0.0
+
+    return Dict(
+        "yeast_ids_human_only_no_mbr" => yeast_human_only_no_mbr,
+        "yeast_ids_human_only_mbr" => yeast_human_only_mbr,
+        "total_ids_human_only_no_mbr" => total_ids_human_only_no_mbr,
+        "total_ids_human_only_mbr" => total_ids_human_only_mbr,
+        "additional_yeast_ids_in_human_only" => additional_yeast_in_human_only,
+        "additional_ids_in_human_only" => additional_ids_in_human_only,
+        "false_transfer_rate" => ftr,
+    )
+end
+
 function paired_mbr_dataset_paths(
     dataset_name::AbstractString,
     dataset_paths::Dict{String, String},
@@ -937,7 +973,7 @@ end
 function compute_ftr_metrics(
     dataset_name::AbstractString,
     precursors_wide::DataFrame,
-    quant_col_names::AbstractVector{<:Union{Symbol, String}},
+    protein_groups_wide::DataFrame,
     experimental_design::Dict{String, Any},
     dataset_paths::Dict{String, String},
 )
@@ -971,8 +1007,33 @@ function compute_ftr_metrics(
         read_required_table(tsv_path)
     end
 
-    mbr_quant_cols = dataset_name == mbr_name ? quant_col_names : quant_column_names_from_proteins(precursors_mbr)
-    nombr_quant_cols = dataset_name == nombr_name ? quant_col_names : quant_column_names_from_proteins(precursors_no_mbr)
+    protein_groups_mbr = if dataset_name == mbr_name
+        protein_groups_wide
+    else
+        tsv_path = joinpath(mbr_path, "protein_groups_wide.tsv")
+        isfile(tsv_path) || begin
+            @warn "Missing protein groups for MBR dataset; skipping FTR metrics" dataset=mbr_name path=tsv_path
+            return nothing
+        end
+        read_required_table(tsv_path)
+    end
+
+    protein_groups_no_mbr = if dataset_name == nombr_name
+        protein_groups_wide
+    else
+        tsv_path = joinpath(nombr_path, "protein_groups_wide.tsv")
+        isfile(tsv_path) || begin
+            @warn "Missing protein groups for noMBR dataset; skipping FTR metrics" dataset=nombr_name path=tsv_path
+            return nothing
+        end
+        read_required_table(tsv_path)
+    end
+
+    mbr_quant_cols = quant_column_names_from_proteins(precursors_mbr)
+    nombr_quant_cols = quant_column_names_from_proteins(precursors_no_mbr)
+
+    protein_mbr_quant_cols = quant_column_names_from_proteins(protein_groups_mbr)
+    protein_nombr_quant_cols = quant_column_names_from_proteins(protein_groups_no_mbr)
 
     groups = run_groups_for_dataset(experimental_design, dataset_name)
     alt_groups = run_groups_for_dataset(experimental_design, mbr_name == dataset_name ? nombr_name : mbr_name)
@@ -989,35 +1050,27 @@ function compute_ftr_metrics(
         return nothing
     end
 
-    runs_for_totals = all_runs_from_groups(groups)
-    if isempty(runs_for_totals)
-        runs_for_totals = all_runs_from_groups(alt_groups)
-    end
-    runs_for_totals = isempty(runs_for_totals) ? nothing : runs_for_totals
-
-    yeast_human_only_mbr = count_yeast_ids(precursors_mbr, mbr_quant_cols, human_only_runs; table_label = "precursors")
-    yeast_human_only_no_mbr = count_yeast_ids(
+    precursor_metrics = ftr_metrics_for_table(
+        precursors_mbr,
         precursors_no_mbr,
+        mbr_quant_cols,
         nombr_quant_cols,
         human_only_runs;
         table_label = "precursors",
     )
 
-    total_ids_mbr = count_total_ids(precursors_mbr, mbr_quant_cols, runs_for_totals; table_label = "precursors")
-    total_ids_no_mbr = count_total_ids(precursors_no_mbr, nombr_quant_cols, runs_for_totals; table_label = "precursors")
-
-    additional_yeast_in_human_only = max(yeast_human_only_mbr - yeast_human_only_no_mbr, 0)
-    total_additional_ids = max(total_ids_mbr - total_ids_no_mbr, 0)
-    ftr = total_additional_ids > 0 ? additional_yeast_in_human_only / total_additional_ids : 0.0
+    protein_metrics = ftr_metrics_for_table(
+        protein_groups_mbr,
+        protein_groups_no_mbr,
+        protein_mbr_quant_cols,
+        protein_nombr_quant_cols,
+        human_only_runs;
+        table_label = "protein_groups",
+    )
 
     return Dict(
-        "yeast_ids_human_only_no_mbr" => yeast_human_only_no_mbr,
-        "yeast_ids_human_only_mbr" => yeast_human_only_mbr,
-        "total_ids_no_mbr" => total_ids_no_mbr,
-        "total_ids_mbr" => total_ids_mbr,
-        "additional_yeast_ids_in_human_only" => additional_yeast_in_human_only,
-        "total_additional_ids" => total_additional_ids,
-        "false_transfer_rate" => ftr,
+        "precursors" => precursor_metrics,
+        "protein_groups" => protein_metrics,
         "mbr_dataset" => mbr_name,
         "nombr_dataset" => nombr_name,
     )
