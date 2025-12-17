@@ -108,6 +108,31 @@ function compute_cv_metrics(
     (; runs, rows_evaluated, mean_cv)
 end
 
+function compute_grouped_cv_metrics(
+    df::DataFrame,
+    quant_col_names::AbstractVector{<:Union{Symbol, String}},
+    groups::Dict{String, Vector{String}};
+    table_label::AbstractString = "wide_table",
+)
+    if isempty(groups)
+        return compute_cv_metrics(df, quant_col_names; table_label = table_label)
+    end
+
+    total_runs = 0
+    total_rows = 0
+    weighted_cv_sum = 0.0
+
+    for runs in values(groups)
+        metrics = compute_cv_metrics(df, runs; table_label = table_label)
+        total_runs += metrics.runs
+        total_rows += metrics.rows_evaluated
+        weighted_cv_sum += metrics.mean_cv * metrics.rows_evaluated
+    end
+
+    mean_cv = total_rows > 0 ? weighted_cv_sum / total_rows : 0.0
+    (; runs = total_runs, rows_evaluated = total_rows, mean_cv = mean_cv)
+end
+
 function load_dataset_config(dataset_dir::AbstractString)
     config_path = joinpath(dataset_dir, "config.json")
     if !isfile(config_path)
@@ -469,6 +494,7 @@ function compute_dataset_metrics(
         else
             quant_column_names_from_proteins(protein_groups_wide)
         end
+        run_groups = run_groups_for_dataset(experimental_design, dataset_name)
         precursor_wide_metrics = nothing
         protein_wide_metrics = nothing
         precursor_cv_metrics = nothing
@@ -496,11 +522,17 @@ function compute_dataset_metrics(
             protein_wide_metrics = compute_wide_metrics(
                 protein_groups_wide, quant_col_names; table_label = "protein_groups_wide"
             )
-            precursor_cv_metrics = compute_cv_metrics(
-                precursors_wide, quant_col_names; table_label = "precursors_wide"
+            precursor_cv_metrics = compute_grouped_cv_metrics(
+                precursors_wide,
+                quant_col_names,
+                run_groups;
+                table_label = "precursors_wide",
             )
-            protein_cv_metrics = compute_cv_metrics(
-                protein_groups_wide, quant_col_names; table_label = "protein_groups_wide"
+            protein_cv_metrics = compute_grouped_cv_metrics(
+                protein_groups_wide,
+                quant_col_names,
+                run_groups;
+                table_label = "protein_groups_wide",
             )
         end
 
@@ -739,12 +771,27 @@ function run_groups_for_dataset(
 )
     entry = experimental_design_entry(experimental_design, dataset_name)
     grouping = get(entry, "composition", nothing)
-    grouping isa AbstractDict || return Dict{String, Vector{String}}()
+    if grouping isa AbstractDict
+        groups = Dict{String, Vector{String}}()
+        for (group, runs) in grouping
+            if runs isa AbstractVector
+                groups[String(group)] = [String(r) for r in runs]
+            end
+        end
+        return groups
+    end
+
+    runs = get(entry, "runs", nothing)
+    runs isa AbstractDict || return Dict{String, Vector{String}}()
 
     groups = Dict{String, Vector{String}}()
-    for (group, runs) in grouping
-        if runs isa AbstractVector
-            groups[String(group)] = [String(r) for r in runs]
+    for (condition, run_list) in runs
+        if run_list isa AbstractVector
+            for run in run_list
+                push!(get!(groups, String(run), String[]), String(condition))
+            end
+        else
+            push!(get!(groups, String(run_list), String[]), String(condition))
         end
     end
 
