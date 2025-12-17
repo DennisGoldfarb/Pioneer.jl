@@ -787,9 +787,11 @@ function run_groups_for_dataset(
     groups = Dict{String, Vector{String}}()
     for (condition, run_list) in runs
         if run_list isa AbstractVector
-            groups[String(condition)] = [String(r) for r in run_list]
+            for run in run_list
+                push!(get!(groups, String(run), String[]), String(condition))
+            end
         else
-            push!(get!(groups, String(run_list)), String(condition))
+            push!(get!(groups, String(run_list), String[]), String(condition))
         end
     end
 
