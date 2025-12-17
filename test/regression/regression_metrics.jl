@@ -740,15 +740,20 @@ end
 
 function load_three_proteome_designs(path::AbstractString)
     if isdir(path)
-        files = filter(f -> endswith(f, ".json"), readdir(path; join=true))
+        files = filter(f -> endswith(f, "_ED.json"), readdir(path; join=true))
         isempty(files) && return Dict{String, Any}()
 
         designs = Dict{String, Any}()
         for file in files
             parsed = load_three_proteome_designs(file)
             if parsed isa NamedTuple
-                key = replace(replace(basename(file), r"\.TP\.json$" => ""), r"\.json$" => "")
-                designs[key] = parsed
+                basename_no_ext = replace(basename(file), r"\.json$" => "")
+                if endswith(basename_no_ext, "_ED")
+                    designs[basename_no_ext] = parsed
+                    designs[basename_no_ext[1:end-3]] = parsed
+                else
+                    designs[basename_no_ext] = parsed
+                end
             elseif parsed isa Dict
                 merge!(designs, parsed)
             end
@@ -1380,7 +1385,7 @@ function main()
     three_proteome_designs_path = get(
         ENV,
         "PIONEER_THREE_PROTEOME_DESIGNS",
-        joinpath(@__DIR__, "..", "..", "pioneer-regression-configs", "three_proteome"),
+        joinpath(@__DIR__, "..", "..", "pioneer-regression-configs", "experimental_designs"),
     )
     three_proteome_designs = load_three_proteome_designs(three_proteome_designs_path)
 
