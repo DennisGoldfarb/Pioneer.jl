@@ -43,31 +43,31 @@ jobs:
       - name: Run SearchDIA for all parameter files
         env:
           PIONEER_PARAMS_DIR: ${{ github.workspace }}/pioneer-regression-configs/params
-        shell: bash
+        shell: powershell
         run: |
-          set -euo pipefail
-          params_dir="${PIONEER_PARAMS_DIR:-}"
-          if [[ -z "$params_dir" ]]; then
-            echo "PIONEER_PARAMS_DIR is not set."
-            exit 1
-          fi
+          $ErrorActionPreference = "Stop"
+          $paramsDir = $env:PIONEER_PARAMS_DIR
 
-          if [[ ! -d "$params_dir" ]]; then
-            echo "Parameters directory not found: $params_dir"
+          if (-not $paramsDir) {
+            Write-Error "PIONEER_PARAMS_DIR is not set."
             exit 1
-          fi
+          }
 
-          shopt -s nullglob
-          param_files=("$params_dir"/*.json)
-          if (( ${#param_files[@]} == 0 )); then
-            echo "No parameter files found in $params_dir"
+          if (-not (Test-Path $paramsDir)) {
+            Write-Error "Parameters directory not found: $paramsDir"
             exit 1
-          fi
+          }
 
-          for param_file in "${param_files[@]}"; do
-            echo "Running pioneer search for ${param_file}"
-            pioneer search "$param_file"
-          done
+          $paramFiles = Get-ChildItem -Path $paramsDir -Filter *.json
+          if (-not $paramFiles) {
+            Write-Error "No parameter files found in $paramsDir"
+            exit 1
+          }
+
+          foreach ($paramFile in $paramFiles) {
+            Write-Host "Running pioneer search for $($paramFile.FullName)"
+            pioneer search $paramFile.FullName
+          }
 
       - name: Summarize regression results
         env:
