@@ -43,7 +43,17 @@ jobs:
       - name: Run SearchDIA for all parameter files
         env:
           PIONEER_PARAMS_DIR: ${{ github.workspace }}/pioneer-regression-configs/params
-        run: julia --threads auto --project=. test/run_regressions.jl
+        shell: pwsh
+        run: |
+          $paramsDir = $env:PIONEER_PARAMS_DIR
+          if (-not (Test-Path $paramsDir)) {
+            throw "Parameters directory not found: $paramsDir"
+          }
+
+          Get-ChildItem -Path $paramsDir -Filter *.json | ForEach-Object {
+            Write-Host "Running pioneer search for $($_.FullName)"
+            pioneer search $_.FullName
+          }
 
       - name: Summarize regression results
         env:
