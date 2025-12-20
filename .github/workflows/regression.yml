@@ -41,10 +41,39 @@ jobs:
       - name: Instantiate project
         run: julia --threads auto --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.build()'
 
+      - name: Add pioneer to PATH
+        shell: powershell
+        run: |
+          "C:\Program Files\Pioneer" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Run SearchDIA for all parameter files
         env:
           PIONEER_PARAMS_DIR: ${{ github.workspace }}/pioneer-regression-configs/params
-        run: julia --threads auto --project=. test/run_regressions.jl
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $paramsDir = $env:PIONEER_PARAMS_DIR
+
+          if (-not $paramsDir) {
+            Write-Error "PIONEER_PARAMS_DIR is not set."
+            exit 1
+          }
+
+          if (-not (Test-Path $paramsDir)) {
+            Write-Error "Parameters directory not found: $paramsDir"
+            exit 1
+          }
+
+          $paramFiles = Get-ChildItem -Path $paramsDir -Filter *.json
+          if (-not $paramFiles) {
+            Write-Error "No parameter files found in $paramsDir"
+            exit 1
+          }
+
+          foreach ($paramFile in $paramFiles) {
+            Write-Host "Running pioneer search for $($paramFile.FullName)"
+            pioneer search $paramFile.FullName
+          }
 
       - name: Summarize regression results
         env:
