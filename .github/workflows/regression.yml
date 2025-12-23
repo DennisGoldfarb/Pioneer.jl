@@ -9,6 +9,9 @@ jobs:
     name: Julia ${{ matrix.version }} regression sweep
     runs-on: [self-hosted, Linux]
     timeout-minutes: 7200
+    env:
+      PIONEER_RELEASE_REPO: nwamsley1/Pioneer.jl
+      PIONEER_RELEASE_REF: v0.6.4
     strategy:
       matrix:
         version: ['1.11']
@@ -16,6 +19,8 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          repository: ${{ env.PIONEER_RELEASE_REPO }}
+          ref: ${{ env.PIONEER_RELEASE_REF }}
 
       - name: Configure SSH for cluster access
         env:
@@ -38,8 +43,8 @@ jobs:
           CLUSTER_HOST: ${{ secrets.CLUSTER_HOST }}
           CLUSTER_USERNAME: ${{ secrets.CLUSTER_USERNAME }}
           CLUSTER_RUN_ROOT: ${{ secrets.CLUSTER_RUN_ROOT }}
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_REF: ${{ env.PIONEER_RELEASE_REF }}
+          TARGET_REPO: ${{ env.PIONEER_RELEASE_REPO }}
           CLUSTER_ENTRAPMENT_REPO: ${{ secrets.CLUSTER_ENTRAPMENT_REPO }}
         shell: bash
         run: |
@@ -55,7 +60,7 @@ jobs:
           pioneer_dir="${remote_run_dir}/pioneer"
           entrapment_dir="${remote_run_dir}/PioneerEntrapment.jl"
           depot_dir="${remote_run_dir}/julia-depot"
-          pioneer_repo="https://github.com/${GITHUB_REPOSITORY}"
+          pioneer_repo="https://github.com/${TARGET_REPO}"
           entrapment_repo="${CLUSTER_ENTRAPMENT_REPO:-nwamsley1/PioneerEntrapment.jl}"
           entrapment_repo_url="$entrapment_repo"
 
@@ -77,7 +82,7 @@ jobs:
             -o ConnectTimeout=30
           )
 
-          timeout 300 ssh "${ssh_options[@]}" "${CLUSTER_USERNAME}@${CLUSTER_HOST}" "RUN_ROOT='${remote_run_root}' RUN_DIR='${remote_run_dir}' PIONEER_DIR='${pioneer_dir}' DEPOT_DIR='${depot_dir}' PIONEER_REPO='${pioneer_repo}' TARGET_SHA='${GITHUB_SHA}' ENTRAPMENT_DIR='${entrapment_dir}' ENTRAPMENT_REPO_URL='${entrapment_repo_url}' bash -s" <<'EOF'
+          timeout 300 ssh "${ssh_options[@]}" "${CLUSTER_USERNAME}@${CLUSTER_HOST}" "RUN_ROOT='${remote_run_root}' RUN_DIR='${remote_run_dir}' PIONEER_DIR='${pioneer_dir}' DEPOT_DIR='${depot_dir}' PIONEER_REPO='${pioneer_repo}' TARGET_REF='${TARGET_REF}' ENTRAPMENT_DIR='${entrapment_dir}' ENTRAPMENT_REPO_URL='${entrapment_repo_url}' bash -s" <<'EOF'
             set -eu
             mkdir -p "$RUN_DIR"
             cd "$RUN_DIR"
@@ -95,7 +100,7 @@ jobs:
               git clone "$PIONEER_REPO" "$PIONEER_DIR"
             fi
 
-            git -C "$PIONEER_DIR" checkout --force "$TARGET_SHA"
+            git -C "$PIONEER_DIR" checkout --force "$TARGET_REF"
 
             if [ -d "$ENTRAPMENT_DIR/.git" ]; then
               git -C "$ENTRAPMENT_DIR" fetch --all --tags
