@@ -135,6 +135,9 @@ jobs:
             fi
 
             mkdir -p "$DEPOT_DIR"
+
+            JULIA_DEPOT_PATH="$DEPOT_DIR" julia --project="$PIONEER_SEARCH_DIR" -e 'using Pkg; Pkg.instantiate()'
+            JULIA_DEPOT_PATH="$DEPOT_DIR" julia --project="$PIONEER_METRICS_DIR" -e 'using Pkg; Pkg.instantiate()'
           EOF
 
       - name: Submit regression search jobs on cluster
