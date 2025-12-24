@@ -7,7 +7,7 @@ on:
 jobs:
   regression:
     name: Julia ${{ matrix.version }} regression sweep
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, pioneer-regression]
     timeout-minutes: 7200
     strategy:
       matrix:
@@ -17,7 +17,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Regression execution temporarily disabled
+        run: echo "Cluster submissions are temporarily disabled while metrics-change workflows are under development."
+
       - name: Configure SSH for cluster access
+        if: ${{ false }}
         env:
           CLUSTER_SSH_KEY: ${{ secrets.CLUSTER_SSH_KEY }}
           CLUSTER_HOST: ${{ secrets.CLUSTER_HOST }}
@@ -34,6 +38,7 @@ jobs:
           ssh-keyscan -H "$CLUSTER_HOST" >> ~/.ssh/known_hosts
 
       - name: Prepare cluster workspace (configs, Pioneer, and depot)
+        if: ${{ false }}
         env:
           CLUSTER_HOST: ${{ secrets.CLUSTER_HOST }}
           CLUSTER_USERNAME: ${{ secrets.CLUSTER_USERNAME }}
@@ -107,6 +112,7 @@ jobs:
           EOF
 
       - name: Submit regression search jobs on cluster
+        if: ${{ false }}
         env:
           CLUSTER_HOST: ${{ secrets.CLUSTER_HOST }}
           CLUSTER_USERNAME: ${{ secrets.CLUSTER_USERNAME }}
@@ -283,6 +289,7 @@ jobs:
           EOF
 
       - name: Wait for regression outputs on shared storage
+        if: ${{ false }}
         env:
           CLUSTER_RUN_DIR_MOUNT: ${{ env.CLUSTER_RUN_DIR_MOUNT }}
         shell: bash
@@ -404,7 +411,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Submit cluster cleanup job
-        if: always()
+        if: ${{ false }}
         env:
           CLUSTER_HOST: ${{ secrets.CLUSTER_HOST }}
           CLUSTER_USERNAME: ${{ secrets.CLUSTER_USERNAME }}
