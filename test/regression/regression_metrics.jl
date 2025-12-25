@@ -154,6 +154,20 @@ function metric_preferences(config::Dict, dataset_name::AbstractString)
     (; groups)
 end
 
+function metric_groups_for_search(config::Dict, search_name::AbstractString)
+    entry = get(config, search_name, DEFAULT_METRIC_GROUPS)
+
+    if entry isa AbstractDict
+        groups = get(entry, "groups", DEFAULT_METRIC_GROUPS)
+        return normalize_metric_groups(groups)
+    elseif entry isa AbstractVector
+        return normalize_metric_groups(entry)
+    else
+        @warn "Invalid metrics entry for search; using defaults" search=search_name entry_type=typeof(entry)
+        return DEFAULT_METRIC_GROUPS
+    end
+end
+
 
 function dataset_dirs_from_root(root::AbstractString)
     !isdir(root) && return String[]
@@ -175,7 +189,276 @@ function resolve_results_root()
     error("Results directory is not specified; set PIONEER_RESULTS_DIR or pass a path argument")
 end
 
+function load_metrics_config(path::AbstractString)
+    if isempty(path)
+        @info "No metrics config provided; using defaults for all searches"
+        return Dict{String, Any}()
+    end
+
+    if !isfile(path)
+        @warn "Metrics config not found; using defaults for all searches" metrics_config_path=path
+        return Dict{String, Any}()
+    end
+
+    try
+        raw = JSON.parsefile(path)
+        if raw isa AbstractDict
+            return Dict{String, Any}(String(k) => v for (k, v) in raw)
+        end
+        @warn "Metrics config is not a dictionary; using defaults" metrics_config_path=path
+        return Dict{String, Any}()
+    catch err
+        @warn "Failed to parse metrics config; using defaults" metrics_config_path=path error=err
+        return Dict{String, Any}()
+    end
+end
+
+function search_param_files(params_dir::AbstractString)
+    !isdir(params_dir) && return String[]
+    filter(readdir(params_dir; join=true)) do path
+        isfile(path) && occursin(r"search.*\.json$", basename(path))
+    end
+end
+
+function results_dir_from_param(path::AbstractString)
+    try
+        parsed = JSON.parsefile(path)
+        results = get(parsed, "results", nothing)
+        if results isa AbstractString
+            return results
+        end
+
+        paths_block = get(parsed, "paths", nothing)
+        if paths_block isa AbstractDict
+            nested_results = get(paths_block, "results", nothing)
+            if nested_results isa AbstractString
+                return nested_results
+            end
+        end
+    catch err
+        @warn "Failed to parse search param file" param_path=path error=err
+        return nothing
+    end
+
+    @warn "Search param file missing results entry" param_path=path
+    nothing
+end
+
+function dataset_name_from_results(results_dir::AbstractString)
+    parent_dir = dirname(results_dir)
+    if isempty(parent_dir) || parent_dir == results_dir
+        return basename(results_dir)
+    end
+
+    basename(parent_dir)
+end
+
+function output_metrics_path(results_dir::AbstractString, dataset_name::AbstractString, search_name::AbstractString)
+    filename = string("metrics_", dataset_name, "_", search_name, ".json")
+    joinpath(results_dir, filename)
+end
+
+function is_log_file(path::AbstractString)
+    lowercasepath = lowercase(path)
+    endswith(lowercasepath, ".log") || endswith(lowercasepath, ".log.gz")
+end
+
+function cleanup_entrapment_dir(entrapment_dir::AbstractString)
+    isdir(entrapment_dir) || return
+
+    for entry in readdir(entrapment_dir; join = true)
+        if isfile(entry)
+            endswith(entry, ".png") && continue
+            rm(entry; force = true, recursive = true)
+        else
+            rm(entry; force = true, recursive = true)
+        end
+    end
+end
+
+function cleanup_results_dir(results_dir::AbstractString, metrics_path::AbstractString)
+    if !isdir(results_dir)
+        @warn "Results directory missing during cleanup" results_dir = results_dir
+        return
+    end
+
+    metrics_path_abs = abspath(metrics_path)
+
+    for entry in readdir(results_dir; join = true)
+        entry_abs = abspath(entry)
+        if entry_abs == metrics_path_abs
+            continue
+        end
+
+        if isfile(entry)
+            if is_log_file(entry)
+                continue
+            end
+        elseif isdir(entry) && basename(entry) == "entrapment_analysis"
+            cleanup_entrapment_dir(entry)
+            continue
+        end
+
+        rm(entry; force = true, recursive = true)
+    end
+end
+
+function archive_results(
+    results_dir::AbstractString,
+    metrics_path::AbstractString;
+    archive_root::AbstractString = "",
+    dataset_name::AbstractString = "dataset",
+    search_name::AbstractString = "search",
+)
+    if isempty(archive_root)
+        @info "Archive root not provided; skipping move of regression outputs" results_dir=results_dir
+        return
+    end
+
+    target_dir = joinpath(archive_root, "results", dataset_name)
+    mkpath(target_dir)
+
+    if isfile(metrics_path)
+        target_metrics = joinpath(target_dir, basename(metrics_path))
+        mv(metrics_path, target_metrics; force = true)
+        metrics_path = target_metrics
+    end
+
+    entrapment_dir = joinpath(results_dir, "entrapment_analysis")
+    if isdir(entrapment_dir)
+        for entry in readdir(entrapment_dir; join = true)
+            if isfile(entry) && endswith(lowercase(entry), ".png")
+                mv(entry, joinpath(target_dir, basename(entry)); force = true)
+            end
+        end
+    end
+
+    for entry in readdir(results_dir; join = true)
+        if isfile(entry) && is_log_file(entry)
+            mv(entry, joinpath(target_dir, basename(entry)); force = true)
+        end
+    end
+
+    try
+        rm(results_dir; force = true, recursive = true)
+    catch err
+        @warn "Failed to remove original results directory after archiving" results_dir=results_dir error=err
+    end
+
+    @info "Archived regression outputs" results_dir=results_dir metrics_path=metrics_path target_dir=target_dir
+end
+
+function compute_metrics_for_params_dir(
+    params_dir::AbstractString;
+    metrics_config_path::AbstractString = "",
+    experimental_design_path::AbstractString = "",
+    three_proteome_designs_path::AbstractString = "",
+    archive_root::AbstractString = "",
+)
+    isdir(params_dir) || error("Params directory does not exist: $params_dir")
+
+    param_files = search_param_files(params_dir)
+    isempty(param_files) && error("No search*.json files found in params directory $params_dir")
+
+    metrics_config = load_metrics_config(metrics_config_path)
+    experimental_design = isempty(experimental_design_path) ? Dict{String, Any}() : load_experimental_design(experimental_design_path)
+
+    dataset_entries = NamedTuple{(:search_name, :results_dir, :dataset_name)}[]
+    dataset_paths = Dict{String, String}()
+
+    for param_file in param_files
+        results_dir = results_dir_from_param(param_file)
+        results_dir === nothing && error("Missing results entry in search param file $param_file")
+
+        dataset_name = dataset_name_from_results(results_dir)
+        search_name = replace(basename(param_file), ".json" => "")
+        push!(dataset_entries, (; search_name, results_dir, dataset_name))
+        haskey(dataset_paths, dataset_name) || (dataset_paths[dataset_name] = results_dir)
+    end
+
+    isempty(dataset_entries) && error("No valid parameter files remain after parsing results paths")
+
+    three_proteome_designs = nothing
+
+    for entry in dataset_entries
+        metric_groups = metric_groups_for_search(metrics_config, entry.search_name)
+        normalized_groups = Set(replace.(lowercase.(metric_groups), "-" => "_"))
+        need_three_proteome = ("fold_change" in normalized_groups) || ("three_proteome" in normalized_groups)
+
+        if need_three_proteome && three_proteome_designs === nothing && !isempty(three_proteome_designs_path)
+            three_proteome_designs = load_three_proteome_designs(three_proteome_designs_path)
+        end
+
+        metrics = compute_dataset_metrics(
+            entry.results_dir,
+            entry.dataset_name;
+            metric_groups = metric_groups,
+            experimental_design = experimental_design,
+            three_proteome_designs = three_proteome_designs,
+            dataset_paths = dataset_paths,
+        )
+
+        output_path = output_metrics_path(entry.results_dir, entry.dataset_name, entry.search_name)
+
+        metrics === nothing && begin
+            @warn "No metrics produced for search; archiving logs only" search=entry.search_name dataset=entry.dataset_name results_dir=entry.results_dir
+            cleanup_results_dir(entry.results_dir, output_path)
+            archive_results(
+                entry.results_dir,
+                output_path;
+                archive_root = archive_root,
+                dataset_name = entry.dataset_name,
+                search_name = entry.search_name,
+            )
+            continue
+        end
+
+        if metrics isa AbstractDict && isempty(metrics)
+            @warn "No metrics produced for search; archiving logs only" search=entry.search_name dataset=entry.dataset_name results_dir=entry.results_dir
+            cleanup_results_dir(entry.results_dir, output_path)
+            archive_results(
+                entry.results_dir,
+                output_path;
+                archive_root = archive_root,
+                dataset_name = entry.dataset_name,
+                search_name = entry.search_name,
+            )
+            continue
+        end
+
+        open(output_path, "w") do io
+            JSON.print(io, metrics)
+        end
+
+        cleanup_results_dir(entry.results_dir, output_path)
+        archive_results(
+            entry.results_dir,
+            output_path;
+            archive_root = archive_root,
+            dataset_name = entry.dataset_name,
+            search_name = entry.search_name,
+        )
+    end
+end
+
 function main()
+    params_dir_override = get(ENV, "PIONEER_PARAMS_DIR", "")
+    if !isempty(params_dir_override)
+        metrics_config_path = get(ENV, "PIONEER_METRICS_FILE", "")
+        experimental_design_path = get(ENV, "PIONEER_EXPERIMENTAL_DESIGN", "")
+        three_proteome_designs_path = get(ENV, "PIONEER_THREE_PROTEOME_DESIGNS", "")
+        archive_root = get(ENV, "PIONEER_ARCHIVE_ROOT", "")
+
+        compute_metrics_for_params_dir(
+            params_dir_override;
+            metrics_config_path = metrics_config_path,
+            experimental_design_path = experimental_design_path,
+            three_proteome_designs_path = three_proteome_designs_path,
+            archive_root = archive_root,
+        )
+        return
+    end
+
     results_dir = resolve_results_root()
     isdir(results_dir) || error("Results directory does not exist: $results_dir")
     dataset_dirs = dataset_dirs_from_root(results_dir)
