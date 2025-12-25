@@ -194,26 +194,25 @@ jobs:
               exit 1
             fi
 
-            setup_job_id=""
-            if [ "${METRICS_ONLY:-false}" != "true" ]; then
-              if [ ! -f "$SETUP_SCRIPT" ]; then
-                echo "Missing setup job script: $SETUP_SCRIPT" >&2
-                exit 1
-              fi
+            if [ ! -f "$SETUP_SCRIPT" ]; then
+              echo "Missing setup job script: $SETUP_SCRIPT" >&2
+              exit 1
+            fi
 
+            if [ "${METRICS_ONLY:-false}" != "true" ]; then
               if [ ! -f "$JOB_SCRIPT" ]; then
                 echo "Missing job script: $JOB_SCRIPT" >&2
                 exit 1
               fi
+            fi
 
-              setup_submit=$(PIONEER_DIR="$PIONEER_DIR" PIONEER_ENTRAPMENT_DIR="$ENTRAPMENT_DIR" bsub < "$SETUP_SCRIPT")
-              setup_job_id=$(printf '%s\n' "$setup_submit" | sed -n 's/Job <\([0-9]\+\)>.*$/\1/p' | head -n 1)
+            setup_submit=$(PIONEER_DIR="$PIONEER_DIR" PIONEER_ENTRAPMENT_DIR="$ENTRAPMENT_DIR" bsub < "$SETUP_SCRIPT")
+            setup_job_id=$(printf '%s\n' "$setup_submit" | sed -n 's/Job <\([0-9]\+\)>.*$/\1/p' | head -n 1)
 
-              if [ -z "$setup_job_id" ]; then
-                echo "Failed to parse setup job ID from submission output:" >&2
-                printf '%s\n' "$setup_submit" >&2
-                exit 1
-              fi
+            if [ -z "$setup_job_id" ]; then
+              echo "Failed to parse setup job ID from submission output:" >&2
+              printf '%s\n' "$setup_submit" >&2
+              exit 1
             fi
 
             param_list=$(find "$PARAMS_DIR" -type f -name 'search*.json' -print)
@@ -291,7 +290,7 @@ jobs:
                 continue
               fi
 
-              dep_expr=""
+              dep_expr="ended(${setup_job_id})"
               if [ "${METRICS_ONLY:-false}" != "true" ]; then
                 job_list_file="$job_id_dir/${dataset_name}.search"
                 if [ ! -s "$job_list_file" ]; then
@@ -301,16 +300,8 @@ jobs:
 
                 while IFS= read -r job_id; do
                   [ -n "$job_id" ] || continue
-                  if [ -n "$dep_expr" ]; then
-                    dep_expr="$dep_expr && "
-                  fi
-                  dep_expr="${dep_expr}ended(${job_id})"
+                  dep_expr="${dep_expr} && ended(${job_id})"
                 done < "$job_list_file"
-
-                if [ -z "$dep_expr" ]; then
-                  echo "Skipping dataset $dataset_name: unable to build dependency expression" >&2
-                  continue
-                fi
               fi
 
               param_dataset_dir="$ADJUSTED_PARAMS_DIR/$dataset_name"
@@ -319,25 +310,14 @@ jobs:
                 continue
               fi
 
-              if [ -n "$dep_expr" ]; then
-                metrics_submit=$(\
-                  PIONEER_DIR="$PIONEER_DIR" \
-                  ENTRAPMENT_ANALYSES_PATH="$ENTRAPMENT_DIR" \
-                  PIONEER_PARAMS_DIR="$param_dataset_dir" \
-                  PIONEER_METRICS_FILE="$metrics_file" \
-                  PIONEER_EXPERIMENTAL_DESIGN="$exp_design_file" \
-                  PIONEER_ARCHIVE_ROOT="$RUN_DIR" \
-                  bsub -w "$dep_expr" < "$METRICS_SCRIPT")
-              else
-                metrics_submit=$(\
-                  PIONEER_DIR="$PIONEER_DIR" \
-                  ENTRAPMENT_ANALYSES_PATH="$ENTRAPMENT_DIR" \
-                  PIONEER_PARAMS_DIR="$param_dataset_dir" \
-                  PIONEER_METRICS_FILE="$metrics_file" \
-                  PIONEER_EXPERIMENTAL_DESIGN="$exp_design_file" \
-                  PIONEER_ARCHIVE_ROOT="$RUN_DIR" \
-                  bsub < "$METRICS_SCRIPT")
-              fi
+              metrics_submit=$(\
+                PIONEER_DIR="$PIONEER_DIR" \
+                ENTRAPMENT_ANALYSES_PATH="$ENTRAPMENT_DIR" \
+                PIONEER_PARAMS_DIR="$param_dataset_dir" \
+                PIONEER_METRICS_FILE="$metrics_file" \
+                PIONEER_EXPERIMENTAL_DESIGN="$exp_design_file" \
+                PIONEER_ARCHIVE_ROOT="$RUN_DIR" \
+                bsub -w "$dep_expr" < "$METRICS_SCRIPT")
 
               metrics_job_id=$(printf '%s\n' "$metrics_submit" | sed -n 's/Job <\([0-9]\+\)>.*$/\1/p' | head -n 1)
 
