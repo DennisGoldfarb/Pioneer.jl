@@ -3,12 +3,28 @@ name: Regression Tests
 on:
   push:
   workflow_dispatch:
+    inputs:
+      run_suffix:
+        description: "Existing run suffix to reuse (e.g., run-20450267487-4)."
+        required: false
+        type: string
+      metrics_only:
+        description: "Only submit metrics/cleanup for an existing run (skip searches)."
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 jobs:
   regression:
     name: Julia ${{ matrix.version }} regression sweep
     runs-on: [self-hosted, Linux, pioneer-regression]
     timeout-minutes: 7200
+    env:
+      METRICS_ONLY: ${{ github.event.inputs.metrics_only || 'true' }}
+      RUN_SUFFIX_INPUT: ${{ github.event.inputs.run_suffix || '' }}
     strategy:
       matrix:
         version: ['1.11']
@@ -17,11 +33,42 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Regression execution temporarily disabled
-        run: echo "Cluster submissions are temporarily disabled while metrics-change workflows are under development."
+      - name: Metrics-only notice
+        if: ${{ env.METRICS_ONLY == 'true' }}
+        run: echo "Metrics-only mode enabled; search submissions are skipped."
+
+      - name: Set run directory context
+        env:
+          CLUSTER_RUN_ROOT: ${{ secrets.CLUSTER_RUN_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_suffix="run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [ -n "${RUN_SUFFIX_INPUT}" ]; then
+            if [[ "${RUN_SUFFIX_INPUT}" == run-* ]]; then
+              run_suffix="${RUN_SUFFIX_INPUT}"
+            else
+              run_suffix="run-${RUN_SUFFIX_INPUT}"
+            fi
+          fi
+
+          remote_run_root_raw="${CLUSTER_RUN_ROOT:-/storage1/fs1/d.goldfarb/Active/Automation/Pioneer}"
+          remote_run_root="${remote_run_root_raw%/}"
+          mount_run_root_raw="/mnt/ris/Active/Automation/Pioneer"
+          mount_run_root="${mount_run_root_raw%/}"
+
+          remote_run_dir="${remote_run_root}/${run_suffix}"
+          mount_run_dir="${mount_run_root}/${run_suffix}"
+
+          echo "CLUSTER_RUN_DIR=${remote_run_dir}" >> "$GITHUB_ENV"
+          echo "CLUSTER_RUN_DIR_MOUNT=${mount_run_dir}" >> "$GITHUB_ENV"
+          echo "CLUSTER_RUN_SUFFIX=${run_suffix}" >> "$GITHUB_ENV"
+          echo "CLUSTER_PIONEER_DIR=${remote_run_dir}/pioneer" >> "$GITHUB_ENV"
+          echo "CLUSTER_ENTRAPMENT_DIR=${remote_run_dir}/PioneerEntrapment.jl" >> "$GITHUB_ENV"
+          echo "CLUSTER_DEPOT_DIR=${remote_run_dir}/julia-depot" >> "$GITHUB_ENV"
 
       - name: Configure SSH for cluster access
-        if: ${{ false }}
         env:
           CLUSTER_SSH_KEY: ${{ secrets.CLUSTER_SSH_KEY }}
           CLUSTER_HOST: ${{ secrets.CLUSTER_HOST }}
@@ -38,7 +85,7 @@ jobs:
           ssh-keyscan -H "$CLUSTER_HOST" >> ~/.ssh/known_hosts
 
       - name: Prepare cluster workspace (configs, Pioneer, and depot)
-        if: ${{ false }}
+        if: ${{ env.METRICS_ONLY != 'true' }}
         env:
           CLUSTER_HOST: ${{ secrets.CLUSTER_HOST }}
           CLUSTER_USERNAME: ${{ secrets.CLUSTER_USERNAME }}
@@ -52,14 +99,12 @@ jobs:
 
           remote_run_root_raw="${CLUSTER_RUN_ROOT:-/storage1/fs1/d.goldfarb/Active/Automation/Pioneer}"
           remote_run_root="${remote_run_root_raw%/}"
-          run_suffix="run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          remote_run_dir="${remote_run_root}/${run_suffix}"
-          mount_run_root_raw="/mnt/ris/Active/Automation/Pioneer"
-          mount_run_root="${mount_run_root_raw%/}"
-          mount_run_dir="${mount_run_root}/${run_suffix}"
-          pioneer_dir="${remote_run_dir}/pioneer"
-          entrapment_dir="${remote_run_dir}/PioneerEntrapment.jl"
-          depot_dir="${remote_run_dir}/julia-depot"
+          remote_run_dir="${CLUSTER_RUN_DIR:?CLUSTER_RUN_DIR not set}"
+          mount_run_dir="${CLUSTER_RUN_DIR_MOUNT:?CLUSTER_RUN_DIR_MOUNT not set}"
+          run_suffix="${CLUSTER_RUN_SUFFIX:?CLUSTER_RUN_SUFFIX not set}"
+          pioneer_dir="${CLUSTER_PIONEER_DIR:?CLUSTER_PIONEER_DIR not set}"
+          entrapment_dir="${CLUSTER_ENTRAPMENT_DIR:?CLUSTER_ENTRAPMENT_DIR not set}"
+          depot_dir="${CLUSTER_DEPOT_DIR:?CLUSTER_DEPOT_DIR not set}"
           pioneer_repo="https://github.com/${GITHUB_REPOSITORY}"
           entrapment_repo="${CLUSTER_ENTRAPMENT_REPO:-nwamsley1/PioneerEntrapment.jl}"
           entrapment_repo_url="$entrapment_repo"
@@ -67,13 +112,6 @@ jobs:
           if [[ "$entrapment_repo" != http* ]]; then
             entrapment_repo_url="https://github.com/${entrapment_repo}"
           fi
-
-          echo "CLUSTER_RUN_DIR=${remote_run_dir}" >> "$GITHUB_ENV"
-          echo "CLUSTER_RUN_DIR_MOUNT=${mount_run_dir}" >> "$GITHUB_ENV"
-          echo "CLUSTER_RUN_SUFFIX=${run_suffix}" >> "$GITHUB_ENV"
-          echo "CLUSTER_PIONEER_DIR=${pioneer_dir}" >> "$GITHUB_ENV"
-          echo "CLUSTER_ENTRAPMENT_DIR=${entrapment_dir}" >> "$GITHUB_ENV"
-          echo "CLUSTER_DEPOT_DIR=${depot_dir}" >> "$GITHUB_ENV"
 
           ssh_options=(
             -o BatchMode=yes
@@ -112,7 +150,6 @@ jobs:
           EOF
 
       - name: Submit regression search jobs on cluster
-        if: ${{ false }}
         env:
           CLUSTER_HOST: ${{ secrets.CLUSTER_HOST }}
           CLUSTER_USERNAME: ${{ secrets.CLUSTER_USERNAME }}
@@ -123,6 +160,7 @@ jobs:
           REGRESSION_JOB_SCRIPT: ${{ vars.REGRESSION_JOB_SCRIPT }}
           SETUP_JOB_SCRIPT: ${{ vars.SETUP_JOB_SCRIPT }}
           METRICS_JOB_SCRIPT: ${{ vars.METRICS_JOB_SCRIPT }}
+          METRICS_ONLY: ${{ env.METRICS_ONLY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -137,7 +175,7 @@ jobs:
           setup_script_path="${remote_run_dir}/${SETUP_JOB_SCRIPT:-regression-configs/job_scripts/setup.bsub}"
           metrics_script_path="${remote_run_dir}/${METRICS_JOB_SCRIPT:-regression-configs/job_scripts/metrics.bsub}"
           adjusted_params_dir="${remote_run_dir}/adjusted-params"
-          run_suffix="run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          run_suffix="${CLUSTER_RUN_SUFFIX:-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}}"
 
           ssh_options=(
             -o BatchMode=yes
@@ -147,31 +185,34 @@ jobs:
           )
 
           timeout 300 ssh "${ssh_options[@]}" "${CLUSTER_USERNAME}@${CLUSTER_HOST}" \
-            "RUN_DIR='${remote_run_dir}' PIONEER_DIR='${pioneer_dir}' ENTRAPMENT_DIR='${entrapment_dir}' PARAMS_DIR='${params_dir}' JOB_SCRIPT='${job_script_path}' SETUP_SCRIPT='${setup_script_path}' METRICS_SCRIPT='${metrics_script_path}' ADJUSTED_PARAMS_DIR='${adjusted_params_dir}' RUN_ID_SUFFIX='${run_suffix}' bash -s" <<'EOF'
+            "RUN_DIR='${remote_run_dir}' PIONEER_DIR='${pioneer_dir}' ENTRAPMENT_DIR='${entrapment_dir}' PARAMS_DIR='${params_dir}' JOB_SCRIPT='${job_script_path}' SETUP_SCRIPT='${setup_script_path}' METRICS_SCRIPT='${metrics_script_path}' ADJUSTED_PARAMS_DIR='${adjusted_params_dir}' RUN_ID_SUFFIX='${run_suffix}' METRICS_ONLY='${METRICS_ONLY}' bash -s" <<'EOF'
             set -eu
-
-            if [ ! -f "$SETUP_SCRIPT" ]; then
-              echo "Missing setup job script: $SETUP_SCRIPT" >&2
-              exit 1
-            fi
-
-            if [ ! -f "$JOB_SCRIPT" ]; then
-              echo "Missing job script: $JOB_SCRIPT" >&2
-              exit 1
-            fi
 
             if [ ! -f "$METRICS_SCRIPT" ]; then
               echo "Missing metrics job script: $METRICS_SCRIPT" >&2
               exit 1
             fi
 
-            setup_submit=$(PIONEER_DIR="$PIONEER_DIR" PIONEER_ENTRAPMENT_DIR="$ENTRAPMENT_DIR" bsub < "$SETUP_SCRIPT")
-            setup_job_id=$(printf '%s\n' "$setup_submit" | sed -n 's/Job <\([0-9]\+\)>.*$/\1/p' | head -n 1)
+            setup_job_id=""
+            if [ "${METRICS_ONLY:-false}" != "true" ]; then
+              if [ ! -f "$SETUP_SCRIPT" ]; then
+                echo "Missing setup job script: $SETUP_SCRIPT" >&2
+                exit 1
+              fi
 
-            if [ -z "$setup_job_id" ]; then
-              echo "Failed to parse setup job ID from submission output:" >&2
-              printf '%s\n' "$setup_submit" >&2
-              exit 1
+              if [ ! -f "$JOB_SCRIPT" ]; then
+                echo "Missing job script: $JOB_SCRIPT" >&2
+                exit 1
+              fi
+
+              setup_submit=$(PIONEER_DIR="$PIONEER_DIR" PIONEER_ENTRAPMENT_DIR="$ENTRAPMENT_DIR" bsub < "$SETUP_SCRIPT")
+              setup_job_id=$(printf '%s\n' "$setup_submit" | sed -n 's/Job <\([0-9]\+\)>.*$/\1/p' | head -n 1)
+
+              if [ -z "$setup_job_id" ]; then
+                echo "Failed to parse setup job ID from submission output:" >&2
+                printf '%s\n' "$setup_submit" >&2
+                exit 1
+              fi
             fi
 
             param_list=$(find "$PARAMS_DIR" -type f -name 'search*.json' -print)
@@ -202,7 +243,11 @@ jobs:
               fi
 
               base_results=${results_path%/}
-              adjusted_results="${base_results}/${RUN_ID_SUFFIX}"
+              if [ "${base_results##*/}" = "$RUN_ID_SUFFIX" ]; then
+                adjusted_results="$base_results"
+              else
+                adjusted_results="${base_results}/${RUN_ID_SUFFIX}"
+              fi
               dataset_name="$(basename "$(dirname "$adjusted_results")")"
               escaped_results=$(printf '%s\n' "$adjusted_results" | sed 's/[&/]/\\&/g')
 
@@ -210,16 +255,18 @@ jobs:
 
               echo "${dataset_name}" >> "$manifest_file"
 
-              search_submit=$(PIONEER_DIR="$PIONEER_DIR" PARAM_FILE="$adjusted_path" bsub -w "ended($setup_job_id)" < "$JOB_SCRIPT")
-              search_job_id=$(printf '%s\n' "$search_submit" | sed -n 's/Job <\([0-9]\+\)>.*$/\1/p' | head -n 1)
+              if [ "${METRICS_ONLY:-false}" != "true" ]; then
+                search_submit=$(PIONEER_DIR="$PIONEER_DIR" PARAM_FILE="$adjusted_path" bsub -w "ended($setup_job_id)" < "$JOB_SCRIPT")
+                search_job_id=$(printf '%s\n' "$search_submit" | sed -n 's/Job <\([0-9]\+\)>.*$/\1/p' | head -n 1)
 
-              if [ -z "$search_job_id" ]; then
-                echo "Failed to parse search job ID from submission output:" >&2
-                printf '%s\n' "$search_submit" >&2
-                exit 1
+                if [ -z "$search_job_id" ]; then
+                  echo "Failed to parse search job ID from submission output:" >&2
+                  printf '%s\n' "$search_submit" >&2
+                  exit 1
+                fi
+
+                echo "$search_job_id" >> "$job_id_dir/${dataset_dir_name}.search"
               fi
-
-              echo "$search_job_id" >> "$job_id_dir/${dataset_dir_name}.search"
             done
 
             dataset_dirs=$(find "$PARAMS_DIR" -mindepth 1 -maxdepth 1 -type d -print)
@@ -231,7 +278,6 @@ jobs:
 
             printf '%s\n' "$dataset_dirs" | while IFS= read -r dataset_dir; do
               dataset_name="$(basename "$dataset_dir")"
-              job_list_file="$job_id_dir/${dataset_name}.search"
               metrics_file="$dataset_dir/metrics.json"
               exp_design_file="$dataset_dir/experimental_design.json"
 
@@ -244,23 +290,26 @@ jobs:
                 continue
               fi
 
-              if [ ! -s "$job_list_file" ]; then
-                echo "Skipping dataset $dataset_name: no search job IDs recorded" >&2
-                continue
-              fi
-
               dep_expr=""
-              while IFS= read -r job_id; do
-                [ -n "$job_id" ] || continue
-                if [ -n "$dep_expr" ]; then
-                  dep_expr="$dep_expr && "
+              if [ "${METRICS_ONLY:-false}" != "true" ]; then
+                job_list_file="$job_id_dir/${dataset_name}.search"
+                if [ ! -s "$job_list_file" ]; then
+                  echo "Skipping dataset $dataset_name: no search job IDs recorded" >&2
+                  continue
                 fi
-                dep_expr="${dep_expr}ended(${job_id})"
-              done < "$job_list_file"
 
-              if [ -z "$dep_expr" ]; then
-                echo "Skipping dataset $dataset_name: unable to build dependency expression" >&2
-                continue
+                while IFS= read -r job_id; do
+                  [ -n "$job_id" ] || continue
+                  if [ -n "$dep_expr" ]; then
+                    dep_expr="$dep_expr && "
+                  fi
+                  dep_expr="${dep_expr}ended(${job_id})"
+                done < "$job_list_file"
+
+                if [ -z "$dep_expr" ]; then
+                  echo "Skipping dataset $dataset_name: unable to build dependency expression" >&2
+                  continue
+                fi
               fi
 
               param_dataset_dir="$ADJUSTED_PARAMS_DIR/$dataset_name"
@@ -269,14 +318,25 @@ jobs:
                 continue
               fi
 
-              metrics_submit=$(\
-                PIONEER_DIR="$PIONEER_DIR" \
-                ENTRAPMENT_ANALYSES_PATH="$ENTRAPMENT_DIR" \
-                PIONEER_PARAMS_DIR="$param_dataset_dir" \
-                PIONEER_METRICS_FILE="$metrics_file" \
-                PIONEER_EXPERIMENTAL_DESIGN="$exp_design_file" \
-                PIONEER_ARCHIVE_ROOT="$RUN_DIR" \
-                bsub -w "$dep_expr" < "$METRICS_SCRIPT")
+              if [ -n "$dep_expr" ]; then
+                metrics_submit=$(\
+                  PIONEER_DIR="$PIONEER_DIR" \
+                  ENTRAPMENT_ANALYSES_PATH="$ENTRAPMENT_DIR" \
+                  PIONEER_PARAMS_DIR="$param_dataset_dir" \
+                  PIONEER_METRICS_FILE="$metrics_file" \
+                  PIONEER_EXPERIMENTAL_DESIGN="$exp_design_file" \
+                  PIONEER_ARCHIVE_ROOT="$RUN_DIR" \
+                  bsub -w "$dep_expr" < "$METRICS_SCRIPT")
+              else
+                metrics_submit=$(\
+                  PIONEER_DIR="$PIONEER_DIR" \
+                  ENTRAPMENT_ANALYSES_PATH="$ENTRAPMENT_DIR" \
+                  PIONEER_PARAMS_DIR="$param_dataset_dir" \
+                  PIONEER_METRICS_FILE="$metrics_file" \
+                  PIONEER_EXPERIMENTAL_DESIGN="$exp_design_file" \
+                  PIONEER_ARCHIVE_ROOT="$RUN_DIR" \
+                  bsub < "$METRICS_SCRIPT")
+              fi
 
               metrics_job_id=$(printf '%s\n' "$metrics_submit" | sed -n 's/Job <\([0-9]\+\)>.*$/\1/p' | head -n 1)
 
@@ -289,7 +349,6 @@ jobs:
           EOF
 
       - name: Wait for regression outputs on shared storage
-        if: ${{ false }}
         env:
           CLUSTER_RUN_DIR_MOUNT: ${{ env.CLUSTER_RUN_DIR_MOUNT }}
         shell: bash
@@ -411,7 +470,6 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Submit cluster cleanup job
-        if: ${{ false }}
         env:
           CLUSTER_HOST: ${{ secrets.CLUSTER_HOST }}
           CLUSTER_USERNAME: ${{ secrets.CLUSTER_USERNAME }}
