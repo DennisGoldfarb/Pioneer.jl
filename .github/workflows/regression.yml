@@ -329,6 +329,7 @@ jobs:
           EOF
 
       - name: Wait for regression outputs on shared storage
+        if: ${{ env.METRICS_ONLY != 'true' }}
         env:
           CLUSTER_RUN_DIR_MOUNT: ${{ env.CLUSTER_RUN_DIR_MOUNT }}
         shell: bash
