@@ -8,6 +8,7 @@ on:
         description: "Existing run suffix to reuse (e.g., run-20450267487-4)."
         required: false
         type: string
+        default: "run-20450267487-4"
       metrics_only:
         description: "Only submit metrics/cleanup for an existing run (skip searches)."
         required: false
