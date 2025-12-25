@@ -86,7 +86,6 @@ jobs:
           ssh-keyscan -H "$CLUSTER_HOST" >> ~/.ssh/known_hosts
 
       - name: Prepare cluster workspace (configs, Pioneer, and depot)
-        if: ${{ env.METRICS_ONLY != 'true' }}
         env:
           CLUSTER_HOST: ${{ secrets.CLUSTER_HOST }}
           CLUSTER_USERNAME: ${{ secrets.CLUSTER_USERNAME }}
