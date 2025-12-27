@@ -450,20 +450,14 @@ function build_metrics_report(metrics_by_version::Dict{String, Dict{String, Dict
     String(take!(report))
 end
 
-function current_commit_label()
-    sha = get(ENV, "GITHUB_SHA", "")
-    if isempty(sha)
-        try
-            sha = readchomp(`git rev-parse --short HEAD`)
-        catch err
-            @warn "Unable to resolve git commit SHA for report label" error=err
-            sha = "current"
-        end
-    else
-        sha = first(sha, min(length(sha), 7))
+function current_version_label_from_path(path::AbstractString)
+    parts = collect(splitpath(path))
+    metrics_idx = findfirst(isequal("metrics"), parts)
+    if metrics_idx !== nothing && metrics_idx < length(parts)
+        return parts[metrics_idx + 1]
     end
 
-    "commit $(sha)"
+    basename(path)
 end
 
 function write_report(report_text::AbstractString, results_root::AbstractString)
@@ -519,23 +513,26 @@ function post_report_to_pr(report_text::AbstractString)
     response.status in 200:299
 end
 
-function generate_regression_report(results_root::AbstractString; current_metrics::Dict{String, Dict{String, Dict{String, Any}}} = Dict{String, Dict{String, Dict{String, Any}}}())
+function generate_regression_report(
+    results_root::AbstractString;
+    current_metrics::Dict{String, Dict{String, Dict{String, Any}}} = Dict{String, Dict{String, Dict{String, Any}}}(),
+    current_version_label::AbstractString = current_version_label_from_path(results_root),
+)
     release_metrics = collect_metrics_from_versioned_root(RELEASE_METRICS_ROOT)
     develop_metrics = collect_metrics_from_search_root(DEVELOP_METRICS_ROOT; version_label = "develop")
 
-    commit_label = current_commit_label()
     version_order = ordered_release_versions(release_metrics)
     push!(version_order, "develop")
-    push!(version_order, commit_label)
+    push!(version_order, current_version_label)
 
     metrics_by_version = Dict{String, Dict{String, Dict{String, Any}}}()
     merge!(metrics_by_version, release_metrics)
     metrics_by_version["develop"] = get(develop_metrics, "develop", Dict{String, Dict{String, Any}}())
 
     if isempty(current_metrics)
-        current_metrics = collect_metrics_from_results_root(results_root; version_label = commit_label)
+        current_metrics = collect_metrics_from_results_root(results_root; version_label = current_version_label)
     end
-    metrics_by_version[commit_label] = get(current_metrics, commit_label, Dict{String, Dict{String, Any}}())
+    metrics_by_version[current_version_label] = get(current_metrics, current_version_label, Dict{String, Dict{String, Any}}())
 
     report_text = build_metrics_report(metrics_by_version, version_order)
     report_path = write_report(report_text, results_root)
@@ -822,14 +819,20 @@ function compute_metrics_for_params_dir(
         dirname(dataset_dir)
     end
 
+    current_version_label = !isempty(archive_root) ? basename(archive_root) : current_version_label_from_path(report_root)
+
     current_metrics = if !isempty(archive_root)
-        collect_metrics_from_results_root(report_root; version_label = current_commit_label())
+        collect_metrics_from_results_root(report_root; version_label = current_version_label)
     else
         unique_results_dirs = unique([entry.results_dir for entry in dataset_entries])
-        collect_metrics_from_results_dirs(unique_results_dirs; version_label = current_commit_label())
+        collect_metrics_from_results_dirs(unique_results_dirs; version_label = current_version_label)
     end
 
-    generate_regression_report(report_root; current_metrics = current_metrics)
+    generate_regression_report(
+        report_root;
+        current_metrics = current_metrics,
+        current_version_label = current_version_label,
+    )
 end
 
 function main()
@@ -925,7 +928,8 @@ function main()
         end
     end
 
-    generate_regression_report(results_dir)
+    current_version_label = current_version_label_from_path(results_dir)
+    generate_regression_report(results_dir; current_version_label = current_version_label)
 end
 
 main()
