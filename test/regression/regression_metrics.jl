@@ -400,8 +400,8 @@ function build_metrics_report(metrics_by_version::Dict{String, Dict{String, Dict
     report = IOBuffer()
     println(report, "# Regression Metrics Report")
     println(report, "")
-    println(report, "- Generated: $(Dates.format(now(), dateformat\"yyyy-mm-dd HH:MM:SS\"))")
-    println(report, "- Versions: $(join(version_order, ", "))")
+    println(report, "- Generated: ", Dates.format(now(), dateformat"yyyy-mm-dd HH:MM:SS"))
+    println(report, "- Versions: ", join(version_order, ", "))
     println(report, "")
 
     for dataset in sort(collect(datasets))
