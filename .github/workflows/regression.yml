@@ -25,6 +25,9 @@ jobs:
     name: Julia ${{ matrix.version }} regression sweep
     runs-on: [self-hosted, Linux, pioneer-regression]
     timeout-minutes: 7200
+    env:
+      DISABLE_CLEANUP: "true"
+      DISABLE_METRICS: "true"
     strategy:
       matrix:
         version: ['1.11']
@@ -134,6 +137,7 @@ jobs:
           SETUP_JOB_SCRIPT: ${{ vars.SETUP_JOB_SCRIPT }}
           METRICS_JOB_SCRIPT: ${{ vars.METRICS_JOB_SCRIPT }}
           DATASET_SET: ${{ github.event_name == 'workflow_dispatch' && inputs.dataset_set || 'test' }}
+          DISABLE_METRICS: ${{ env.DISABLE_METRICS }}
         shell: bash
         run: |
           set -euo pipefail
@@ -160,7 +164,7 @@ jobs:
           )
 
           timeout 300 ssh "${ssh_options[@]}" "${CLUSTER_USERNAME}@${CLUSTER_HOST}" \
-            "RUN_DIR='${remote_run_dir}' PIONEER_DIR='${pioneer_dir}' ENTRAPMENT_DIR='${entrapment_dir}' PARAMS_DIR='${params_dir}' REGRESSION_CONFIGS_DIR='${regression_configs_dir}' JOB_SCRIPT='${job_script_path}' SETUP_SCRIPT='${setup_script_path}' METRICS_SCRIPT='${metrics_script_path}' ADJUSTED_PARAMS_DIR='${adjusted_params_dir}' RUN_ID_SUFFIX='${run_suffix}' DATASET_SET='${dataset_set}' bash -s" <<'EOF'
+            "RUN_DIR='${remote_run_dir}' PIONEER_DIR='${pioneer_dir}' ENTRAPMENT_DIR='${entrapment_dir}' PARAMS_DIR='${params_dir}' REGRESSION_CONFIGS_DIR='${regression_configs_dir}' JOB_SCRIPT='${job_script_path}' SETUP_SCRIPT='${setup_script_path}' METRICS_SCRIPT='${metrics_script_path}' ADJUSTED_PARAMS_DIR='${adjusted_params_dir}' RUN_ID_SUFFIX='${run_suffix}' DATASET_SET='${dataset_set}' DISABLE_METRICS='${DISABLE_METRICS:-}' bash -s" <<'EOF'
             set -eu
 
             if [ ! -f "$SETUP_SCRIPT" ]; then
@@ -276,83 +280,87 @@ jobs:
               echo "$search_job_id" >> "$job_id_dir/${dataset_dir_name}.search"
             done
 
-            dataset_dirs=$(find "$PARAMS_DIR" -mindepth 1 -maxdepth 1 -type d -print)
-            if [ -n "${dataset_filter:-}" ]; then
-              filtered_dirs=()
-              IFS=',' read -r -a allowed_datasets <<< "$dataset_filter"
-              for dataset_dir in $dataset_dirs; do
-                dataset_name="$(basename "$dataset_dir")"
-                for allowed in "${allowed_datasets[@]}"; do
-                  if [ "$dataset_name" = "$allowed" ]; then
-                    filtered_dirs+=("$dataset_dir")
-                    break
-                  fi
+            if [ "${DISABLE_METRICS:-}" = "true" ]; then
+              echo "Metrics computation disabled; skipping metrics job submissions."
+            else
+              dataset_dirs=$(find "$PARAMS_DIR" -mindepth 1 -maxdepth 1 -type d -print)
+              if [ -n "${dataset_filter:-}" ]; then
+                filtered_dirs=()
+                IFS=',' read -r -a allowed_datasets <<< "$dataset_filter"
+                for dataset_dir in $dataset_dirs; do
+                  dataset_name="$(basename "$dataset_dir")"
+                  for allowed in "${allowed_datasets[@]}"; do
+                    if [ "$dataset_name" = "$allowed" ]; then
+                      filtered_dirs+=("$dataset_dir")
+                      break
+                    fi
+                  done
                 done
-              done
-              dataset_dirs=$(printf '%s\n' "${filtered_dirs[@]}")
-            fi
-
-            if [ -z "$dataset_dirs" ]; then
-              echo "No dataset directories found under $PARAMS_DIR" >&2
-              exit 1
-            fi
-
-            printf '%s\n' "$dataset_dirs" | while IFS= read -r dataset_dir; do
-              dataset_name="$(basename "$dataset_dir")"
-              job_list_file="$job_id_dir/${dataset_name}.search"
-              metrics_file="$dataset_dir/metrics.json"
-              # Experimental design files now live under params/<dataset>/experimental_design.json.
-              exp_design_root="$PARAMS_DIR"
-
-              if [ ! -f "$metrics_file" ]; then
-                echo "Skipping dataset $dataset_name: missing metrics.json" >&2
-                continue
+                dataset_dirs=$(printf '%s\n' "${filtered_dirs[@]}")
               fi
 
-              if [ ! -s "$job_list_file" ]; then
-                echo "Skipping dataset $dataset_name: no search job IDs recorded" >&2
-                continue
-              fi
-
-              dep_expr=""
-              while IFS= read -r job_id; do
-                [ -n "$job_id" ] || continue
-                if [ -n "$dep_expr" ]; then
-                  dep_expr="$dep_expr && "
-                fi
-                dep_expr="${dep_expr}ended(${job_id})"
-              done < "$job_list_file"
-
-              if [ -z "$dep_expr" ]; then
-                echo "Skipping dataset $dataset_name: unable to build dependency expression" >&2
-                continue
-              fi
-
-              param_dataset_dir="$ADJUSTED_PARAMS_DIR/$dataset_name"
-              if [ ! -d "$param_dataset_dir" ]; then
-                echo "Skipping dataset $dataset_name: adjusted params directory missing at $param_dataset_dir" >&2
-                continue
-              fi
-
-              metrics_submit=$(\
-                PIONEER_DIR="$PIONEER_DIR" \
-                ENTRAPMENT_ANALYSES_PATH="$ENTRAPMENT_DIR" \
-                PIONEER_PARAMS_DIR="$param_dataset_dir" \
-                PIONEER_METRICS_FILE="$metrics_file" \
-                PIONEER_EXPERIMENTAL_DESIGN="$exp_design_root" \
-                PIONEER_THREE_PROTEOME_DESIGNS="$exp_design_root" \
-                PIONEER_REGRESSION_CONFIGS_DIR="$REGRESSION_CONFIGS_DIR" \
-                PIONEER_ARCHIVE_ROOT="$RUN_DIR" \
-                bsub -w "$dep_expr" < "$METRICS_SCRIPT")
-
-              metrics_job_id=$(printf '%s\n' "$metrics_submit" | sed -n 's/Job <\([0-9]\+\)>.*$/\1/p' | head -n 1)
-
-              if [ -z "$metrics_job_id" ]; then
-                echo "Failed to parse metrics job ID for dataset $dataset_name:" >&2
-                printf '%s\n' "$metrics_submit" >&2
+              if [ -z "$dataset_dirs" ]; then
+                echo "No dataset directories found under $PARAMS_DIR" >&2
                 exit 1
               fi
-            done
+
+              printf '%s\n' "$dataset_dirs" | while IFS= read -r dataset_dir; do
+                dataset_name="$(basename "$dataset_dir")"
+                job_list_file="$job_id_dir/${dataset_name}.search"
+                metrics_file="$dataset_dir/metrics.json"
+                # Experimental design files now live under params/<dataset>/experimental_design.json.
+                exp_design_root="$PARAMS_DIR"
+
+                if [ ! -f "$metrics_file" ]; then
+                  echo "Skipping dataset $dataset_name: missing metrics.json" >&2
+                  continue
+                fi
+
+                if [ ! -s "$job_list_file" ]; then
+                  echo "Skipping dataset $dataset_name: no search job IDs recorded" >&2
+                  continue
+                fi
+
+                dep_expr=""
+                while IFS= read -r job_id; do
+                  [ -n "$job_id" ] || continue
+                  if [ -n "$dep_expr" ]; then
+                    dep_expr="$dep_expr && "
+                  fi
+                  dep_expr="${dep_expr}ended(${job_id})"
+                done < "$job_list_file"
+
+                if [ -z "$dep_expr" ]; then
+                  echo "Skipping dataset $dataset_name: unable to build dependency expression" >&2
+                  continue
+                fi
+
+                param_dataset_dir="$ADJUSTED_PARAMS_DIR/$dataset_name"
+                if [ ! -d "$param_dataset_dir" ]; then
+                  echo "Skipping dataset $dataset_name: adjusted params directory missing at $param_dataset_dir" >&2
+                  continue
+                fi
+
+                metrics_submit=$(\
+                  PIONEER_DIR="$PIONEER_DIR" \
+                  ENTRAPMENT_ANALYSES_PATH="$ENTRAPMENT_DIR" \
+                  PIONEER_PARAMS_DIR="$param_dataset_dir" \
+                  PIONEER_METRICS_FILE="$metrics_file" \
+                  PIONEER_EXPERIMENTAL_DESIGN="$exp_design_root" \
+                  PIONEER_THREE_PROTEOME_DESIGNS="$exp_design_root" \
+                  PIONEER_REGRESSION_CONFIGS_DIR="$REGRESSION_CONFIGS_DIR" \
+                  PIONEER_ARCHIVE_ROOT="$RUN_DIR" \
+                  bsub -w "$dep_expr" < "$METRICS_SCRIPT")
+
+                metrics_job_id=$(printf '%s\n' "$metrics_submit" | sed -n 's/Job <\([0-9]\+\)>.*$/\1/p' | head -n 1)
+
+                if [ -z "$metrics_job_id" ]; then
+                  echo "Failed to parse metrics job ID for dataset $dataset_name:" >&2
+                  printf '%s\n' "$metrics_submit" >&2
+                  exit 1
+                fi
+              done
+            fi
           EOF
 
       - name: Wait for regression outputs on shared storage
@@ -702,7 +710,7 @@ jobs:
             });
 
       - name: Submit cluster cleanup job
-        if: always()
+        if: always() && env.DISABLE_CLEANUP != 'true'
         env:
           CLUSTER_HOST: ${{ secrets.CLUSTER_HOST }}
           CLUSTER_USERNAME: ${{ secrets.CLUSTER_USERNAME }}
