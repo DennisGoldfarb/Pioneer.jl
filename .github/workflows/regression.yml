@@ -54,6 +54,7 @@ jobs:
           CLUSTER_RUN_ROOT: ${{ secrets.CLUSTER_RUN_ROOT }}
           GITHUB_SHA: ${{ github.sha }}
           REGRESSION_REF: v0.6.4
+          REGRESSION_REPO: nwamsley1/Pioneer.jl
           GITHUB_REPOSITORY: ${{ github.repository }}
           CLUSTER_ENTRAPMENT_REPO: ${{ secrets.CLUSTER_ENTRAPMENT_REPO }}
         shell: bash
@@ -70,7 +71,10 @@ jobs:
           pioneer_dir="${remote_run_dir}/pioneer"
           entrapment_dir="${remote_run_dir}/PioneerEntrapment.jl"
           depot_dir="${remote_run_dir}/julia-depot"
-          pioneer_repo="https://github.com/${GITHUB_REPOSITORY}"
+          pioneer_repo="${REGRESSION_REPO:-$GITHUB_REPOSITORY}"
+          if [[ "$pioneer_repo" != http* ]]; then
+            pioneer_repo="https://github.com/${pioneer_repo}"
+          fi
           entrapment_repo="${CLUSTER_ENTRAPMENT_REPO:-nwamsley1/PioneerEntrapment.jl}"
           entrapment_repo_url="$entrapment_repo"
 
