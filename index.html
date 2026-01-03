@@ -1,44 +1,105 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Regression Report Index</title>
-<style>
-body { font-family: Arial, sans-serif; margin: 24px; }
-table { border-collapse: collapse; width: 100%; }
-th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-th { background-color: #f4f4f4; }
-tr:nth-child(even) { background-color: #fafafa; }
-</style>
-</head>
-<body>
-<h1>Regression Reports</h1>
-<table>
-<thead><tr><th>Date (UTC)</th><th>Branch</th><th>Commit</th><th>Run</th><th>Report</th></tr></thead>
-<tbody>
-<tr>
-<td>2026-01-03T17:49:06Z</td>
-<td>codex_update-github-workflows-for-new-env-vars</td>
-<td>db6c364168e806f5080e2c3b5bc34a27164205e2</td>
-<td>20680138240-1</td>
-<td><a href="reports/codex_update-github-workflows-for-new-env-vars/db6c364168e806f5080e2c3b5bc34a27164205e2/20680138240-1/">Open report</a></td>
-</tr>
-<tr>
-<td>2026-01-03T16:39:44Z</td>
-<td>codex_update-github-workflows-for-new-env-vars</td>
-<td>9028b19f75344174546ef346ac0b447e53eb1c19</td>
-<td>20678825082-2</td>
-<td><a href="reports/codex_update-github-workflows-for-new-env-vars/9028b19f75344174546ef346ac0b447e53eb1c19/20678825082-2/">Open report</a></td>
-</tr>
-<tr>
-<td>2026-01-03T15:58:14Z</td>
-<td>codex_update-github-workflows-for-new-env-vars</td>
-<td>9028b19f75344174546ef346ac0b447e53eb1c19</td>
-<td>20678825082-1</td>
-<td><a href="reports/codex_update-github-workflows-for-new-env-vars/9028b19f75344174546ef346ac0b447e53eb1c19/20678825082-1/">Open report</a></td>
-</tr>
-</tbody>
-</table>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pioneer</title>
+    <style>
+      :root {
+        --pioneer-blue: #193b54;
+      }
+
+      body {
+        font-family: "Helvetica Neue", Arial, sans-serif;
+        margin: 0;
+        color: #1f2933;
+        background-color: #f8fafc;
+      }
+
+      header {
+        background: var(--pioneer-blue);
+        color: #ffffff;
+        padding: 48px 24px;
+        text-align: center;
+      }
+
+      header img {
+        max-width: 140px;
+        margin-bottom: 16px;
+      }
+
+      header h1 {
+        margin: 0;
+        font-size: 40px;
+        letter-spacing: 0.5px;
+      }
+
+      header p {
+        margin: 12px 0 0;
+        font-size: 18px;
+        opacity: 0.9;
+      }
+
+      main {
+        max-width: 900px;
+        margin: 32px auto;
+        padding: 0 24px 48px;
+        line-height: 1.6;
+      }
+
+      h2 {
+        color: var(--pioneer-blue);
+        margin-top: 32px;
+      }
+
+      .card {
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 24px;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+      }
+
+      .cta-link {
+        color: var(--pioneer-blue);
+        font-weight: 600;
+        text-decoration: none;
+      }
+
+      .cta-link:hover {
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <img src="assets/pioneer-logo.jpg" alt="Pioneer logo" />
+      <h1>Pioneer</h1>
+      <p>Fast, open-source analysis of DIA proteomics experiments.</p>
+    </header>
+    <main>
+      <section class="card">
+        <h2>About Pioneer</h2>
+        <p>
+          Pioneer is an open-source and high-performance toolkit for analyzing
+          data-independent acquisition (DIA) proteomics experiments. It delivers
+          rapid spectral library search, robust quantification, and scalable
+          workflows across large experiments.
+        </p>
+        <p>
+          Learn more in the documentation or explore the latest regression
+          results below.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>Regression Reports</h2>
+        <p>
+          View the history of regression tests and report artifacts for Pioneer.
+        </p>
+        <p>
+          <a class="cta-link" href="reports/">Browse regression reports →</a>
+        </p>
+      </section>
+    </main>
+  </body>
 </html>
