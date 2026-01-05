@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 7200
     strategy:
       matrix:
-        version: ['1.11']
+        version: ['1.12']
         dataset_set: ${{ github.event_name == 'release' && fromJSON('["all"]') || (github.event_name == 'workflow_dispatch' && fromJSON(format('["{0}"]', inputs.dataset_set)) || fromJSON('["fastest","fast","all"]')) }}
     steps:
       - uses: actions/checkout@v5
