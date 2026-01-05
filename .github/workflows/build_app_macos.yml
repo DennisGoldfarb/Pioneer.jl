@@ -29,6 +29,7 @@ jobs:
     env:
       GKSwstype: "100"
       GKS_ENCODING: "utf-8"
+      JULIA_NUM_PRECOMPILE_TASKS: "1"
       JULIA_NUM_THREADS: auto
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
     outputs:
