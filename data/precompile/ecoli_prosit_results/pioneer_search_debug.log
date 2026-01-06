@@ -1,0 +1,25 @@
+==========================================================================================
+Pioneer Debug Log (Full Trace)
+Version: 0.4.1
+Started: 2026-01-05T13:45:19.623
+Output Directory: ./data/precompile/ecoli_prosit_results
+Julia Version: 1.12.2
+Threads: 1
+==========================================================================================
+
+[2026-01-05 13:45:19.624] [info] Pioneer logging system initialized
+
+==========================================================================================
+Starting SearchDIA
+==========================================================================================
+[2026-01-05 13:45:19.681] [info] 
+Starting search at: 2026-01-05T13:45:19.681
+[2026-01-05 13:45:19.682] [info] Output directory: ./data/precompile/ecoli_prosit_results
+[2026-01-05 13:45:19.682] [info] Loading Parameters...
+[2026-01-05 13:45:19.717] [info] Loading Spectral Library...
+[2026-01-05 13:45:19.722] [error] Search failed with error: SystemError @ Pioneer /Users/dennisgoldfarb/Pioneer_DG/Pioneer.jl/src/Routines/SearchDIA.jl:368
+[2026-01-05 13:45:19.861] [error] Stacktrace: Base.StackTraces.StackFrame[open(::typeof(Arrow.tobytes), ::String, ::Vararg{String}; kwargs::Base.Pairs{Symbol, Union{}, Nothing, @NamedTuple{}}) at io.jl:408, open at io.jl:407 [inlined], tobytes at table.jl:29 [inlined], #Table#104 at table.jl:460 [inlined], Table at table.jl:460 [inlined], Table at table.jl:460 [inlined], loadSpectralLibrary(SPEC_LIB_DIR::String, params::Pioneer.PioneerParameters) at loadSpectralLibrary.jl:64, macro expansion at SearchDIA.jl:306 [inlined], macro expansion at timing.jl:689 [inlined], SearchDIA(params_path::String) at SearchDIA.jl:305, (::var"#20#21")() at snoop.jl:70, maybe_run(f::var"#20#21", name::String) at snoop.jl:11, top-level scope at snoop.jl:69] @ Pioneer /Users/dennisgoldfarb/Pioneer_DG/Pioneer.jl/src/Routines/SearchDIA.jl:369
+
+==========================================================================================
+Search completed at: 2026-01-05T13:45:19.882
+==========================================================================================
