@@ -71,7 +71,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          julia --threads auto --project=. -e 'using Pkg; Pkg.add("PackageCompiler@2.2.3"); Pkg.instantiate()'
+          julia --threads auto --project=. -e 'using Pkg; Pkg.add(PackageSpec(name="PackageCompiler", version="2.2.3")); Pkg.instantiate()'
 
       - name: Precompile data (cache & download)
         uses: ./.github/actions/precompile-data
