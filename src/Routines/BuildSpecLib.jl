@@ -307,6 +307,10 @@ function BuildSpecLib(params_path::String)
                     :mods => :structural_mods
                 ])
 
+                target_peptide = "ENALDRAEQAEADK"
+                peptide_hits = count(==(target_peptide), precursors_table.sequence)
+                println("   [PeptideTracker] Processed precursors_table occurrences of $target_peptide: $peptide_hits")
+
                 # Convert types
                 precursors_table[!, :missed_cleavages] = UInt8.(precursors_table[!, :missed_cleavages])
                 precursors_table[!, :prec_charge] = UInt8.(precursors_table[!, :prec_charge])
