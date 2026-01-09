@@ -31,6 +31,8 @@ function searchFragmentIndex(
     prec_id = 0
     precursors_passed_scoring = Vector{UInt32}(undef, 250000)
     rt_bin_idx = 1
+    single_match_count = 0
+    double_match_count = 0
     for scan_idx in thread_task
         #if scan_idx % 50 != 0
         #    continue
@@ -47,9 +49,9 @@ function searchFragmentIndex(
         while rt_bin_idx > 1 && getLow(getRTBin(frag_index, rt_bin_idx)) > irt_lo
             rt_bin_idx -= 1
         end
-        
+
         # Fragment index search for matching precursors
-        searchScan!(
+        single_increment, double_increment = searchScan!(
             getPrecursorScores(search_data),
             getRTBins(frag_index),
             getFragBins(frag_index),
@@ -62,6 +64,8 @@ function searchFragmentIndex(
             getQuadTransmissionFunction(qtm, getCenterMz(spectra, scan_idx), getIsolationWidthMz(spectra, scan_idx)),
             getIsotopeErrBounds(params)
         )
+        single_match_count += single_increment
+        double_match_count += double_increment
 
         # Filter precursor matches based on score
         match_count, prec_count = filterPrecursorMatches!(getPrecursorScores(search_data), getMinIndexSearchScore(params))
@@ -87,7 +91,11 @@ function searchFragmentIndex(
         reset!(getPrecursorScores(search_data))
     end
 
-    return precursors_passed_scoring[1:prec_id]
+    return (
+        precursors = precursors_passed_scoring[1:prec_id],
+        single_match_count = single_match_count,
+        double_match_count = double_match_count
+    )
 end
 
 function getPSMS(
@@ -301,7 +309,19 @@ function LibrarySearch(
         end
     end
     
-    precursors_passed_scoring = fetch.(tasks)
+    fragment_search_results = fetch.(tasks)
+    precursors_passed_scoring = Vector{Vector{UInt32}}(undef, length(search_data))
+    single_match_count = 0
+    double_match_count = 0
+
+    for (result, thread_task) in zip(fragment_search_results, thread_tasks)
+        thread_id = first(thread_task)
+        precursors_passed_scoring[thread_id] = result.precursors
+        single_match_count += result.single_match_count
+        double_match_count += result.double_match_count
+    end
+
+    @info "Fragment match tally after first-pass search" ms_file_idx single_match_count double_match_count
 
     tasks = map(thread_tasks) do thread_task
         Threads.@spawn begin 
@@ -385,7 +405,19 @@ function LibrarySearchNceTuning(
         end
     end
 
-    precursors_passed_scoring = fetch.(tasks)
+    fragment_search_results = fetch.(tasks)
+    precursors_passed_scoring = Vector{Vector{UInt32}}(undef, length(search_data))
+    single_match_count = 0
+    double_match_count = 0
+
+    for (result, thread_task) in zip(fragment_search_results, thread_tasks)
+        thread_id = first(thread_task)
+        precursors_passed_scoring[thread_id] = result.precursors
+        single_match_count += result.single_match_count
+        double_match_count += result.double_match_count
+    end
+
+    @info "Fragment match tally after first-pass search" ms_file_idx single_match_count double_match_count
 
     # For each NCE value, run getPSMS using the same fragment index results
     all_results = map(nce_grid) do nce

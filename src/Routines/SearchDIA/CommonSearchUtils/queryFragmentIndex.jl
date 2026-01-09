@@ -155,11 +155,31 @@ Search a fragment bin for matches within precursor mass window.
 
 Updates prec_id_to_score in place with new matches.
 """
-function searchFragmentBin!(prec_id_to_score::Counter{UInt32, UInt8}, 
+function tally_fragment_matches!(fragment_match_counts::Dict{UInt32, UInt8},
+                                    matched_frag_range::UnitRange{UInt32})
+    single_increment = 0
+    double_increment = 0
+
+    @inbounds for frag_idx in matched_frag_range
+        prev_count = get(fragment_match_counts, frag_idx, zero(UInt8))
+        if iszero(prev_count)
+            single_increment += 1
+        elseif prev_count === one(UInt8)
+            single_increment -= 1
+            double_increment += 1
+        end
+        fragment_match_counts[frag_idx] = prev_count + one(UInt8)
+    end
+
+    return single_increment, double_increment
+end
+
+function searchFragmentBin!(prec_id_to_score::Counter{UInt32, UInt8},
                             fragments::AbstractArray{IndexFragment},
                             frag_id_range::UnitRange{UInt32},
-                            window_min::Float32, 
-                            window_max::Float32)
+                            window_min::Float32,
+                            window_max::Float32,
+                            fragment_match_counts::Dict{UInt32, UInt8})
 
     #Index of first and last fragments to search 
     lo, hi = first(frag_id_range), last(frag_id_range)
@@ -195,15 +215,15 @@ function searchFragmentBin!(prec_id_to_score::Counter{UInt32, UInt8},
         #range that matches the precursor tolerance. 
         if window_start === window_stop
             if (getPrecMZ(fragments[window_start])>window_max)
-                return nothing
+                return 0, 0
             end
             if getPrecMZ(fragments[window_stop])<window_min
-                return nothing
+                return 0, 0
             end
         end
     end
         
-    function addFragmentMatches!(prec_id_to_score::Counter{UInt32, UInt8}, 
+    function addFragmentMatches!(prec_id_to_score::Counter{UInt32, UInt8},
                                     fragments::AbstractArray{IndexFragment},
                                     matched_frag_range::UnitRange{UInt32})
         @inline @inbounds for i in matched_frag_range
@@ -212,24 +232,27 @@ function searchFragmentBin!(prec_id_to_score::Counter{UInt32, UInt8},
         end
     end
     
-    #For each fragment matching the query, 
-    #award its score to its parent ion. 
-    @inline addFragmentMatches!(prec_id_to_score, fragments, window_start:window_stop)
-    return nothing
+    #For each fragment matching the query,
+    #award its score to its parent ion.
+    matched_frag_range = window_start:window_stop
+    single_increment, double_increment = tally_fragment_matches!(fragment_match_counts, matched_frag_range)
+    @inline addFragmentMatches!(prec_id_to_score, fragments, matched_frag_range)
+    return single_increment, double_increment
 
 end
 
-function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8}, 
+function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
                         frag_bin_max_idx::UInt32,
                         lower_bound_guess::UInt32,
                         upper_bound_guess::UInt32,
                         frag_bins::AbstractArray{FragIndexBin},
                         fragments::AbstractArray{IndexFragment},
-                        frag_mz_min::Float32, 
-                        frag_mz_max::Float32, 
+                        frag_mz_min::Float32,
+                        frag_mz_max::Float32,
                         prec_mz_min::Float32,
-                        prec_mz_max::Float32)# where {T,U<:AbstractFloat}
-    #Get new lower and upper bounds for the fragment bin search if necessary 
+                        prec_mz_max::Float32,
+                        fragment_match_counts::Dict{UInt32, UInt8})# where {T,U<:AbstractFloat}
+    #Get new lower and upper bounds for the fragment bin search if necessary
     lower_bound_guess, upper_bound_guess = exponentialFragmentBinSearch(
         frag_bins,
         frag_bin_max_idx,
@@ -241,15 +264,17 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
     )
     #First frag_bin matching fragment tolerance
     frag_bin_idx = findFirstFragmentBin(
-                                    frag_bins, 
+                                    frag_bins,
                                     lower_bound_guess,
                                     upper_bound_guess,
                                     frag_mz_min
                                     )
-    @inbounds @fastmath begin 
+    single_increment = 0
+    double_increment = 0
+    @inbounds @fastmath begin
         #No fragment bins contain the fragment m/z
         if iszero(frag_bin_idx)
-            return lower_bound_guess, upper_bound_guess
+            return lower_bound_guess, upper_bound_guess, single_increment, double_increment
         end
 
         #Search subsequent frag bins until no more bins or untill a bin is outside the fragment tolerance
@@ -266,26 +291,29 @@ function queryFragment!(prec_id_to_score::Counter{UInt32, UInt8},
                         break
                     end
                 end
-                #Range of fragment ions that could match the observed fragment tolerance 
+                #Range of fragment ions that could match the observed fragment tolerance
                 frag_id_range = getSubBinRange(frag_bin)
                 #Search the fragment range for fragments with precursors in the precursor tolerance
-                searchFragmentBin!(prec_id_to_score, 
-                                    fragments,
-                                    frag_id_range, 
-                                    prec_mz_min, 
-                                    prec_mz_max
-                                )
-                #Advance to the next fragment bin 
+                frag_single_increment, frag_double_increment = searchFragmentBin!(prec_id_to_score,
+                                                                                    fragments,
+                                                                                    frag_id_range,
+                                                                                    prec_mz_min,
+                                                                                    prec_mz_max,
+                                                                                    fragment_match_counts
+                                                                                )
+                single_increment += frag_single_increment
+                double_increment += frag_double_increment
+                #Advance to the next fragment bin
                 frag_bin_idx += 1
             end
         end
     end
 
     #Only reach this point if frag_bin exceeds length(frag_index)
-    return lower_bound_guess, upper_bound_guess
+    return lower_bound_guess, upper_bound_guess, single_increment, double_increment
 end
 
-function searchScan!(prec_id_to_score::Counter{UInt32, UInt8}, 
+function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
                     rt_bins::AbstractArray{FragIndexBin},
                     frag_bins::AbstractArray{FragIndexBin},
                     fragments::AbstractArray{IndexFragment},
@@ -300,6 +328,10 @@ function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
     prec_min = U(getPrecMinBound(quad_transmission_func) - NEUTRON*first(isotope_err_bounds)/2)
     prec_max = U(getPrecMaxBound(quad_transmission_func) + NEUTRON*last(isotope_err_bounds)/2)
 
+    fragment_match_counts = Dict{UInt32, UInt8}()
+    single_match_count = 0
+    double_match_count = 0
+
     #@inbounds @fastmath while getLow(rt_bins[rt_bin_idx]) < irt_high
     while getLow(rt_bins[rt_bin_idx]) < irt_high
         #BinRanges
@@ -313,17 +345,20 @@ function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
             frag_min, frag_max = getMzBoundsReverse(mass_err_model, corrected_mz)
             #For every precursor that could have produced the observed ion
             #award to it the corresponding score
-            lower_bound_guess, upper_bound_guess = queryFragment!(prec_id_to_score, 
-                                            max_frag_bin,
-                                            lower_bound_guess,
-                                            upper_bound_guess,
-                                            frag_bins,
-                                            fragments,
-                                            frag_min, 
-                                            frag_max, 
-                                            prec_min, 
-                                            prec_max
-                                        )
+            lower_bound_guess, upper_bound_guess, single_increment, double_increment = queryFragment!(prec_id_to_score,
+                                                                                            max_frag_bin,
+                                                                                            lower_bound_guess,
+                                                                                            upper_bound_guess,
+                                                                                            frag_bins,
+                                                                                            fragments,
+                                                                                            frag_min,
+                                                                                            frag_max,
+                                                                                            prec_min,
+                                                                                            prec_max,
+                                                                                            fragment_match_counts
+                                                                                        )
+            single_match_count += single_increment
+            double_match_count += double_increment
         end
 
         rt_bin_idx += 1
@@ -333,7 +368,7 @@ function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
         end 
     end
 
-    return nothing#filterPrecursorMatches!(prec_id_to_score, min_score)
+    return single_match_count, double_match_count#filterPrecursorMatches!(prec_id_to_score, min_score)
 end
 
 function filterPrecursorMatches!(prec_id_to_score::Counter{UInt32, UInt8}, min_score::UInt8)
