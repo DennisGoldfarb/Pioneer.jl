@@ -203,12 +203,12 @@ function searchFragmentBin!(prec_id_to_score::Counter{UInt32, UInt8},
         end
     end
         
-    function addFragmentMatches!(prec_id_to_score::Counter{UInt32, UInt8}, 
+    function addFragmentMatches!(prec_id_to_score::Counter{UInt32, UInt8},
                                     fragments::AbstractArray{IndexFragment},
                                     matched_frag_range::UnitRange{UInt32})
         @inline @inbounds for i in matched_frag_range
             frag = fragments[i]
-            inc!(prec_id_to_score, getPrecID(frag), getScore(frag))
+            or_inc!(prec_id_to_score, getPrecID(frag), getScore(frag))
         end
     end
     

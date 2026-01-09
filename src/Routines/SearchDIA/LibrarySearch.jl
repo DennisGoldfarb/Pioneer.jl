@@ -31,13 +31,89 @@ function searchFragmentIndex(
     prec_id = 0
     precursors_passed_scoring = Vector{UInt32}(undef, 250000)
     rt_bin_idx = 1
+
+    base_counter = getPrecursorScores(search_data)
+    counter_size = length(base_counter.counts)
+    raw_counters = Counter{UInt32, UInt8}[base_counter, Counter(UInt32, UInt8, counter_size), Counter(UInt32, UInt8, counter_size)]
+    free_counters = Counter{UInt32, UInt8}[raw_counters...]
+    smoothed_counter = Counter(UInt32, UInt8, counter_size)
+
+    acquire_counter!() = pop!(free_counters)
+
+    function release_counter!(counter::Counter{UInt32, UInt8})
+        reset!(counter)
+        push!(free_counters, counter)
+        return nothing
+    end
+
+    @inline function normalize_float(val)
+        return ismissing(val) ? val : Float32(val)
+    end
+
+    @inline function same_isolation_window(center_a, width_a, center_b, width_b)
+        return !(ismissing(center_a) || ismissing(width_a) || ismissing(center_b) || ismissing(width_b)) &&
+               center_a == center_b && width_a == width_b
+    end
+
+    function add_scores!(dest::Counter{UInt32, UInt8}, source::Counter{UInt32, UInt8})
+        @inbounds @fastmath for i in 1:(getSize(source) - 1)
+            id = getID(source, i)
+            or_inc!(dest, id, getCount(source, id))
+        end
+        return nothing
+    end
+
+    function smooth_scores!(dest::Counter{UInt32, UInt8}, target, left, right)
+        reset!(dest)
+        if left !== nothing && same_isolation_window(target.center_mz, target.isolation_width, left.center_mz, left.isolation_width)
+            add_scores!(dest, left.counter)
+        end
+        add_scores!(dest, target.counter)
+        if right !== nothing && same_isolation_window(target.center_mz, target.isolation_width, right.center_mz, right.isolation_width)
+            add_scores!(dest, right.counter)
+        end
+        return nothing
+    end
+
+    function record_matches!(counter::Counter{UInt32, UInt8}, scan_idx::Int64)
+        if getID(counter, 1) > 0
+            start_idx = prec_id + 1
+            n = 1
+            while n <= counter.matches
+                prec_id += 1
+                if prec_id > length(precursors_passed_scoring)
+                    append!(precursors_passed_scoring,
+                            Vector{eltype(precursors_passed_scoring)}(undef, length(precursors_passed_scoring))
+                            )
+                end
+                precursors_passed_scoring[prec_id] = getID(counter, n)
+                n += 1
+            end
+            scan_to_prec_idx[scan_idx] = start_idx:prec_id#stop_idx
+        else
+            scan_to_prec_idx[scan_idx] = missing
+        end
+        return nothing
+    end
+
+    function finalize_scan!(target, left, right)
+        smooth_scores!(smoothed_counter, target, left, right)
+        filterPrecursorMatches!(smoothed_counter, getMinIndexSearchScore(params))
+        record_matches!(smoothed_counter, target.scan_idx)
+        return nothing
+    end
+
+    prev_scan = nothing
+    curr_scan = nothing
+
     for scan_idx in thread_task
-        #if scan_idx % 50 != 0
-        #    continue
-        #end
-        # Skip invalid indices
         (scan_idx <= 0 || scan_idx > length(spectra)) && continue
         getMsOrder(spectra, scan_idx) ∉ getSpecOrder(params) && continue
+
+        raw_counter = acquire_counter!()
+
+        center_mz = normalize_float(getCenterMz(spectra, scan_idx))
+        isolation_width = normalize_float(getIsolationWidthMz(spectra, scan_idx))
 
         # Update RT bin index based on iRT window
         irt_lo, irt_hi = getRTWindow(rt_to_irt_spline(getRetentionTime(spectra, scan_idx)), irt_tol)
@@ -47,10 +123,10 @@ function searchFragmentIndex(
         while rt_bin_idx > 1 && getLow(getRTBin(frag_index, rt_bin_idx)) > irt_lo
             rt_bin_idx -= 1
         end
-        
+
         # Fragment index search for matching precursors
         searchScan!(
-            getPrecursorScores(search_data),
+            raw_counter,
             getRTBins(frag_index),
             getFragBins(frag_index),
             getFragments(frag_index),
@@ -59,32 +135,34 @@ function searchFragmentIndex(
             rt_bin_idx,
             irt_hi,
             mem,
-            getQuadTransmissionFunction(qtm, getCenterMz(spectra, scan_idx), getIsolationWidthMz(spectra, scan_idx)),
+            getQuadTransmissionFunction(qtm, center_mz, isolation_width),
             getIsotopeErrBounds(params)
         )
 
-        # Filter precursor matches based on score
-        match_count, prec_count = filterPrecursorMatches!(getPrecursorScores(search_data), getMinIndexSearchScore(params))
+        new_scan = (;
+            counter = raw_counter,
+            center_mz = center_mz,
+            isolation_width = isolation_width,
+            scan_idx = scan_idx,
+        )
 
-        if getID(getPrecursorScores(search_data), 1)>0
-            start_idx = prec_id + 1
-            n = 1
-            while n <= getPrecursorScores(search_data).matches
-                prec_id += 1
-                if prec_id > length(precursors_passed_scoring)
-                    append!(precursors_passed_scoring, 
-                            Vector{eltype(precursors_passed_scoring)}(undef, length(precursors_passed_scoring))
-                            )
-                end
-                precursors_passed_scoring[prec_id] = getID(getPrecursorScores(search_data), n)
-                n += 1
+        if curr_scan !== nothing
+            finalize_scan!(curr_scan, prev_scan, new_scan)
+            if prev_scan !== nothing
+                release_counter!(prev_scan.counter)
             end
-            scan_to_prec_idx[scan_idx] = start_idx:prec_id#stop_idx
-        else
-            scan_to_prec_idx[scan_idx] = missing
         end
 
-        reset!(getPrecursorScores(search_data))
+        prev_scan = curr_scan
+        curr_scan = new_scan
+    end
+
+    if curr_scan !== nothing
+        finalize_scan!(curr_scan, prev_scan, nothing)
+        if prev_scan !== nothing
+            release_counter!(prev_scan.counter)
+        end
+        release_counter!(curr_scan.counter)
     end
 
     return precursors_passed_scoring[1:prec_id]
