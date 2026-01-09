@@ -248,30 +248,60 @@ function BuildSpecLib(params_path::String)
                 # Load tables
                 precursors_table = Arrow.Table(precursors_arrow_path)
                 fragments_table = Arrow.Table(raw_fragments_arrow_path)
-                #Record the spline knots 
-                try
-                    spl_knots = copy(fragments_table[:knot_vector][1])
-                    jldsave(
-                        joinpath(lib_dir, "spline_knots.jld2");
-                        spl_knots
-                    )
-                    ion_dictionary = get_altimeter_ion_dict(asset_path("ion_dictionary.txt"))
 
-                    parse_altimeter_fragments(
-                        precursors_table,
-                        fragments_table,
-                        frag_annotation_type,
-                        ion_dictionary,
-                        10000,
-                        asset_path("immonium.txt"),
-                        lib_dir,
-                        Dict{String, Int8}(),
-                        iso_mod_to_mass,
-                        koina_model_type
-                    )
+                # Record the spline knots if they were produced by fragment predictions
+                has_knot_vector = hasproperty(fragments_table, :knot_vector)
+                @info "Fragment prediction includes knot_vector column" has_knot_vector
 
-                catch
-                    #println("No spline knots. static library")
+                if has_knot_vector
+                    try
+                        knot_column = fragments_table[:knot_vector]
+                        @info "Attempting to persist spline knots for fragment scoring" knot_entries=length(knot_column)
+                        spl_knots = copy(knot_column[1])
+                        jldsave(
+                            joinpath(lib_dir, "spline_knots.jld2");
+                            spl_knots
+                        )
+                        @info "Saved spline knots for fragment scoring" output_path=joinpath(lib_dir, "spline_knots.jld2") knot_count=length(spl_knots)
+
+                        ion_dictionary = get_altimeter_ion_dict(asset_path("ion_dictionary.txt"))
+
+                        parse_altimeter_fragments(
+                            precursors_table,
+                            fragments_table,
+                            frag_annotation_type,
+                            ion_dictionary,
+                            10000,
+                            asset_path("immonium.txt"),
+                            lib_dir,
+                            Dict{String, Int8}(),
+                            iso_mod_to_mass,
+                            koina_model_type
+                        )
+
+                    catch e
+                        @warn "Failed to extract or save spline knots; using static fragment parsing" exception=(e, catch_backtrace())
+
+                        # Process ion annotations
+                        ion_annotation_set = get_ion_annotation_set(fragments_table[:annotation])
+                        frag_name_to_idx = Dict(ion => UInt16(i) for (i, ion) in enumerate(ion_annotation_set))
+
+                        ion_annotation_dict = parse_koina_fragments(
+                            precursors_table,
+                            fragments_table,
+                            frag_annotation_type,
+                            ion_annotation_set,
+                            frag_name_to_idx,
+                            10000,
+                            asset_path("immonium.txt"),
+                            lib_dir,
+                            Dict{String, Int8}(),
+                            iso_mod_to_mass,
+                            koina_model_type
+                        )
+                    end
+                else
+                    @info "No knot_vector column; skipping spline knots save (static library or non-spline predictions)"
 
                     # Process ion annotations
                     ion_annotation_set = get_ion_annotation_set(fragments_table[:annotation])

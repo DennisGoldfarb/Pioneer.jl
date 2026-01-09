@@ -94,7 +94,18 @@ function buildPionLib(spec_lib_path::String,
         return nothing
     end
 
-    #Simple fragments that go into the fragment index 
+    spline_knots = try
+        JLD2.load(joinpath(spec_lib_path, "spline_knots.jld2"))["spl_knots"]
+    catch
+        nothing
+    end
+    if isnothing(spline_knots)
+        @info "No spline knots found; using fixed fragment rank weights" spec_lib_path
+    else
+        @info "Loaded spline knots for spline-scored fragment indexing" spec_lib_path knot_count=length(spline_knots)
+    end
+
+    #Simple fragments that go into the fragment index
     #println("Get index fragments...")
     simple_frags = getSimpleFrags(
         fragments_table[:mz],
@@ -120,7 +131,10 @@ function buildPionLib(spec_lib_path::String,
         include_neutral_diff,
         max_frag_charge,
         frag_bounds,
-        rank_to_score
+        rank_to_score;
+        frag_coefficients = fragments_table[:coefficients],
+        spline_knots = spline_knots,
+        spline_degree = 3,
     );
 
     #println("Build fragment index...")
@@ -617,7 +631,11 @@ function getSimpleFrags(
     include_neutral_diff::Bool,
     max_frag_charge::UInt8,
     frag_bounds::FragBoundModel,
-    rank_to_score::Vector{UInt8},
+    rank_to_score::Vector{UInt8};
+    frag_coefficients=nothing,
+    spline_knots=nothing,
+    spline_degree::Int=3,
+    spline_nce::Float32=25f0,
     )
     if (length(prec_to_frag_idx) - 1) != (length(precursor_mz))
         #println("mistake")
@@ -628,10 +646,56 @@ function getSimpleFrags(
     n_precursors = UInt32(length(precursor_mz))
     simple_frags = Vector{SimpleFrag{Float32}}(undef, n_precursors*max_rank_index)
     simple_frag_idx = 0
+    knots_tuple = isnothing(spline_knots) ? nothing : Tuple(Float32.(spline_knots))
+    coeff_count = isnothing(frag_coefficients) ? 0 : length(frag_coefficients)
+    use_spline_scores = !isnothing(frag_coefficients) && !isnothing(knots_tuple)
+
+    if use_spline_scores
+        @info "Spline fragment scoring enabled" coeff_count knots_count=length(knots_tuple) spline_degree spline_nce
+    else
+        @info "Spline fragment scoring disabled; falling back to fixed rank weights" has_coefficients=!isnothing(frag_coefficients) coeff_count has_knots=!isnothing(knots_tuple)
+    end
+
+    function get_rank_scores(filtered_frag_indices::Vector{UInt32})
+        rank_limit = length(filtered_frag_indices)
+        if rank_limit == 0
+            return UInt8[], false
+        end
+
+        if !use_spline_scores
+            return rank_to_score[1:rank_limit], false
+        end
+
+        intensities = Vector{Float32}(undef, rank_limit)
+        total_intensity = zero(Float32)
+        for (local_idx, frag_idx) in enumerate(filtered_frag_indices)
+            coef = frag_coefficients[frag_idx]
+            intensity = Float32(splevl(spline_nce, knots_tuple, coef, spline_degree))
+            intensity = max(intensity, zero(Float32))
+            intensities[local_idx] = intensity
+            total_intensity += intensity
+        end
+
+        if total_intensity == 0
+            return rank_to_score[1:rank_limit], false
+        end
+
+        total_score = sum(rank_to_score[1:rank_limit])
+        scores = Vector{UInt8}(undef, rank_limit)
+        for i in 1:rank_limit
+            proportional_score = intensities[i] / total_intensity * total_score
+            scores[i] = UInt8(clamp(round(proportional_score), one(UInt8), typemax(UInt8)))
+        end
+        return scores, true
+    end
+
+    zero_intensity_fallbacks = 0
+
     for pid in range(one(UInt32), n_precursors)
         prec_mz = precursor_mz[pid]
         frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
-        rank = 1
+        filtered_frag_indices = UInt32[]
+
         for frag_idx in range(frag_start_idx, frag_stop_idx)
             if fragFilter(
                     frag_is_y[frag_idx],
@@ -656,6 +720,25 @@ function getSimpleFrags(
                     max_frag_charge)==false
                 continue
             end
+
+            push!(filtered_frag_indices, UInt32(frag_idx))
+            if length(filtered_frag_indices) >= max_rank_index
+                break
+            end
+        end
+
+        rank_scores, used_spline_rank = get_rank_scores(filtered_frag_indices)
+        if use_spline_scores && !used_spline_rank && !isempty(filtered_frag_indices)
+            zero_intensity_fallbacks += 1
+            if zero_intensity_fallbacks <= 5 || pid % 100_000 == 0
+                @warn "Spline scoring fell back to fixed rank weights" pid rank_limit=length(filtered_frag_indices)
+            end
+        end
+
+        if pid % 100_000 == 0
+            @info "Fragment scoring sample" pid use_spline_scores used_spline_rank rank_scores rank_limit=length(filtered_frag_indices)
+        end
+        for (local_rank, frag_idx) in enumerate(filtered_frag_indices)
             simple_frag_idx += 1
             simple_frags[simple_frag_idx] = SimpleFrag(
                 frag_mz[frag_idx],
@@ -663,14 +746,13 @@ function getSimpleFrags(
                 precursor_mz[pid],
                 precursor_irt[pid],
                 precursor_charge[pid],
-                rank_to_score[rank]
+                rank_scores[local_rank]
             )
-            rank += 1
-            if rank > max_rank_index
-                break
-            end
         end
+    end
 
+    if use_spline_scores && zero_intensity_fallbacks > 0
+        @info "Total spline scoring fallbacks to fixed weights" zero_intensity_fallbacks
     end
     return simple_frags[1:simple_frag_idx]
 end
