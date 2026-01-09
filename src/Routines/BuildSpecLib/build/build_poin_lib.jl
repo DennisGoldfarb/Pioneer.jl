@@ -14,6 +14,7 @@
                 max_frag_rank::UInt8,
                 min_frag_intensity::Float32,
                 rank_to_score::Vector{UInt8},
+                rank_to_score_mode::String,
                 frag_bounds::FragBoundModel,
                 frag_bin_tol_ppm::Float32,
                 rt_bin_tol_ppm::Float32,
@@ -78,6 +79,7 @@ function buildPionLib(spec_lib_path::String,
                       length_to_frag_count_multiple::AbstractFloat,
                       min_frag_intensity::Float32,
                       rank_to_score::Vector{UInt8},
+                      rank_to_score_mode::String,
                       frag_bounds::FragBoundModel,
                       frag_bin_tol_ppm::Float32,
                       rt_bin_tol_ppm::Float32,
@@ -94,7 +96,15 @@ function buildPionLib(spec_lib_path::String,
         return nothing
     end
 
-    #Simple fragments that go into the fragment index 
+    proportional_scores = nothing
+    proportional_ranks = nothing
+    effective_rank_mode = rank_to_score_mode
+    if rank_to_score_mode == "intensity_proportional"
+        @warn "Intensity proportional scoring requires spline coefficients; falling back to fixed ranks"
+        effective_rank_mode = "fixed"
+    end
+
+    #Simple fragments that go into the fragment index
     #println("Get index fragments...")
     simple_frags = getSimpleFrags(
         fragments_table[:mz],
@@ -120,7 +130,10 @@ function buildPionLib(spec_lib_path::String,
         include_neutral_diff,
         max_frag_charge,
         frag_bounds,
-        rank_to_score
+        rank_to_score,
+        effective_rank_mode,
+        proportional_scores,
+        proportional_ranks
     );
 
     #println("Build fragment index...")
@@ -178,6 +191,9 @@ function buildPionLib(spec_lib_path::String,
     length_to_frag_count_multiple,
     min_frag_intensity,
     model_type
+    ,
+    effective_rank_mode,
+    proportional_ranks
     );
     
     save_detailed_frags(
@@ -274,6 +290,7 @@ function buildPionLib(spec_lib_path::String,
                       length_to_frag_count_multiple::AbstractFloat,
                       min_frag_intensity::Float32,
                       rank_to_score::Vector{UInt8},
+                      rank_to_score_mode::String,
                       frag_bounds::FragBoundModel,
                       frag_bin_tol_ppm::Float32,
                       rt_bin_tol_ppm::Float32,
@@ -289,7 +306,61 @@ function buildPionLib(spec_lib_path::String,
         return nothing
     end
 
-    #Simple fragments that go into the fragment index 
+    proportional_scores = nothing
+    proportional_ranks = nothing
+    effective_rank_mode = rank_to_score_mode
+    if rank_to_score_mode == "intensity_proportional"
+        knots = if hasproperty(fragments_table, :knot_vector)
+            Tuple(fragments_table[:knot_vector][1])
+        elseif isfile(joinpath(spec_lib_path, "spline_knots.jld2"))
+            try
+                Tuple(load(joinpath(spec_lib_path, "spline_knots.jld2"))["spl_knots"])
+            catch
+                nothing
+            end
+        else
+            nothing
+        end
+
+        proportional_scores, proportional_ranks = compute_proportional_fragment_scores(
+            fragments_table[:coefficients],
+            fragments_table[:intensity],
+            fragments_table[:mz],
+            fragments_table[:is_y],
+            fragments_table[:is_b],
+            fragments_table[:is_p],
+            fragments_table[:fragment_index],
+            fragments_table[:charge],
+            fragments_table[:isotope],
+            fragments_table[:is_internal],
+            fragments_table[:is_immonium],
+            fragments_table[:has_neutral_diff],
+            precursors_table[:mz],
+            precursors_table[:prec_charge],
+            precursors_table[:length],
+            prec_to_frag[:start_idx],
+            y_start,
+            b_start,
+            include_p,
+            include_isotope,
+            include_immonium,
+            include_internal,
+            include_neutral_diff,
+            max_frag_charge,
+            frag_bounds,
+            max_frag_rank,
+            length_to_frag_count_multiple,
+            min_frag_intensity,
+            rank_to_score,
+            knots,
+        )
+
+        if proportional_ranks === nothing
+            effective_rank_mode = "fixed"
+        end
+    end
+
+    #Simple fragments that go into the fragment index
     #println("Get index fragments...")
     simple_frags = getSimpleFrags(
         fragments_table[:mz],
@@ -315,7 +386,10 @@ function buildPionLib(spec_lib_path::String,
         include_neutral_diff,
         max_frag_charge,
         frag_bounds,
-        rank_to_score
+        rank_to_score,
+        effective_rank_mode,
+        proportional_scores,
+        proportional_ranks
     );
 
     #println("Build fragment index...")
@@ -373,7 +447,9 @@ function buildPionLib(spec_lib_path::String,
     max_frag_rank,
     length_to_frag_count_multiple,
     min_frag_intensity,
-    model_type
+    model_type,
+    effective_rank_mode,
+    proportional_ranks
     );
     
     save_detailed_frags(
@@ -593,6 +669,142 @@ Extract fragments for the fragment index from raw fragment data.
 # Returns
 - Vector of SimpleFrag objects, containing filtered fragments for the index
 """
+function compute_proportional_fragment_scores(
+    frag_coef::AbstractVector{NTuple{N, Float32}},
+    frag_intensity::AbstractVector{Float16},
+    frag_mz::AbstractVector{Float32},
+    frag_is_y::AbstractVector{Bool},
+    frag_is_b::AbstractVector{Bool},
+    frag_is_p::AbstractVector{Bool},
+    frag_index::AbstractVector{UInt8},
+    frag_charge::AbstractVector{UInt8},
+    frag_isotope::AbstractVector{UInt8},
+    frag_internal::AbstractVector{Bool},
+    frag_immonium::AbstractVector{Bool},
+    frag_neutral_diff::AbstractVector{Bool},
+    precursor_mz::AbstractVector{Float32},
+    precursor_charge::AbstractVector{UInt8},
+    prec_len::AbstractVector{UInt8},
+    prec_to_frag_idx::AbstractVector{UInt64},
+    y_start::UInt8,
+    b_start::UInt8,
+    include_p::Bool,
+    include_isotope::Bool,
+    include_immonium::Bool,
+    include_internal::Bool,
+    include_neutral_diff::Bool,
+    max_frag_charge::UInt8,
+    frag_bounds::FragBoundModel,
+    max_frag_rank::UInt8,
+    length_to_frag_count_multiple::AbstractFloat,
+    min_frag_intensity::AbstractFloat,
+    rank_to_score::Vector{UInt8},
+    knots::Union{Nothing, NTuple{K, Float32}},
+    ) where {N,K}
+    if knots === nothing
+        return nothing, nothing
+    end
+    proportional_scores = zeros(UInt8, length(frag_coef))
+    proportional_ranks = zeros(UInt8, length(frag_coef))
+
+    degree = length(knots) - length(first(frag_coef)) - 1
+    n_precursors = length(precursor_mz)
+    progress_batch = max(1, cld(n_precursors, Threads.nthreads() * 20))
+    batch_progress_total = cld(n_precursors, progress_batch)
+    pbar = ProgressBar(total=batch_progress_total)
+    first_thread_progress = Ref(0)
+
+    Threads.@threads :dynamic for pid_int in range(one(Int), n_precursors)
+        try
+            prec_mz = precursor_mz[pid_int]
+            allowed_max = min(max_frag_rank, UInt8(round((prec_len[pid_int]) * length_to_frag_count_multiple) + 1))
+            frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid_int], prec_to_frag_idx[pid_int+1] - 1
+            candidate_indices = Int[]
+            for frag_idx in range(frag_start_idx, frag_stop_idx)
+                if !fragFilter(
+                        frag_is_y[frag_idx],
+                        frag_is_b[frag_idx],
+                        frag_is_p[frag_idx],
+                        frag_index[frag_idx],
+                        frag_charge[frag_idx],
+                        frag_isotope[frag_idx],
+                        frag_internal[frag_idx],
+                        frag_immonium[frag_idx],
+                        frag_neutral_diff[frag_idx],
+                        frag_mz[frag_idx],
+                        frag_bounds,
+                        prec_mz,
+                        y_start,
+                        b_start,
+                        include_p,
+                        include_isotope,
+                        include_immonium,
+                        include_internal,
+                        include_neutral_diff,
+                        max_frag_charge)
+                    continue
+                end
+                if min_frag_intensity > frag_intensity[frag_idx]
+                    continue
+                end
+                push!(candidate_indices, frag_idx)
+                if length(candidate_indices) == Int(allowed_max)
+                    break
+                end
+            end
+            if isempty(candidate_indices)
+                continue
+            end
+
+            top_count = min(length(candidate_indices), Int(allowed_max))
+            if top_count == 0
+                continue
+            end
+
+            top_indices = view(candidate_indices, 1:top_count)
+            top_aucs = map(top_indices) do frag_idx
+                v25 = splevl(25f0, knots, frag_coef[frag_idx], degree)
+                v30 = splevl(30f0, knots, frag_coef[frag_idx], degree)
+                (v25 + v30) * 2.5f0
+            end
+            auc_sum = sum(top_aucs)
+            if auc_sum == 0
+                top_aucs .= 1 / top_count
+                auc_sum = sum(top_aucs)
+            end
+            weights = top_aucs ./ auc_sum
+            target_count = min(top_count, length(rank_to_score))
+            target_total = sum(rank_to_score[1:target_count])
+            scaled = round.(Int, weights .* target_total)
+            diff = target_total - sum(scaled)
+            if diff != 0
+                adjust_order = sortperm(weights, rev=true)
+                for i in 1:abs(diff)
+                    adj_idx = adjust_order[((i - 1) % length(adjust_order)) + 1]
+                    scaled[adj_idx] += sign(diff)
+                end
+            end
+
+            for (local_rank, frag_idx) in enumerate(top_indices)
+                proportional_scores[frag_idx] = UInt8(clamp(scaled[local_rank], 0, typemax(UInt8)))
+                proportional_ranks[frag_idx] = UInt8(local_rank)
+            end
+        finally
+            if Threads.threadid() == 1
+                first_thread_progress[] += 1
+                if (first_thread_progress[] % progress_batch) == 0
+                    update(pbar)
+                end
+            end
+        end
+    end
+    remaining_batches = max(0, batch_progress_total - fld(first_thread_progress[], progress_batch))
+    for _ in 1:remaining_batches
+        update(pbar)
+    end
+    return proportional_scores, proportional_ranks
+end
+
 function getSimpleFrags(
     frag_mz::AbstractVector{Float32},
     frag_is_y::AbstractVector{Bool},
@@ -618,20 +830,23 @@ function getSimpleFrags(
     max_frag_charge::UInt8,
     frag_bounds::FragBoundModel,
     rank_to_score::Vector{UInt8},
+    rank_to_score_mode::String = "fixed",
+    proportional_scores::Union{Nothing, AbstractVector{UInt8}} = nothing,
+    proportional_ranks::Union{Nothing, AbstractVector{UInt8}} = nothing,
     )
     if (length(prec_to_frag_idx) - 1) != (length(precursor_mz))
         #println("mistake")
     end
     #Maximum ranked fragment that can be included in the fragment index
     max_rank_index = length(rank_to_score)
-    #Number of precursors 
+    #Number of precursors
     n_precursors = UInt32(length(precursor_mz))
     simple_frags = Vector{SimpleFrag{Float32}}(undef, n_precursors*max_rank_index)
     simple_frag_idx = 0
     for pid in range(one(UInt32), n_precursors)
         prec_mz = precursor_mz[pid]
         frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
-        rank = 1
+        candidate_indices = Int[]
         for frag_idx in range(frag_start_idx, frag_stop_idx)
             if fragFilter(
                     frag_is_y[frag_idx],
@@ -656,6 +871,20 @@ function getSimpleFrags(
                     max_frag_charge)==false
                 continue
             end
+            push!(candidate_indices, frag_idx)
+        end
+
+        if rank_to_score_mode == "intensity_proportional" && proportional_ranks !== nothing && proportional_scores !== nothing
+            filter!(idx -> proportional_ranks[idx] > 0, candidate_indices)
+            sort!(candidate_indices, by = idx -> proportional_ranks[idx])
+        end
+
+        rank = 1
+        for frag_idx in candidate_indices
+            if rank > max_rank_index
+                break
+            end
+            score = rank_to_score_mode == "intensity_proportional" && proportional_scores !== nothing && proportional_scores[frag_idx] > 0 ? proportional_scores[frag_idx] : rank_to_score[rank]
             simple_frag_idx += 1
             simple_frags[simple_frag_idx] = SimpleFrag(
                 frag_mz[frag_idx],
@@ -663,12 +892,9 @@ function getSimpleFrags(
                 precursor_mz[pid],
                 precursor_irt[pid],
                 precursor_charge[pid],
-                rank_to_score[rank]
+                score
             )
             rank += 1
-            if rank > max_rank_index
-                break
-            end
         end
 
     end
@@ -1013,7 +1239,9 @@ function getDetailedFrags(
     max_frag_rank::UInt8,
     length_to_frag_count_multiple::AbstractFloat,
     min_frag_intensity::AbstractFloat,
-    koina_model::KoinaModelType)
+    koina_model::KoinaModelType,
+    rank_to_score_mode::String = "fixed",
+    proportional_ranks::Union{Nothing, AbstractVector{UInt8}} = nothing)
 
     if (length(prec_to_frag_idx) - 1) != (length(precursor_mz))
         #println("mistake")
@@ -1025,17 +1253,13 @@ function getDetailedFrags(
     n_precursors = UInt32(length(precursor_mz))
     #Keep track of number of fragments to allocate 
     n_frags = zero(UInt64)
+    precursor_fragments = Vector{Vector{Int}}(undef, Int(n_precursors))
     #println("counting fragments...")
     for pid in ProgressBar(range(one(UInt32), n_precursors))
         prec_mz = precursor_mz[pid] #Filter on precursor mass
         frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
-        rank = 1
-        #count fragments for the current precursor
+        candidate_indices = Int[]
         for frag_idx in range(frag_start_idx, frag_stop_idx)
-            #Filter on fragment properties
-            if min_frag_intensity > frag_intensity[frag_idx]
-                continue
-            end
             if !fragFilter(
                     frag_is_y[frag_idx],
                     frag_is_b[frag_idx],
@@ -1059,13 +1283,26 @@ function getDetailedFrags(
                     max_frag_charge)
                 continue
             end
-            #update counters 
-            n_frags += one(UInt64)
-            rank += 1
-            if filterFrag(rank, prec_len[pid], max_frag_rank, length_to_frag_count_multiple)
-                break
+            if min_frag_intensity > frag_intensity[frag_idx]
+                continue
             end
+            push!(candidate_indices, frag_idx)
         end
+        if rank_to_score_mode == "intensity_proportional" && proportional_ranks !== nothing
+            filter!(idx -> proportional_ranks[idx] > 0, candidate_indices)
+            sort!(candidate_indices, by = idx -> proportional_ranks[idx])
+        end
+        if isempty(candidate_indices)
+            precursor_fragments[Int(pid)] = Int[]
+            continue
+        end
+        if isempty(candidate_indices)
+            precursor_fragments[Int(pid)] = Int[]
+            continue
+        end
+        allowed_max = min(Int(max_frag_rank), Int(round((prec_len[pid]) * length_to_frag_count_multiple) + 1))
+        precursor_fragments[Int(pid)] = candidate_indices[1:min(allowed_max, length(candidate_indices))]
+        n_frags += UInt64(length(precursor_fragments[Int(pid)]))
     end
     detailed_frags = Vector{DetailedFrag{Float32}}(
                                     undef, 
@@ -1077,35 +1314,8 @@ function getDetailedFrags(
         prec_mz = precursor_mz[pid]
         #Index of the first fragment for the precursor 
         prec_to_frag_idx_new[pid] = UInt64(detailed_frag_idx)
-        frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
         rank = 1
-        for frag_idx in range(frag_start_idx, frag_stop_idx)
-            if !fragFilter(
-                    frag_is_y[frag_idx],
-                    frag_is_b[frag_idx],
-                    frag_is_p[frag_idx],
-                    frag_index[frag_idx],
-                    frag_charge[frag_idx],
-                    frag_isotope[frag_idx],
-                    frag_internal[frag_idx],
-                    frag_immonium[frag_idx],
-                    frag_neutral_diff[frag_idx],
-                    frag_mz[frag_idx],
-                    frag_bounds,
-                    prec_mz,
-                    y_start,
-                    b_start,
-                    include_p,
-                    include_isotope,
-                    include_immonium,
-                    include_internal,
-                    include_neutral_diff,
-                    max_frag_charge)
-                continue
-            end
-            if min_frag_intensity > frag_intensity[frag_idx]
-                continue
-            end
+        for frag_idx in precursor_fragments[Int(pid)]
             is_y, is_internal, is_immonium = frag_is_y[frag_idx], frag_internal[frag_idx], frag_immonium[frag_idx]
             is_b, is_p = frag_is_b[frag_idx], frag_is_p[frag_idx]
             detailed_frags[detailed_frag_idx] = DetailedFrag(
@@ -1128,9 +1338,6 @@ function getDetailedFrags(
             )
             detailed_frag_idx += 1
             rank += 1
-            if filterFrag(rank, prec_len[pid], max_frag_rank, length_to_frag_count_multiple)
-                break
-            end
         end
 
     end
@@ -1243,7 +1450,9 @@ function getDetailedFrags(
     max_frag_rank::UInt8,
     length_to_frag_count_multiple::AbstractFloat,
     min_frag_intensity::AbstractFloat,
-    koina_model::SplineCoefficientModel) where {N}
+    koina_model::SplineCoefficientModel,
+    rank_to_score_mode::String = "fixed",
+    proportional_ranks::Union{Nothing, AbstractVector{UInt8}} = nothing) where {N}
 
     if (length(prec_to_frag_idx) - 1) != (length(precursor_mz))
         #println("mistake")
@@ -1255,14 +1464,13 @@ function getDetailedFrags(
     n_precursors = UInt32(length(precursor_mz))
     #Keep track of number of fragments to allocate 
     n_frags = zero(UInt64)
+    precursor_fragments = Vector{Vector{Int}}(undef, Int(n_precursors))
     #println("counting fragments...")
     for pid in ProgressBar(range(one(UInt32), n_precursors))
         prec_mz = precursor_mz[pid] #Filter on precursor mass
         frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
-        rank = 1
-        #count fragments for the current precursor
+        candidate_indices = Int[]
         for frag_idx in range(frag_start_idx, frag_stop_idx)
-            #Filter on fragment properties
             if !fragFilter(
                     frag_is_y[frag_idx],
                     frag_is_b[frag_idx],
@@ -1286,13 +1494,15 @@ function getDetailedFrags(
                     max_frag_charge)
                 continue
             end
-            #update counters 
-            n_frags += one(UInt64)
-            rank += 1
-            if filterFrag(rank, prec_len[pid], max_frag_rank, length_to_frag_count_multiple)
-                break
-            end
+            push!(candidate_indices, frag_idx)
         end
+        if rank_to_score_mode == "intensity_proportional" && proportional_ranks !== nothing
+            filter!(idx -> proportional_ranks[idx] > 0, candidate_indices)
+            sort!(candidate_indices, by = idx -> proportional_ranks[idx])
+        end
+        allowed_max = min(Int(max_frag_rank), Int(round((prec_len[pid]) * length_to_frag_count_multiple) + 1))
+        precursor_fragments[Int(pid)] = candidate_indices[1:min(allowed_max, length(candidate_indices))]
+        n_frags += UInt64(length(precursor_fragments[Int(pid)]))
     end
     n_tuple_p = typeof(first(frag_coef))
     n_tuple_size = length(n_tuple_p.parameters)
@@ -1307,32 +1517,8 @@ function getDetailedFrags(
         prec_mz = precursor_mz[pid]
         #Index of the first fragment for the precursor 
         prec_to_frag_idx_new[pid] = UInt64(detailed_frag_idx)
-        frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
         rank = 1
-        for frag_idx in range(frag_start_idx, frag_stop_idx)
-            if !fragFilter(
-                    frag_is_y[frag_idx],
-                    frag_is_b[frag_idx],
-                    frag_is_p[frag_idx],
-                    frag_index[frag_idx],
-                    frag_charge[frag_idx],
-                    frag_isotope[frag_idx],
-                    frag_internal[frag_idx],
-                    frag_immonium[frag_idx],
-                    frag_neutral_diff[frag_idx],
-                    frag_mz[frag_idx],
-                    frag_bounds,
-                    prec_mz,
-                    y_start,
-                    b_start,
-                    include_p,
-                    include_isotope,
-                    include_immonium,
-                    include_internal,
-                    include_neutral_diff,
-                    max_frag_charge)
-                continue
-            end
+        for frag_idx in precursor_fragments[Int(pid)]
             is_y, is_internal, is_immonium = frag_is_y[frag_idx], frag_internal[frag_idx], frag_immonium[frag_idx]
             is_b, is_p = frag_is_b[frag_idx], frag_is_p[frag_idx]
             detailed_frags[detailed_frag_idx] = SplineDetailedFrag(
@@ -1355,9 +1541,6 @@ function getDetailedFrags(
             )
             detailed_frag_idx += 1
             rank += 1
-            if filterFrag(rank, prec_len[pid], max_frag_rank, length_to_frag_count_multiple)
-                break
-            end
         end
 
     end

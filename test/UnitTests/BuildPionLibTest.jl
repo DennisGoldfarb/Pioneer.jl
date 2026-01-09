@@ -267,6 +267,7 @@ end
             length_to_frag_count_multiple,
             min_frag_intensity,
             rank_to_score,
+            "fixed",
             frag_bounds,
             frag_bin_tol_ppm,
             rt_bin_tol_ppm,
@@ -361,6 +362,7 @@ end
             length_to_frag_count_multiple,
             min_frag_intensity,
             rank_to_score,
+            "fixed",
             frag_bounds,
             frag_bin_tol_ppm,
             rt_bin_tol_ppm,
@@ -375,7 +377,85 @@ end
         @test haskey(spline_fragments_data, "data")
         @test spline_fragments_data["data"] isa Vector
         @test eltype(spline_fragments_data["data"]) <: SplineDetailedFrag{3, Float32}
-        
+
+        @testset "Proportional rank weighting" begin
+            knots = (0.0f0, 1.0f0, 2.0f0, 3.0f0, 4.0f0, 5.0f0, 6.0f0)
+            proportional_scores, proportional_ranks = compute_proportional_fragment_scores(
+                spline_fragments_table.coefficients,
+                spline_fragments_table.intensity,
+                spline_fragments_table.mz,
+                spline_fragments_table.is_y,
+                spline_fragments_table.is_b,
+                spline_fragments_table.is_p,
+                spline_fragments_table.fragment_index,
+                spline_fragments_table.charge,
+                spline_fragments_table.isotope,
+                spline_fragments_table.is_internal,
+                spline_fragments_table.is_immonium,
+                spline_fragments_table.has_neutral_diff,
+                precursors_table.mz,
+                precursors_table.prec_charge,
+                precursors_table.length,
+                prec_to_frag_df.start_idx,
+                y_start,
+                b_start,
+                include_p,
+                include_isotope,
+                include_immonium,
+                include_internal,
+                include_neutral_diff,
+                max_frag_charge,
+                frag_bounds,
+                max_frag_rank,
+                length_to_frag_count_multiple,
+                min_frag_intensity,
+                rank_to_score,
+                knots,
+            )
+
+            expected_total = sum(rank_to_score[1:2])
+            for pid in 1:length(precursors_table.mz)
+                frag_start_idx, frag_stop_idx = prec_to_frag_df.start_idx[pid], prec_to_frag_df.start_idx[pid+1] - 1
+                assigned_scores = proportional_scores[frag_start_idx:frag_stop_idx]
+                @test sum(assigned_scores) == expected_total
+            end
+
+            proportional_simple_frags = getSimpleFrags(
+                spline_fragments_table.mz,
+                spline_fragments_table.is_y,
+                spline_fragments_table.is_b,
+                spline_fragments_table.is_p,
+                spline_fragments_table.fragment_index,
+                spline_fragments_table.charge,
+                spline_fragments_table.isotope,
+                spline_fragments_table.is_internal,
+                spline_fragments_table.is_immonium,
+                spline_fragments_table.has_neutral_diff,
+                precursors_table.mz,
+                precursors_table.irt,
+                precursors_table.prec_charge,
+                prec_to_frag_df.start_idx,
+                y_start,
+                b_start,
+                include_p,
+                include_isotope,
+                include_immonium,
+                include_internal,
+                include_neutral_diff,
+                max_frag_charge,
+                frag_bounds,
+                rank_to_score,
+                "intensity_proportional",
+                proportional_scores,
+                proportional_ranks,
+            )
+
+            for pid in 1:length(precursors_table.mz)
+                frag_scores = sum(getScore(frag) for frag in proportional_simple_frags if getPrecID(frag) == pid)
+                @test frag_scores == expected_total
+            end
+        end
+
 
 
         # Clean up

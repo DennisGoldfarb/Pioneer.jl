@@ -374,6 +374,7 @@ function BuildSpecLib(params_path::String)
                 Float32(_params.library_params["length_to_frag_count_multiple"]),
                 Float32(_params.library_params["min_frag_intensity"]),
                 UInt8.(_params.library_params["rank_to_score"]),
+                _params.library_params["rank_to_score_mode"],
                 frag_bounds,
                 Float32(_params.library_params["frag_bin_tol_ppm"]),
                 Float32(_params.library_params["rt_bin_tol"]),
