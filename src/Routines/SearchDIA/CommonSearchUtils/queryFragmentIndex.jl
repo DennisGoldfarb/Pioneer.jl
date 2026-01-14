@@ -203,12 +203,12 @@ function searchFragmentBin!(prec_id_to_score::Counter{UInt32, UInt8},
         end
     end
         
-    function addFragmentMatches!(prec_id_to_score::Counter{UInt32, UInt8}, 
+    function addFragmentMatches!(prec_id_to_score::Counter{UInt32, UInt8},
                                     fragments::AbstractArray{IndexFragment},
                                     matched_frag_range::UnitRange{UInt32})
         @inline @inbounds for i in matched_frag_range
             frag = fragments[i]
-            inc!(prec_id_to_score, getPrecID(frag), getScore(frag))
+            or_inc!(prec_id_to_score, getPrecID(frag), getScore(frag))
         end
     end
     
@@ -336,9 +336,12 @@ function searchScan!(prec_id_to_score::Counter{UInt32, UInt8},
     return nothing#filterPrecursorMatches!(prec_id_to_score, min_score)
 end
 
-function filterPrecursorMatches!(prec_id_to_score::Counter{UInt32, UInt8}, min_score::UInt8)
-    match_count = countFragMatches(prec_id_to_score, min_score)
-    prec_count = getSize(prec_id_to_score) - 1
-    sortCounter!(prec_id_to_score);
+function filterPrecursorMatches!(smoothed_scores::Counter{UInt32, UInt8},
+                                 current_scores::Counter{UInt32, UInt8},
+                                 min_score::UInt8)
+    current_min_score = min_score <= one(UInt8) ? zero(UInt8) : min_score - one(UInt8)
+    match_count = countFragMatches(smoothed_scores, min_score, current_scores, current_min_score)
+    prec_count = getSize(smoothed_scores) - 1
+    sortCounter!(smoothed_scores);
     return match_count, prec_count
 end

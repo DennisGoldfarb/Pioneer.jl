@@ -31,60 +31,131 @@ function searchFragmentIndex(
     prec_id = 0
     precursors_passed_scoring = Vector{UInt32}(undef, 250000)
     rt_bin_idx = 1
-    for scan_idx in thread_task
-        #if scan_idx % 50 != 0
-        #    continue
-        #end
-        # Skip invalid indices
-        (scan_idx <= 0 || scan_idx > length(spectra)) && continue
-        getMsOrder(spectra, scan_idx) ∉ getSpecOrder(params) && continue
+    counter_pool = (
+        getPrecursorScores(search_data),
+        Counter(UInt32, UInt8, length(getPrecursorScores(search_data).counts)),
+        Counter(UInt32, UInt8, length(getPrecursorScores(search_data).counts)),
+    )
+    smoothed_scores = Counter(UInt32, UInt8, length(getPrecursorScores(search_data).counts))
+    counter_index = Ref(1)
 
-        # Update RT bin index based on iRT window
-        irt_lo, irt_hi = getRTWindow(rt_to_irt_spline(getRetentionTime(spectra, scan_idx)), irt_tol)
-        while rt_bin_idx < length(getRTBins(frag_index)) && getHigh(getRTBin(frag_index, rt_bin_idx)) < irt_lo
-            rt_bin_idx += 1
+    function next_counter()
+        counter_index[] = counter_index[] % length(counter_pool) + 1
+        return counter_pool[counter_index[]]
+    end
+
+    function get_available_counter(prev_counter, curr_counter)
+        available = next_counter()
+        while available === prev_counter || available === curr_counter
+            available = next_counter()
         end
-        while rt_bin_idx > 1 && getLow(getRTBin(frag_index, rt_bin_idx)) > irt_lo
-            rt_bin_idx -= 1
+        return available
+    end
+
+    task_pos = Ref(1)
+    rt_bin_idx_ref = Ref(rt_bin_idx)
+
+    function next_valid_scan!(counter)
+        while task_pos[] <= length(thread_task)
+            scan_idx = thread_task[task_pos[]]
+            task_pos[] += 1
+
+            (scan_idx <= 0 || scan_idx > length(spectra)) && continue
+            getMsOrder(spectra, scan_idx) ∉ getSpecOrder(params) && continue
+
+            irt_lo, irt_hi = getRTWindow(rt_to_irt_spline(getRetentionTime(spectra, scan_idx)), irt_tol)
+            while rt_bin_idx_ref[] < length(getRTBins(frag_index)) && getHigh(getRTBin(frag_index, rt_bin_idx_ref[])) < irt_lo
+                rt_bin_idx_ref[] += 1
+            end
+            while rt_bin_idx_ref[] > 1 && getLow(getRTBin(frag_index, rt_bin_idx_ref[])) > irt_lo
+                rt_bin_idx_ref[] -= 1
+            end
+
+            reset!(counter)
+            searchScan!(
+                counter,
+                getRTBins(frag_index),
+                getFragBins(frag_index),
+                getFragments(frag_index),
+                getMzArray(spectra, scan_idx),
+                getIntensityArray(spectra, scan_idx),
+                rt_bin_idx_ref[],
+                irt_hi,
+                mem,
+                getQuadTransmissionFunction(qtm, getCenterMz(spectra, scan_idx), getIsolationWidthMz(spectra, scan_idx)),
+                getIsotopeErrBounds(params)
+            )
+
+            return (scan_idx, (getCenterMz(spectra, scan_idx), getIsolationWidthMz(spectra, scan_idx)))
         end
-        
-        # Fragment index search for matching precursors
-        searchScan!(
-            getPrecursorScores(search_data),
-            getRTBins(frag_index),
-            getFragBins(frag_index),
-            getFragments(frag_index),
-            getMzArray(spectra, scan_idx),
-            getIntensityArray(spectra, scan_idx),
-            rt_bin_idx,
-            irt_hi,
-            mem,
-            getQuadTransmissionFunction(qtm, getCenterMz(spectra, scan_idx), getIsolationWidthMz(spectra, scan_idx)),
-            getIsotopeErrBounds(params)
+
+        return nothing
+    end
+
+    function smooth_scores!(dest, curr_counter, curr_iso, prev_counter, prev_iso, next_counter, next_iso)
+        reset!(dest)
+        if prev_iso !== nothing && prev_iso == curr_iso
+            or_merge!(dest, prev_counter)
+        end
+        or_merge!(dest, curr_counter)
+        if next_iso !== nothing && next_iso == curr_iso
+            or_merge!(dest, next_counter)
+        end
+        return nothing
+    end
+
+    prev_info = nothing
+    curr_counter = counter_pool[1]
+    curr_info = next_valid_scan!(curr_counter)
+    curr_info === nothing && return precursors_passed_scoring[1:prec_id]
+    next_counter_ref = get_available_counter(nothing, curr_counter)
+    next_info = next_valid_scan!(next_counter_ref)
+    next_counter = next_counter_ref
+
+    prev_counter = counter_pool[3]
+    while curr_info !== nothing
+        curr_scan_idx, curr_iso = curr_info
+        prev_iso = prev_info === nothing ? nothing : last(prev_info)
+        next_iso = next_info === nothing ? nothing : last(next_info)
+
+        smooth_scores!(smoothed_scores, curr_counter, curr_iso, prev_counter, prev_iso, next_counter, next_iso)
+
+        match_count, prec_count = filterPrecursorMatches!(
+            smoothed_scores,
+            curr_counter,
+            getMinIndexSearchScore(params),
         )
 
-        # Filter precursor matches based on score
-        match_count, prec_count = filterPrecursorMatches!(getPrecursorScores(search_data), getMinIndexSearchScore(params))
-
-        if getID(getPrecursorScores(search_data), 1)>0
+        if getID(smoothed_scores, 1) > 0
             start_idx = prec_id + 1
             n = 1
-            while n <= getPrecursorScores(search_data).matches
+            while n <= smoothed_scores.matches
                 prec_id += 1
                 if prec_id > length(precursors_passed_scoring)
-                    append!(precursors_passed_scoring, 
+                    append!(precursors_passed_scoring,
                             Vector{eltype(precursors_passed_scoring)}(undef, length(precursors_passed_scoring))
                             )
                 end
-                precursors_passed_scoring[prec_id] = getID(getPrecursorScores(search_data), n)
+                precursors_passed_scoring[prec_id] = getID(smoothed_scores, n)
                 n += 1
             end
-            scan_to_prec_idx[scan_idx] = start_idx:prec_id#stop_idx
+            scan_to_prec_idx[curr_scan_idx] = start_idx:prec_id#stop_idx
         else
-            scan_to_prec_idx[scan_idx] = missing
+            scan_to_prec_idx[curr_scan_idx] = missing
         end
 
-        reset!(getPrecursorScores(search_data))
+        reset!(smoothed_scores)
+
+        prev_info = curr_info
+        prev_counter = curr_counter
+        curr_info = next_info
+        curr_counter = next_counter
+
+        curr_info === nothing && break
+
+        next_counter_candidate = get_available_counter(prev_counter, curr_counter)
+        next_info = next_valid_scan!(next_counter_candidate)
+        next_counter = next_counter_candidate
     end
 
     return precursors_passed_scoring[1:prec_id]
