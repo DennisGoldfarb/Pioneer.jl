@@ -558,6 +558,9 @@ function append_pioneer_lib_batch(
     # Get coefficient tuple type
     coef_type = eltype(fragment_table[:coefficients])
     n_coef = length(coef_type.parameters)
+
+    # Spline knots are shared across all fragments for spline-capable builds
+    spl_knots = Tuple(Float32.(fragment_table[:knot_vector][1]))
     
     # Allocate storage for spline fragments
     prec_frags = Vector{PioneerSplineFrag{n_coef}}(undef, n_frags)
@@ -574,7 +577,8 @@ function append_pioneer_lib_batch(
         fragment_table,
         ion_annotation_to_data_dict,
         mods_to_sulfur_diff,
-        iso_mod_to_mass
+        iso_mod_to_mass,
+        spl_knots
     )
     
     # Write results
@@ -748,8 +752,9 @@ function process_spline_batch!(
     fragment_table::Arrow.Table,
     ion_annotation_to_data_dict::Dict{Int32, PioneerFragAnnotation},
     mods_to_sulfur_diff::Dict{String, Int8},
-    iso_mod_to_mass::Dict{String, Float32}
-) where N
+    iso_mod_to_mass::Dict{String, Float32},
+    spl_knots::NTuple{K, Float32}
+) where {N, K}
     # Working arrays for tracking modifications and sulfur
     seq_idx_to_sulfur = zeros(UInt8, 255)
     seq_idx_to_iso_mod = zeros(Float32, 255)
@@ -760,15 +765,16 @@ function process_spline_batch!(
     precursor_length = zero(UInt8)
     batch_pid = 0
 
+    spline_eval_nce = 25.0f0
+    spline_degree = 3
+
     for frag_idx in 1:length(prec_frags)
         actual_frag_idx = first_frag_idx + frag_idx - 1
         frag_annotation = fragment_table[:annotation][actual_frag_idx]
         pid = fragment_table[:precursor_idx][actual_frag_idx]
 
         # Handle new precursor
-        rank = Float16(255)
         if pid != last_pid
-            rank -= one(Float16)
             batch_pid += 1
             frag_idx_start = actual_frag_idx
             last_pid = pid
@@ -810,7 +816,7 @@ function process_spline_batch!(
         # Get basic fragment information
         frag_mz = fragment_table[:mz][actual_frag_idx]
         frag_coef = fragment_table[:coefficients][actual_frag_idx]
-        frag_intensity = rank #- one(Float32)#fragment_table[:intensities][actual_frag_idx]
+        frag_intensity = splevl(spline_eval_nce, spl_knots, frag_coef, spline_degree)
 
         # Calculate sequence bounds
         start_idx, stop_idx = get_fragment_indices(

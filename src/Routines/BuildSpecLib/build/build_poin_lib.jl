@@ -94,7 +94,15 @@ function buildPionLib(spec_lib_path::String,
         return nothing
     end
 
-    #Simple fragments that go into the fragment index 
+    spl_knots = nothing
+    try
+        spl_knots = load(joinpath(spec_lib_path, "spline_knots.jld2"))["spl_knots"]
+        @info "Loaded spline_knots.jld2 for spline scoring"
+    catch
+        @info "No spline_knots.jld2 found; proceeding without spline scoring"
+    end
+
+    #Simple fragments that go into the fragment index
     #println("Get index fragments...")
     simple_frags = getSimpleFrags(
         fragments_table[:mz],
@@ -120,7 +128,10 @@ function buildPionLib(spec_lib_path::String,
         include_neutral_diff,
         max_frag_charge,
         frag_bounds,
-        rank_to_score
+        rank_to_score,
+        fragments_table[:intensity],
+        fragments_table[:coefficients],
+        spl_knots,
     );
 
     #println("Build fragment index...")
@@ -284,12 +295,20 @@ function buildPionLib(spec_lib_path::String,
         fragments_table = Arrow.Table(joinpath(spec_lib_path,"fragments_table.arrow"));
         prec_to_frag = Arrow.Table(joinpath(spec_lib_path,"prec_to_frag.arrow"));
         precursors_table = Arrow.Table(joinpath(spec_lib_path,"precursors_table.arrow"));
-    catch e 
+    catch e
         @error "could not find library..."
         return nothing
     end
 
-    #Simple fragments that go into the fragment index 
+    spl_knots = nothing
+    try
+        spl_knots = load(joinpath(spec_lib_path, "spline_knots.jld2"))["spl_knots"]
+        @info "Loaded spline_knots.jld2 for spline scoring"
+    catch
+        @info "No spline_knots.jld2 found; proceeding without spline scoring"
+    end
+
+    #Simple fragments that go into the fragment index
     #println("Get index fragments...")
     simple_frags = getSimpleFrags(
         fragments_table[:mz],
@@ -315,7 +334,10 @@ function buildPionLib(spec_lib_path::String,
         include_neutral_diff,
         max_frag_charge,
         frag_bounds,
-        rank_to_score
+        rank_to_score,
+        fragments_table[:intensity],
+        fragments_table[:coefficients],
+        spl_knots,
     );
 
     #println("Build fragment index...")
@@ -559,7 +581,10 @@ end
         include_neutral_diff::Bool,
         max_frag_charge::UInt8,
         frag_bounds::FragBoundModel,
-        rank_to_score::Vector{UInt8}
+        rank_to_score::Vector{UInt8},
+        frag_intensity::Union{Nothing, AbstractVector}=nothing,
+        frag_coef::Union{Nothing, AbstractVector}=nothing,
+        spl_knots::Union{Nothing, Any}=nothing,
     )::Vector{SimpleFrag{Float32}}
 
 Extract fragments for the fragment index from raw fragment data.
@@ -567,7 +592,7 @@ Extract fragments for the fragment index from raw fragment data.
 # Parameters
 - `frag_mz`: Fragment m/z values
 - `frag_is_y`: Whether each fragment is a y-ion
-- `frag_is_b`: Whether each fragment is a b-ion  
+- `frag_is_b`: Whether each fragment is a b-ion
 - `frag_is_p`: Whether each fragment is a precursor ion
 - `frag_index`: Index of each fragment in its peptide sequence
 - `frag_charge`: Charge state of each fragment
@@ -589,6 +614,9 @@ Extract fragments for the fragment index from raw fragment data.
 - `max_frag_charge`: Maximum fragment charge state to include
 - `frag_bounds`: Model defining valid m/z range based on precursor m/z
 - `rank_to_score`: Vector mapping intensity rank to scoring value
+- `frag_intensity`: Optional fragment intensities used to summarize weight assignment
+- `frag_coef`: Optional spline coefficients for fragments
+- `spl_knots`: Optional spline knot vector used for spline-based scoring
 
 # Returns
 - Vector of SimpleFrag objects, containing filtered fragments for the index
@@ -618,20 +646,27 @@ function getSimpleFrags(
     max_frag_charge::UInt8,
     frag_bounds::FragBoundModel,
     rank_to_score::Vector{UInt8},
+    frag_intensity::Union{Nothing, AbstractVector}=nothing,
+    frag_coef::Union{Nothing, AbstractVector}=nothing,
+    spl_knots::Union{Nothing, Any}=nothing,
     )
     if (length(prec_to_frag_idx) - 1) != (length(precursor_mz))
         #println("mistake")
     end
     #Maximum ranked fragment that can be included in the fragment index
     max_rank_index = length(rank_to_score)
-    #Number of precursors 
+    #Number of precursors
     n_precursors = UInt32(length(precursor_mz))
+    log_interval = UInt32(100_000)
     simple_frags = Vector{SimpleFrag{Float32}}(undef, n_precursors*max_rank_index)
     simple_frag_idx = 0
     for pid in range(one(UInt32), n_precursors)
+        log_weights = pid % log_interval == 0
+        logged_fragments = NamedTuple{(:rank, :weight, :intensity), Tuple{UInt8, UInt8, Any}}[]
         prec_mz = precursor_mz[pid]
         frag_start_idx, frag_stop_idx = prec_to_frag_idx[pid], prec_to_frag_idx[pid+1] - 1
-        rank = 1
+
+        ranked_frags = NamedTuple{(:idx, :intensity, :score_intensity), Tuple{Int, Float32, Float32}}[]
         for frag_idx in range(frag_start_idx, frag_stop_idx)
             if fragFilter(
                     frag_is_y[frag_idx],
@@ -656,6 +691,33 @@ function getSimpleFrags(
                     max_frag_charge)==false
                 continue
             end
+            intensity = frag_intensity === nothing ? one(Float32) : Float32(frag_intensity[frag_idx])
+            score_intensity = sqrt(max(intensity, zero(Float32)))
+            push!(ranked_frags, (idx=frag_idx, intensity=intensity, score_intensity=score_intensity))
+        end
+
+        # Sort by descending intensity so rank_to_score reflects actual predicted strengths
+        sort!(ranked_frags, by = x -> x.intensity, rev = true)
+        max_intensity = isempty(ranked_frags) ? one(Float32) : ranked_frags[1].score_intensity
+
+        raw_scores = NamedTuple{(:idx, :norm_intensity, :raw_score, :intensity), Tuple{Int, Float32, Float32, Any}}[]
+        for (rank, frag_info) in enumerate(ranked_frags)
+            if rank > max_rank_index
+                break
+            end
+            norm_intensity = frag_intensity === nothing ? one(Float32) : frag_info.score_intensity / max(max_intensity, eps(Float32))
+            push!(raw_scores, (idx=frag_info.idx, norm_intensity=norm_intensity, raw_score=rank_to_score[rank] * norm_intensity, intensity=frag_info.intensity))
+        end
+
+        default_score_sum = Float32(sum(@view rank_to_score[1:length(raw_scores)]))
+        raw_score_sum = sum(getfield.(raw_scores, :raw_score))
+        scaling = raw_score_sum > zero(Float32) ? default_score_sum / raw_score_sum : one(Float32)
+
+        for (rank, frag_info) in enumerate(raw_scores)
+            frag_idx = frag_info.idx
+            scaled_score = frag_info.raw_score * scaling
+            frag_score = UInt8(clamp(round(Int, max(scaled_score, one(Float32))), typemin(UInt8), typemax(UInt8)))
+
             simple_frag_idx += 1
             simple_frags[simple_frag_idx] = SimpleFrag(
                 frag_mz[frag_idx],
@@ -663,12 +725,24 @@ function getSimpleFrags(
                 precursor_mz[pid],
                 precursor_irt[pid],
                 precursor_charge[pid],
-                rank_to_score[rank]
+                frag_score
             )
-            rank += 1
-            if rank > max_rank_index
-                break
+            if log_weights
+                frag_int = frag_intensity === nothing ? missing : frag_info.intensity
+                push!(logged_fragments, (rank=UInt8(rank), weight=frag_score, intensity=frag_int))
             end
+        end
+
+        if log_weights && !isempty(logged_fragments)
+            spline_enabled = frag_coef !== nothing && spl_knots !== nothing
+            intensity_summary = nothing
+            if frag_intensity !== nothing
+                intensities = collect(skipmissing(getfield.(logged_fragments, :intensity)))
+                !isempty(intensities) && (intensity_summary = (min=minimum(intensities), max=maximum(intensities)))
+            end
+            coef_preview = (frag_coef !== nothing && !isempty(logged_fragments)) ? frag_coef[frag_start_idx] : nothing
+            weight_sum = sum(getfield.(logged_fragments, :weight))
+            @info "Fragment weights for precursor $(pid)" count=length(logged_fragments) using_splines=spline_enabled rank_to_score=rank_to_score fragments=logged_fragments intensity_summary=intensity_summary spline_coef_preview=coef_preview raw_score_sum=raw_score_sum scaling=scaling weight_sum=weight_sum
         end
 
     end
