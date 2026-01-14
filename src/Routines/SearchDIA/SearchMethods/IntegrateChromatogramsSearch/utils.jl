@@ -164,6 +164,7 @@ function extract_chromatograms(
     search_context::SearchContext,
     params::IntegrateChromatogramSearchParameters,
     ms_file_idx::Int64,
+    iteration_hist::HuberIterationHistogram,
     chrom_type::CHROMATOGRAM
 )
     if typeof(chrom_type)==typeof(MS2CHROM())
@@ -192,6 +193,7 @@ function extract_chromatograms(
                 search_data,
                 params,
                 ms_file_idx,
+                iteration_hist,
                 chrom_type
             )
         end
@@ -223,6 +225,7 @@ function build_chromatograms(
     search_data::SearchDataStructures,
     params::IntegrateChromatogramSearchParameters,
     ms_file_idx::Int64,
+    iteration_hist::HuberIterationHistogram,
     ::MS2CHROM
 )
     # Initialize working arrays
@@ -350,7 +353,7 @@ function build_chromatograms(
             # Solve deconvolution
             initResiduals!(residuals, Hs, weights)
 
-            solveHuber!(
+            huber_iters = solveHuber!(
                 Hs,
                 residuals,
                 weights,
@@ -364,6 +367,7 @@ function build_chromatograms(
                 params.max_diff,
                 params.reg_type
             )
+            record_huber_iterations!(iteration_hist, huber_iters)
 
             # Record chromatogram points with weights
             for j in 1:prec_temp_size
@@ -447,6 +451,7 @@ function build_chromatograms(
     search_data::SearchDataStructures,
     params::IntegrateChromatogramSearchParameters,
     ms_file_idx::Int64,
+    iteration_hist::HuberIterationHistogram,
     ::MS1CHROM
 )
     # Initialize working arrays
@@ -590,7 +595,7 @@ function build_chromatograms(
 
             # Solve deconvolution
             initResiduals!(residuals, Hs, weights)
-            solveHuber!(
+            huber_iters = solveHuber!(
                 Hs,
                 residuals,
                 weights,
@@ -604,6 +609,7 @@ function build_chromatograms(
                 params.max_diff,
                 params.ms1_reg_type
             )
+            record_huber_iterations!(iteration_hist, huber_iters)
 
             # NEW: Distribute grouped coefficients back to individual precursors
             distribute_ms1_coefficients!(

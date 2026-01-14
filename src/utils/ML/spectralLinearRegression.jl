@@ -20,6 +20,77 @@ struct L1Norm <: RegularizationType end
 struct L2Norm <: RegularizationType end
 struct NoNorm <: RegularizationType end
 
+
+"""
+    HuberIterationHistogram
+
+Thread-safe accumulator that tracks how many outer iterations the
+`solveHuber!` solver performed for each invocation. The histogram is stored
+as a dictionary keyed by iteration count with the number of observations as
+the value.
+"""
+mutable struct HuberIterationHistogram
+    counts::Dict{Int, Int}
+    lock::ReentrantLock
+end
+
+HuberIterationHistogram() = HuberIterationHistogram(Dict{Int, Int}(), ReentrantLock())
+
+"""
+    record_huber_iterations!(hist::HuberIterationHistogram, iterations::Integer)
+
+Add a single observation to the histogram. The operation is protected by a
+`ReentrantLock` so that multiple threads can safely update the accumulator.
+"""
+function record_huber_iterations!(hist::HuberIterationHistogram, iterations::Integer)
+    lock(hist.lock) do
+        iter_key = Int(iterations)
+        hist.counts[iter_key] = get(hist.counts, iter_key, 0) + 1
+    end
+    return nothing
+end
+
+"""
+    snapshot(hist::HuberIterationHistogram) -> Dict{Int, Int}
+
+Return a copy of the histogram counts for reporting without mutating the
+original accumulator.
+"""
+function snapshot(hist::HuberIterationHistogram)
+    lock(hist.lock) do
+        return copy(hist.counts)
+    end
+end
+
+"""
+    reset!(hist::HuberIterationHistogram)
+
+Clear all accumulated counts.
+"""
+function reset!(hist::HuberIterationHistogram)
+    lock(hist.lock) do
+        empty!(hist.counts)
+    end
+    return nothing
+end
+
+"""
+    write_huber_histogram(path::AbstractString, counts::AbstractDict)
+
+Write the histogram data to `path` as a TSV file with `iterations` and
+`count` columns. The parent directory is created automatically.
+"""
+function write_huber_histogram(path::AbstractString, counts::AbstractDict)
+    mkpath(dirname(path))
+    open(path, "w") do io
+        println(io, "iterations\tcount")
+        for iter in sort!(collect(keys(counts)))
+            println(io, "$(iter)\t$(counts[iter])")
+        end
+    end
+    return nothing
+end
+
 function getRegL1(λ::T, xk::T, ::NoNorm) where T<:AbstractFloat
     return zero(Float32)
 end
@@ -258,10 +329,12 @@ function solveHuber!(Hs::SparseArray{Ti, T},
     
     # Initialize iteration counter
     i = 0
+    iterations = 0
     while i < max_iter_outer
+        iterations += 1
         _diff = T(0)
         for col in range(1, Hs.n)
-            
+
             # Update coefficient
             δx = abs(newton_bisection!(Hs, r, X₁, col, δ, λ,
                                         max_iter_newton, 
@@ -283,9 +356,9 @@ function solveHuber!(Hs::SparseArray{Ti, T},
         # Check convergence
         if _diff < relative_convergence_threshold
             break
-        end  
+        end
         i += 1
     end
-    
-    return nothing
+
+    return iterations
 end

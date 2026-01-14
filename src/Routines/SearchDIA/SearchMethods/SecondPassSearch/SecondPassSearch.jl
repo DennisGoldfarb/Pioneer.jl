@@ -144,6 +144,8 @@ Results container for second pass search.
 struct SecondPassSearchResults <: SearchResults
     psms::Base.Ref{DataFrame}          # PSMs for each file
     ms1_psms::Base.Ref{DataFrame}
+    huber_iterations_ms2::Base.Ref{HuberIterationHistogram}
+    huber_iterations_ms1::Base.Ref{HuberIterationHistogram}
 end
 
 """
@@ -281,8 +283,10 @@ function init_search_results(::P, search_context::SearchContext) where {P<:Secon
     second_pass_psms = joinpath(getDataOutDir(search_context), "temp_data", "second_pass_psms")
     !isdir(second_pass_psms) && mkdir(second_pass_psms)
     return SecondPassSearchResults(
-        DataFrame(),
-        DataFrame()
+        Ref(DataFrame()),
+        Ref(DataFrame()),
+        Ref(HuberIterationHistogram()),
+        Ref(HuberIterationHistogram())
     )
 end
 
@@ -313,6 +317,9 @@ function process_file!(
             DataFrame(Arrow.Table(getRtIndex(getMSData(search_context), ms_file_idx))),
             bin_rt_size = 0.1)
 
+        ms2_iteration_hist = HuberIterationHistogram()
+        ms1_iteration_hist = HuberIterationHistogram()
+
         # Perform second pass search
         psms = perform_second_pass_search(
             spectra,
@@ -320,6 +327,7 @@ function process_file!(
             search_context,
             params,
             ms_file_idx,
+            ms2_iteration_hist,
             MS2CHROM()
         )
         if params.ms1_scoring
@@ -343,6 +351,7 @@ function process_file!(
                     ms_file_idx,
                     precursors_passing,
                     isotopes_dict,
+                    ms1_iteration_hist,
                     MS1CHROM()
                 )
                 pair_idx = getPairIdx(precursors);
@@ -392,6 +401,8 @@ function process_file!(
 
         results.psms[] = psms
         results.ms1_psms[] = ms1_psms
+        results.huber_iterations_ms2[] = ms2_iteration_hist
+        results.huber_iterations_ms1[] = ms1_iteration_hist
 
     catch e
         # Handle failures gracefully using helper function (logs full stacktrace)
@@ -430,6 +441,8 @@ function createFallbackResults!(results::SecondPassSearchResults, ms_file_idx::I
     # Set empty results (don't append since this file failed)
     results.psms[] = empty_psms
     results.ms1_psms[] = empty_ms1_psms
+    results.huber_iterations_ms2[] = HuberIterationHistogram()
+    results.huber_iterations_ms1[] = HuberIterationHistogram()
 end
 
 function process_search_results!(
@@ -449,6 +462,7 @@ function process_search_results!(
         # Get PSMs from results container
         psms = results.psms[]
         ms1_psms = results.ms1_psms[]
+        parsed_fname = getParsedFileName(search_context, ms_file_idx)
         # Add basic search columns (RT, charge, target/decoy status)
         add_second_search_columns!(psms, 
             getRetentionTimes(spectra),
@@ -580,7 +594,7 @@ function process_search_results!(
             temp_path = joinpath(
                 getDataOutDir(search_context), "temp_data",
                 "second_pass_psms",
-                getParsedFileName(search_context, ms_file_idx) * ".arrow"
+                parsed_fname * ".arrow"
             )
             writeArrow(temp_path, psms)
             setSecondPassPsms!(getMSData(search_context), ms_file_idx, temp_path)
@@ -589,6 +603,12 @@ function process_search_results!(
             @debug_l2 "No PSMs found for file $ms_file_idx in SecondPassSearch, setting empty path"
             setSecondPassPsms!(getMSData(search_context), ms_file_idx, "")
         end
+
+        hist_dir = joinpath(getDataOutDir(search_context), "temp_data", "second_pass_huber_iterations")
+        ms2_hist_counts = snapshot(results.huber_iterations_ms2[])
+        write_huber_histogram(joinpath(hist_dir, parsed_fname * "_ms2.tsv"), ms2_hist_counts)
+        ms1_hist_counts = snapshot(results.huber_iterations_ms1[])
+        write_huber_histogram(joinpath(hist_dir, parsed_fname * "_ms1.tsv"), ms1_hist_counts)
     catch e
         # Mark file as failed and handle gracefully
         file_name = try
@@ -618,6 +638,9 @@ Reset results containers.
 """
 function reset_results!(results::SecondPassSearchResults)
     results.psms[] = DataFrame()
+    results.ms1_psms[] = DataFrame()
+    results.huber_iterations_ms2[] = HuberIterationHistogram()
+    results.huber_iterations_ms1[] = HuberIterationHistogram()
 end
 
 function summarize_results!(
