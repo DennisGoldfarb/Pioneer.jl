@@ -293,11 +293,32 @@
         entries = [
             FastaEntry("P1", "", "", "", "human", "test", "PEPTIDEK", UInt32(1), missing, missing, UInt8(0), UInt32(1), UInt32(1), UInt8(0), false),
             FastaEntry("P2", "", "", "", "human", "test", "MAKEPROTEIN", UInt32(1), missing, missing, UInt8(0), UInt32(2), UInt32(2), UInt8(0), false)
-   ]
-        
+        ]
+
+        local function y_masses(sequence::String)
+            len = length(sequence)
+            contributions = zeros(Float64, len)
+            for (i, aa) in enumerate(sequence)
+                contributions[i] = Pioneer.AA_to_mass[aa]
+            end
+            masses = Float64[]
+            running = 0.0
+            for idx in len:-1:2
+                running += contributions[idx]
+                push!(masses, running)
+            end
+            return masses
+        end
+
+        local function count_y_differences(target::String, decoy::String)
+            target_masses = y_masses(target)
+            decoy_masses = y_masses(decoy)
+            return sum(!isapprox(target_masses[i], decoy_masses[i]; atol=1e-6) for i in 1:length(target_masses))
+        end
+
         # Test basic reversal
         result = add_decoy_sequences(entries)
-        
+
         @test length(result) == 4  # 2 original + 2 decoy
         
         # Identify decoys
@@ -321,6 +342,17 @@
             @test get_base_pep_id(decoy) == get_base_pep_id(entries[i])
             @test get_entrapment_pair_id(decoy) == get_entrapment_pair_id(entries[i])
         end
+
+        diffs = [count_y_differences(get_sequence(entries[i]), get_sequence(decoys[i])) for i in 1:2]
+        @test all(diffs .>= 2)
+
+        # With an unrealistically high minimum edit distance we should still fall back to the best candidate
+        result_strict = add_decoy_sequences(entries; min_edit_distance=100, max_shuffle_attempts=5)
+        strict_decoys = filter(is_decoy, result_strict)
+        @test length(strict_decoys) == 2
+        sort!(strict_decoys, by = x -> get_base_pep_id(x))
+        strict_diffs = [count_y_differences(get_sequence(entries[i]), get_sequence(strict_decoys[i])) for i in 1:2]
+        @test all(strict_diffs .< 100)
     end
     
     @testset "combine_shared_peptides" begin
