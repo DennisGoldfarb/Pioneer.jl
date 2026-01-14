@@ -818,92 +818,43 @@ function getRevDecoys!(speclibdf::BasicEmpiricalLibrary)
 end
 
 """
-    shuffleSequence(sequence::String, structural_mods::String)
+    mutateTerminalSequence(sequence::String, structural_mods::String; forward_sequences::Set{String}=Set{String}())
 
-Randomly shuffle a peptide sequence (keeping last AA fixed) and update modification positions accordingly.
+Generate a terminal-mutation decoy sequence and update structural modification annotations.
 
 # Arguments
 - `sequence::String`: Original peptide sequence
-- `structural_mods::String`: Modifications in format "(pos,aa,mod_name)"
+- `structural_mods::String`: Modifications in format `(pos,aa,mod_name)`
+- `forward_sequences::Set{String}`: Optional set of sequences to avoid (e.g. target database)
 
 # Returns
-- `Tuple{String, String}`: (shuffled sequence, updated modification String)
+- `Tuple{String, String}`: (mutated sequence, updated modification string)
 
 # Examples
 ```julia
-# Test 1: Shuffle with terminal modifications
-Random.seed!(1844)
 sequence = "PEPTIDE"
-mods = "(1,n,mymod-nterm)(1,P,mymod)(4,T,Phospho)(7,E,Acetyl)(7,c,mymod-cterm)"
-shuffled_seq, shuffled_mods = shuffleSequence(sequence, mods)
-
-# Test that:
-# 1. Seed set so sequence should always be DPTPIEE
-@assert shuffled_seq == "DPTPIEE"
-@assert shuffled_mods == "(1,n,mymod-nterm)(2,P,mymod)(3,T,Phospho)(7,E,Acetyl)(7,c,mymod-cterm)"
+mods = "(1,n,Acetyl)(4,T,Phospho)(7,E,Acetyl)"
+decoy_seq, decoy_mods = mutateTerminalSequence(sequence, mods)
+@assert decoy_seq == "PDPTIEE"
+@assert decoy_mods == "(1,n,Acetyl)(4,T,Phospho)(7,E,Acetyl)"
 ```
 """
-function shuffleSequence(sequence::AbstractString, structural_mods::String)
-    # Early return if no modifications
-    if isempty(structural_mods)
-        # Shuffle all but last AA
-        return join(Random.shuffle(collect(sequence[1:end-1])))*sequence[end], ""
+function mutateTerminalSequence(
+    sequence::AbstractString,
+    structural_mods::String;
+    forward_sequences::Set{String}=Set{String}(),
+)
+    ctx = mutation_context_from_string(structural_mods)
+    exists_fn = seq -> seq in forward_sequences
+    result = generate_terminal_decoy(sequence, ctx, exists_fn)
+
+    if result === nothing
+        return String(sequence), structural_mods
     end
-    
-    # Pre-count number of modifications
-    n_mods = count("(", structural_mods)
-    
-    # Pre-allocate arrays
-    mod_positions = Vector{Int}(undef, n_mods)
-    mod_aas = Vector{Char}(undef, n_mods)
-    mod_names = Vector{String}(undef, n_mods)
-    
-    # Parse modifications
-    mod_regex = r"\((\d+),([A-Z]|[nc]),([^,\)]+)\)"
-    i = 1
-    for m in eachmatch(mod_regex, structural_mods)
-        mod_positions[i] = parse(Int, m.captures[1])
-        mod_aas[i] = first(m.captures[2])
-        mod_names[i] = m.captures[3]
-        i += 1
-    end
-    
-    # Create shuffled sequence (keeping last AA in place)
-    seq_length = length(sequence)
-    all_but_last = collect(sequence[1:end-1])
-    shuffle!(all_but_last)
-    shuffled_seq = String(all_but_last) * sequence[end]
-    
-    # Create position mapping from original to shuffled sequence
-    pos_map = Dict{Int, Int}()
-    for (old_pos, aa) in enumerate(sequence[1:end-1])
-        # Find where this AA went in the shuffled sequence
-        new_pos = findfirst(==(aa), shuffled_seq)
-        pos_map[old_pos] = new_pos
-    end
-    pos_map[seq_length] = seq_length  # Last position stays the same
-    
-    # Calculate new positions and create tuples for sorting
-    final_mods = Vector{Tuple{Int, String}}(undef, n_mods)
-    for i in 1:n_mods
-        pos = mod_positions[i]
-        aa = mod_aas[i]
-        name = mod_names[i]
-        
-        if aa == 'n'
-            final_mods[i] = (1, "(1,n,$name)")
-        elseif pos == seq_length
-            final_mods[i] = (seq_length, "($pos,$aa,$name)")
-        else
-            new_pos = pos_map[pos]
-            new_aa = shuffled_seq[new_pos]
-            final_mods[i] = (new_pos, "($new_pos,$new_aa,$name)")
-        end
-    end
-    
-    # Sort by new positions and join
-    sort!(final_mods, by=first)
-    return shuffled_seq, join(last.(final_mods))
+
+    decoy_sequence, mutated_positions = result
+    updated_mods = update_mod_string(structural_mods, mutated_positions)
+    return decoy_sequence, updated_mods
 end
 
 """
@@ -997,7 +948,7 @@ function getShuffledEntrapmentSeqs!(speclibdf::BasicEmpiricalLibrary, entrapment
             found_valid_shuffle = false
             shuffle_attempts = 0
             while shuffle_attempts < 20 && !found_valid_shuffle
-                shuffled_sequence, shuffled_mods = shuffleSequence(row.sequence, row.structural_mods)
+                shuffled_sequence, shuffled_mods = mutateTerminalSequence(row.sequence, row.structural_mods)
                 if !(shuffled_sequence in forward_seqs)
                     current_shuffled_seq = shuffled_sequence
                     current_shuffled_mods = shuffled_mods
