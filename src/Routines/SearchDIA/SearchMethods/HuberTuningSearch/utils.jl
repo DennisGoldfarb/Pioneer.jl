@@ -404,6 +404,13 @@ function process_delta_values!(
         getIdToCol(search_data)
     )
     
+    zero_weight = zero(eltype(weights))
+
+    # Reset precursor weights to avoid reusing previous solutions as hot starts
+    for i in 1:getIdToCol(search_data).size
+        precursor_weights[getIdToCol(search_data).keys[i]] = zero_weight
+    end
+
     # Process each delta value
     for δ in delta_grid
         # Resize arrays if needed
@@ -413,11 +420,11 @@ function process_delta_values!(
             resize!(getSpectralScores(search_data), length(getSpectralScores(search_data)) + new_entries)
             append!(getUnscoredPsms(search_data), [eltype(getUnscoredPsms(search_data))() for _ in 1:new_entries])
         end
-        
+
         # Initialize weights
         for i in 1:getIdToCol(search_data).size
-            weights[getIdToCol(search_data)[getIdToCol(search_data).keys[i]]] = 
-                precursor_weights[getIdToCol(search_data).keys[i]]
+            col_idx = getIdToCol(search_data)[getIdToCol(search_data).keys[i]]
+            weights[col_idx] = zero_weight
         end
         
         # Solve deconvolution problem
@@ -441,9 +448,6 @@ function process_delta_values!(
         for i in 1:getIdToCol(search_data).size
             id = getIdToCol(search_data).keys[i]
             colid = getIdToCol(search_data)[id]
-            
-            # Update precursor weights
-            precursor_weights[id] = weights[colid]
             
             # Record if this is a target PSM
             if id ∈ scan_to_prec[scan_idx]
