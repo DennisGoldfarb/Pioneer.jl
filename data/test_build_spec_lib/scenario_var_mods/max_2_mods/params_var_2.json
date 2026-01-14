@@ -34,7 +34,7 @@
         "max_var_mods": 2,
         "add_decoys": false,
         "entrapment_r": 0.0,
-        "decoy_method": "shuffle",
+        "decoy_method": "termini_mutation",
         "entrapment_method": "shuffle"
     },
     "comment_modifications": "=== Modifications (variable and fixed, including PTMs and peptide-terminal labels) ===",
