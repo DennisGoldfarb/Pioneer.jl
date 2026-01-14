@@ -478,6 +478,7 @@ end
 
 # Export the macros for use throughout the codebase
 export @user_info, @user_warn, @user_error, @user_print, @debug_l1, @debug_l2, @debug_l3, @trace
+export enableExponentialSearchLogging, disableExponentialSearchLogging, isExponentialSearchLoggingEnabled
 
 #Set Seed 
 Random.seed!(1776);
