@@ -49,6 +49,14 @@ jobs:
           restore-keys: |
             julia-${{ matrix.version }}-${{ runner.os }}-
 
+      - name: Override LightGBM dependency
+        run: |
+          julia --project=. -e '
+            using Pkg;
+            Pkg.develop(PackageSpec(url="https://github.com/DennisGoldfarb/LightGBM.jl", rev="codex/add-log_library_discovery-constant"));
+            Pkg.resolve();
+          '
+
       - name: Instantiate & build
         run: |
           julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.build()'

@@ -40,6 +40,8 @@ using Random
 import RobustModels: rlm, TauEstimator, TukeyLoss
 import StatsModels: @formula
 using StaticArrays, StatsBase, SpecialFunctions, Statistics, SparseArrays
+# Silence LightGBM's library discovery info log (honored by forked LightGBM).
+ENV["LIGHTGBM_LOG_LIBRARY_DISCOVERY"] = "false"
 using LightGBM
 import MLJModelInterface: fit, predict
 using KernelDensity

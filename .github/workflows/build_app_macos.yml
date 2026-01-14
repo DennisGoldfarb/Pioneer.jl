@@ -135,7 +135,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          julia --project=. -e 'using Pkg; Pkg.add("PackageCompiler"); Pkg.instantiate()'
+          julia --project=. -e '
+            using Pkg;
+            Pkg.add("PackageCompiler");
+            Pkg.develop(PackageSpec(url="https://github.com/DennisGoldfarb/LightGBM.jl", rev="codex/add-log_library_discovery-constant"));
+            Pkg.resolve();
+            Pkg.instantiate();
+          '
 
       - name: Precompile data (cache & download)
         uses: ./.github/actions/precompile-data
