@@ -509,6 +509,7 @@ function get_quant_necessary_columns(match_between_runs::Bool)
         :weight,
         :target,
         :rt,
+        :irt_pred,
         :irt_obs,
         :missed_cleavage,
         :Mox,
