@@ -146,7 +146,26 @@ function filter_and_score_psms!(
     end
     filter!(x -> x.best_psms::Bool, psms)
     =#
-    filter!(x->x.target::Bool, psms) #Otherwise fitting rt/irt and mass tolerance partly on decoys. 
+    filter!(x->x.target::Bool, psms) #Otherwise fitting rt/irt and mass tolerance partly on decoys.
+
+    # Ensure consistent ordering when downstream routines keep the top-N matches per scan.
+    # Sort primarily by preliminary probability score and secondarily by matched fragment
+    # intensity to break ties deterministically when the preliminary score is identical.
+    if :prob ∈ names(psms)
+        if :log2_summed_intensity ∈ names(psms)
+            sort!(
+                psms,
+                [:scan_idx, :prob, :log2_summed_intensity];
+                order=(Base.Order.Forward, Base.Order.Reverse, Base.Order.Reverse),
+            )
+        else
+            sort!(
+                psms,
+                [:scan_idx, :prob];
+                order=(Base.Order.Forward, Base.Order.Reverse),
+            )
+        end
+    end
 
     n_passing_psms = size(psms, 1)
     
