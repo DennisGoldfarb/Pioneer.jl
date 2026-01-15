@@ -40,7 +40,6 @@ using Random
 import RobustModels: rlm, TauEstimator, TukeyLoss
 import StatsModels: @formula
 using StaticArrays, StatsBase, SpecialFunctions, Statistics, SparseArrays
-using LightGBM
 import MLJModelInterface: fit, predict
 using KernelDensity
 using FastGaussQuadrature
@@ -50,8 +49,16 @@ using InlineStrings
 using HTTP
 
 
-# Simple console logger - detailed logging handled by custom logging system
-global_logger(ConsoleLogger())
+# Load LightGBM once under a `NullLogger` so its startup banner does not reach
+# the console. Keeping a direct module reference avoids introducing a custom
+# logger that would intercept every log message.
+const LightGBM = let previous_logger = Logging.global_logger(NullLogger())
+    try
+        Base.require(Pioneer, :LightGBM)
+    finally
+        Logging.global_logger(previous_logger)
+    end
+end
 
 
 """
