@@ -284,7 +284,9 @@ function verify_library_structure(lib_dir::String)
     # Check for essential files
     precursors_file = joinpath(lib_dir, "precursors_table.arrow")
     @test isfile(precursors_file)
-    
+    precursors_table = Arrow.Table(precursors_file)
+    @test :predicted_rt in propertynames(precursors_table)
+
     config_file = joinpath(lib_dir, "config.json")
     @test isfile(config_file)
     
